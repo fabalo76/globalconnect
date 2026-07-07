@@ -1,0 +1,84 @@
+<resources>
+    <string name="app_name">xTMSAgent</string>
+    <!-- MainActivity -->
+    <string name="setting">Setting</string>
+    <string name="update">Update</string>
+    <string name="wait_update">Update Parameters and App\nPlease Wait</string>
+    <string name="re_install">Re-Install</string>
+    <string name="install_success">Install Success</string>
+    <string name="install_failure">Install Failure</string>
+    <string name="chg_pwd">Change Password</string>
+    <string name="pls_wait">Please Wait</string>
+    <string name="seconds">Seconds</string>
+    <string name="input_pwd">Input Password</string>
+    <string name="pwd_err">Password Error</string>
+    <!-- change password -->
+    <string name="ok">OK</string>
+    <string name="cancel">Cancel</string>
+    <string name="retry">Retry</string>
+    <string name="msg_from_acquirer">Message from the Acquirer</string>
+    <string name="block_default_message">This terminal has been blocked by the Acquirer.\nPlease contact Customer Service to restore service.</string>
+    <string name="password1">Password 1</string>
+    <string name="password2">Password 2</string>
+    <string name="chg_pwd_ok">Change Password OK</string>
+    <string name="chg_pwd_err_no_7">Change Password Error\nPassword must over 7 digits</string>
+    <string name="chg_pwd_err_same">Change Password Error\nPassword1 is the same as Password2</string>
+    <string name="chg_pwd_err_no_match">Change Password Error\nPassword Not Match</string>
+    <!-- super password seed change -->
+    <string name="chg_super_pwd">Change Super Password</string>
+    <string name="chg_super_pwd_ok">Super Password Changed</string>
+    <string name="chg_super_pwd_err_short">Seed must be at least 8 characters</string>
+    <string name="chg_super_pwd_err_same">Seed 1 and Seed 2 must be different</string>
+    <string name="chg_super_pwd_err_no_match">Seeds do not match their confirmation</string>
+    <!-- ConfigMenuActivity -->
+    <string name="config_menu_title">Configuration</string>
+    <string name="config_android">Android Config</string>
+    <string name="config_tms">TMS Config</string>
+    <string name="config_wifi">WiFi Config</string>
+    <string name="config_update">Update</string>
+    <string name="config_network">Mobile / SIM</string>
+    <string name="config_back">Back</string>
+    <string name="config_update_triggered">Update check started</string>
+    <string name="update_checking">Checking for updates…</string>
+    <string name="update_dialog_title">Update</string>
+    <string name="update_checking_launcher">Checking launcher config…</string>
+    <string name="update_launcher_updated">✓ Launcher config updated</string>
+    <string name="update_launcher_uptodate">  Launcher config: up to date</string>
+    <string name="update_triggering_hk">  Triggering HouseKeeping…</string>
+    <string name="update_hk_sent">✓ HouseKeeping request sent (tasks processed in background)</string>
+    <string name="update_requesting_version">  Requesting version info…</string>
+    <string name="update_version_requested">  Version check requested (app download runs in background if needed)</string>
+    <string name="update_summary_applied">Applied:\n• </string>
+    <string name="update_summary_uptodate">No updates available. All up to date.</string>
+    <string name="update_launcher_config_updated">Launcher config updated</string>
+    <!-- TmsConfigActivity -->
+    <string name="tms_section_server">Server Settings (read-only)</string>
+    <string name="tms_section_timeouts">Timeout / Interval Settings</string>
+    <string name="tms_server_addr">Server Address</string>
+    <string name="tms_tcp_port">TCP Port</string>
+    <string name="tms_web_port">Web / HTTPS Port</string>
+    <string name="tms_mqtt_port">MQTT Port</string>
+    <string name="tms_conn_timeout">Connection Timeout (seconds)</string>
+    <string name="tms_resp_timeout">Response Timeout (seconds)</string>
+    <string name="tms_mqtt_keepalive">MQTT Keepalive (seconds)</string>
+    <string name="tms_status_interval">Status Interval (minutes)</string>
+    <string name="tms_save">Save</string>
+    <string name="tms_save_ok">Settings saved</string>
+    <string name="tms_save_error">Failed to save settings</string>
+    <string name="tms_invalid_value">All values must be positive numbers</string>
+    <string name="tms_config_file_not_found">Config file not found</string>
+    <!-- AppUpdateManager -->
+    <string name="app_update_downloading">Downloading app update: %1$s v%2$s…</string>
+    <string name="app_update_installing">Installing app update: %1$s…</string>
+    <string name="app_update_installed">App update installed: %1$s</string>
+    <string name="app_update_download_failed">App update download failed: %1$s</string>
+    <string name="app_update_install_failed">App update install failed: %1$s</string>
+    <string name="app_update_deferred">App update deferred (terminal busy): %1$s</string>
+    <!-- RemoteControl -->
+    <string name="accessibility_service_description">Enables TMS remote control to inject touch and key events during a remote support session.</string>
+    <!-- BlockedActivity -->
+    <string name="unlock_by_code">Unlock by Code</string>
+    <string name="unlock_code_title">Enter Unlock Code</string>
+    <string name="unlock_code_hint">10-digit code</string>
+    <string name="unlock_code_invalid">Invalid code. Please try again.</string>
+</resources>

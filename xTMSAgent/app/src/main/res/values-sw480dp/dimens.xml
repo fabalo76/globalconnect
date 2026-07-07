@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- N62 (480dp SW, square 480x480 at 160dpi) -->
+<resources>
+
+    <!-- Grid buttons (item_button.xml) -->
+    <dimen name="btn_icon_size">56dp</dimen>
+    <dimen name="btn_text_size">24sp</dimen>
+
+    <!-- Main screen brand name (activity_main.xml) -->
+    <dimen name="brand_name_text_size">24sp</dimen>
+
+    <!-- Password dialogs -->
+    <dimen name="pwd_title_text_size">26sp</dimen>
+    <dimen name="pwd_field_text_size">26sp</dimen>
+
+    <!-- Blocked screen -->
+    <dimen name="blocked_padding">48dp</dimen>
+    <dimen name="blocked_icon_size">96dp</dimen>
+    <dimen name="blocked_icon_margin_bottom">32dp</dimen>
+    <dimen name="blocked_msg_text_size">24sp</dimen>
+    <dimen name="blocked_serial_margin_top">32dp</dimen>
+    <dimen name="blocked_serial_text_size">18sp</dimen>
+
+    <!-- TMS config screen -->
+    <dimen name="tms_container_padding">20dp</dimen>
+    <dimen name="tms_title_text_size">24sp</dimen>
+    <dimen name="tms_label_text_size">14sp</dimen>
+    <dimen name="tms_field_text_size">18sp</dimen>
+    <dimen name="tms_save_margin_top">28dp</dimen>
+
+    <!-- Banner image padding (overrides hardcoded 6dp in layout for N62) -->
+    <dimen name="banner_img_padding_v">2dp</dimen>
+    <dimen name="banner_img_padding_h">8dp</dimen>
+
+    <!-- Page indicator dots -->
+    <dimen name="dot_size">10dp</dimen>
+    <dimen name="dot_margin">5dp</dimen>
+
+</resources>

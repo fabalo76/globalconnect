@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Device admin metadata for TmsDeviceAdminReceiver.
+
+    This app can be set as device owner via ADB (before any accounts are added):
+        adb shell dpm set-device-owner one.globalconnect.xtmsagent/.TmsDeviceAdminReceiver
+
+    Once device owner, the app automatically applies DISALLOW_CONFIG_TETHERING
+    so the Hotspot & tethering row in Network settings is greyed out/inaccessible.
+-->
+<device-admin>
+    <uses-policies>
+        <disable-keyguard-features />
+        <force-lock />
+        <wipe-data />
+    </uses-policies>
+</device-admin>

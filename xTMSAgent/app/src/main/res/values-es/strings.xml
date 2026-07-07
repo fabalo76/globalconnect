@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">xTMSAgent</string>
+    <!-- MainActivity -->
+    <string name="setting">Ajustes</string>
+    <string name="update">Actualizar</string>
+    <string name="wait_update">Actualizando parámetros y app\nPor favor espere</string>
+    <string name="re_install">Reinstalar</string>
+    <string name="install_success">Instalación exitosa</string>
+    <string name="install_failure">Error de instalación</string>
+    <string name="chg_pwd">Cambiar Contraseña</string>
+    <string name="pls_wait">Por favor espere</string>
+    <string name="seconds">Segundos</string>
+    <string name="input_pwd">Ingresar Contraseña</string>
+    <string name="pwd_err">Error de Contraseña</string>
+    <!-- change password -->
+    <string name="ok">Aceptar</string>
+    <string name="cancel">Cancelar</string>
+    <string name="password1">Contraseñas 1</string>
+    <string name="password2">Contraseñas 2</string>
+    <string name="chg_pwd_ok">Cambio de Contraseña OK</string>
+    <string name="chg_pwd_err_no_7">Error al Cambiar Contraseña\nLa contraseña debe tener más de 7 dígitos.</string>
+    <string name="chg_pwd_err_same">Error al Cambiar Contraseña\nLas contraseñas 1 y 2 son iguales.</string>
+    <string name="chg_pwd_err_no_match">Error al Cambiar Contraseña\nLas contraseñas no coinciden.</string>
+    <string name="retry">Reintentar</string>
+    <string name="msg_from_acquirer">Mensaje del Adquirente</string>
+    <string name="block_default_message">Esta terminal ha sido bloqueada por el Adquirente.\nComuníquese con Servicio al Cliente para restablecer el servicio.</string>
+    <!-- super password seed change -->
+    <string name="chg_super_pwd">Cambiar Super Contraseña</string>
+    <string name="chg_super_pwd_ok">Super Contraseña Cambiada</string>
+    <string name="chg_super_pwd_err_short">La semilla debe tener al menos 8 caracteres</string>
+    <string name="chg_super_pwd_err_same">La semilla 1 y la semilla 2 deben ser diferentes</string>
+    <string name="chg_super_pwd_err_no_match">Las semillas no coinciden con su confirmación</string>
+    <!-- TmsConfigActivity -->
+    <string name="tms_section_server">Configuración del servidor (solo lectura)</string>
+    <string name="tms_section_timeouts">Configuración de tiempos de espera / intervalos</string>
+    <string name="tms_server_addr">Dirección del servidor</string>
+    <string name="tms_tcp_port">Puerto TCP</string>
+    <string name="tms_web_port">Puerto Web / HTTPS</string>
+    <string name="tms_mqtt_port">Puerto MQTT</string>
+    <string name="tms_conn_timeout">Tiempo de conexión (segundos)</string>
+    <string name="tms_resp_timeout">Tiempo de respuesta (segundos)</string>
+    <string name="tms_mqtt_keepalive">Keepalive MQTT (segundos)</string>
+    <string name="tms_status_interval">Intervalo de estado (minutos)</string>
+    <string name="tms_save">Guardar</string>
+    <string name="tms_save_ok">Configuración guardada</string>
+    <string name="tms_save_error">Error al guardar configuración</string>
+    <string name="tms_invalid_value">Todos los valores deben ser números positivos</string>
+    <string name="tms_config_file_not_found">Archivo de configuración no encontrado</string>
+    <!-- BlockedActivity -->
+    <string name="unlock_by_code">Desbloquear por código</string>
+    <string name="unlock_code_title">Ingresar código de desbloqueo</string>
+    <string name="unlock_code_hint">Código de 10 dígitos</string>
+    <string name="unlock_code_invalid">Código inválido. Intente nuevamente.</string>
+    <!-- ConfigMenuActivity -->
+    <string name="config_menu_title">Configuración</string>
+    <string name="config_android">Config. Android</string>
+    <string name="config_tms">Config. TMS</string>
+    <string name="config_wifi">Config. WiFi</string>
+    <string name="config_update">Actualizar</string>
+    <string name="config_network">Móvil / SIM</string>
+    <string name="config_back">Volver</string>
+    <string name="config_update_triggered">Verificación de actualización iniciada</string>
+    <string name="update_checking">Verificando actualizaciones…</string>
+    <string name="update_dialog_title">Actualizar</string>
+    <string name="update_checking_launcher">Verificando config. del launcher…</string>
+    <string name="update_launcher_updated">✓ Config. del launcher actualizada</string>
+    <string name="update_launcher_uptodate">  Config. del launcher: al día</string>
+    <string name="update_triggering_hk">  Iniciando mantenimiento…</string>
+    <string name="update_hk_sent">✓ Solicitud de mantenimiento enviada (tareas en segundo plano)</string>
+    <string name="update_requesting_version">  Solicitando info de versión…</string>
+    <string name="update_version_requested">  Verificación de versión solicitada (descarga en segundo plano si es necesario)</string>
+    <string name="update_summary_applied">Aplicado:\n• </string>
+    <string name="update_summary_uptodate">No hay actualizaciones disponibles. Todo al día.</string>
+    <string name="update_launcher_config_updated">Config. del launcher actualizada</string>
+    <!-- AppUpdateManager -->
+    <string name="app_update_downloading">Descargando actualización: %1$s v%2$s…</string>
+    <string name="app_update_installing">Instalando actualización: %1$s…</string>
+    <string name="app_update_installed">Actualización instalada: %1$s</string>
+    <string name="app_update_download_failed">Error al descargar actualización: %1$s</string>
+    <string name="app_update_install_failed">Error al instalar actualización: %1$s</string>
+    <string name="app_update_deferred">Actualización diferida (terminal ocupada): %1$s</string>
+</resources>

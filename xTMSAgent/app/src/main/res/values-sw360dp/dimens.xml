@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Standard dimensions — N96 (360dp SW) -->
+<resources>
+
+    <!-- Grid buttons (item_button.xml) -->
+    <dimen name="btn_icon_size">50dp</dimen>
+    <dimen name="btn_text_size">22sp</dimen>
+
+    <!-- Main screen brand name (activity_main.xml) -->
+    <dimen name="brand_name_text_size">22sp</dimen>
+
+    <!-- Password dialogs (pwd_input.xml, pwd_change.xml, pwd_super_seed.xml) -->
+    <dimen name="pwd_title_text_size">24sp</dimen>
+    <dimen name="pwd_field_text_size">24sp</dimen>
+
+    <!-- Blocked screen (activity_blocked.xml) -->
+    <dimen name="blocked_padding">48dp</dimen>
+    <dimen name="blocked_icon_size">96dp</dimen>
+    <dimen name="blocked_icon_margin_bottom">32dp</dimen>
+    <dimen name="blocked_msg_text_size">22sp</dimen>
+    <dimen name="blocked_serial_margin_top">32dp</dimen>
+    <dimen name="blocked_serial_text_size">16sp</dimen>
+
+    <!-- TMS config screen (activity_tms_config.xml) -->
+    <dimen name="tms_container_padding">20dp</dimen>
+    <dimen name="tms_title_text_size">22sp</dimen>
+    <dimen name="tms_label_text_size">13sp</dimen>
+    <dimen name="tms_field_text_size">16sp</dimen>
+    <dimen name="tms_save_margin_top">28dp</dimen>
+
+    <!-- Page indicator dots (activity_main.xml) -->
+    <dimen name="dot_size">10dp</dimen>
+    <dimen name="dot_margin">5dp</dimen>
+
+</resources>

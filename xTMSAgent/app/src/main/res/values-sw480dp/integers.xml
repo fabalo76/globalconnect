@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- N62 (480dp SW, square 480x480) — wider but square screen, 2 rows fits better -->
+<resources>
+    <integer name="grid_rows">2</integer>
+    <integer name="banner_brand_weight">2</integer>
+    <integer name="banner_trailer_weight">1</integer>
+</resources>

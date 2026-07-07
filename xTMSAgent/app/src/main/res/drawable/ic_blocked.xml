@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    "No entry / blocked" icon — a filled circle with a horizontal bar across the centre.
+    Rendered purely with vector paths so it works on every API level without emoji support.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="96dp"
+    android:height="96dp"
+    android:viewportWidth="96"
+    android:viewportHeight="96">
+
+    <!-- Outer red circle -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M48,4 A44,44 0 1,0 48,92 A44,44 0 1,0 48,4 Z" />
+
+    <!-- Horizontal white bar (the "no entry" stripe) -->
+    <path
+        android:fillColor="#B71C1C"
+        android:pathData="M16,40 H80 V56 H16 Z" />
+
+</vector>

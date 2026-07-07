@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- 存放在 app 内部存储 (getExternalFilesDir) -->
+    <external-files-path name="apk_files" path="Download/" />
+    <external-files-path name="apk_files" path="Download/TMS/" />
+
+    <!-- 存放在公共下载目录 (getExternalStoragePublicDirectory) -->
+    <external-path name="public_download" path="Download/" />
+    <external-path name="public_download" path="Download/TMS/" />
+
+    <files-path name="apk_files" path="app_data/" />
+    <!-- Parameter JSON shared with the payment app via FileProvider URI -->
+    <files-path name="params" path="params/" />
+</paths>

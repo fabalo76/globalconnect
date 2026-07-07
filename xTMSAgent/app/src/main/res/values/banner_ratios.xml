@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="banner_top_ratio" translatable="false">4:1</string>
+    <string name="banner_bottom_ratio" translatable="false">5:1</string>
+</resources>

@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<cn8583-config>
+    <!--
+        ISO 8583 field definition rules maintained by UIC:
+        A   - Alphabetic, numeric or symbolic data aligned to the left and padded with spaces.
+        N   - Numeric data aligned to the right and padded with zeroes. Amount fields use the two
+              least significant digits as decimals when encoded as packed BCD.
+        H   - Binary data represented as hexadecimal characters without transformation.
+        ..  - Variable length field where the length indicator occupies one byte.
+        ... - Variable length field where the length indicator occupies two bytes.
+
+        lenType - Encoding for the length indicator (ASC, HEX or BCD). Defaults to BCD when omitted.
+        align   - Alignment strategy for fixed length fields (LEFT or RIGHT).
+        padding - Hexadecimal byte used to pad fixed length values when the provided data is shorter
+                  than the configured maximum.
+    -->
+
+    <field index="0" type="N4" align="RIGHT" lenType="BCD" padding="30"/>
+    <field index="1" type="H8" align="RIGHT" lenType="BCD" padding="30"/>
+
+    <field index="2" type="N..19" align="LEFT" lenType="BCD" padding="00"/>
+    <field index="3" type="N6" align="RIGHT" lenType="BCD" padding="00"/>
+    <field index="4" type="N12" align="RIGHT" lenType="BCD" padding="00"/>
+    <field index="5" type="N12" align="RIGHT" lenType="BCD" padding="00"/>
+    <field index="6" type="N12" align="RIGHT" lenType="BCD" padding="00"/>
+    <field index="7" type="N10" align="RIGHT" lenType="BCD" padding="00"/>
+    <field index="8" type="N8" align="RIGHT" lenType="BCD" padding="00"/>
+    <field index="9" type="N8" align="RIGHT" lenType="BCD" padding="00"/>
+    <field index="10" type="N8" align="RIGHT" lenType="BCD" padding="00"/>
+    <field index="11" type="N6" align="RIGHT" lenType="BCD" padding="00"/>
+    <field index="12" type="N6" align="RIGHT" lenType="BCD" padding="00"/>
+    <field index="13" type="N4" align="RIGHT" lenType="BCD" padding="00"/>
+    <field index="14" type="N4" align="RIGHT" lenType="BCD" padding="00"/>
+    <field index="15" type="N4" align="RIGHT" lenType="BCD" padding="00"/>
+    <field index="16" type="N4" align="LEFT" lenType="BCD" padding="00"/>
+    <field index="17" type="N4" align="LEFT" lenType="BCD" padding="00"/>
+    <field index="18" type="N4" align="LEFT" lenType="BCD" padding="00"/>
+    <field index="19" type="N3" align="LEFT" lenType="BCD" padding="00"/>
+    <field index="20" type="N3" align="LEFT" lenType="BCD" padding="00"/>
+    <field index="21" type="N3" align="LEFT" lenType="BCD" padding="00"/>
+    <field index="22" type="N3" align="LEFT" lenType="BCD" padding="00"/>
+    <field index="23" type="N3" align="RIGHT" lenType="BCD" padding="00"/>
+    <field index="24" type="N3" align="RIGHT" lenType="BCD" padding="00"/>
+    <field index="25" type="N2" align="RIGHT" lenType="BCD" padding="00"/>
+    <field index="26" type="N2" align="RIGHT" lenType="BCD" padding="00"/>
+    <field index="27" type="N1" align="LEFT" lenType="BCD" padding="00"/>
+    <field index="28" type="N8" align="LEFT" lenType="BCD" padding="00"/>
+    <field index="29" type="N8" align="LEFT" lenType="BCD" padding="00"/>
+    <field index="30" type="N8" align="LEFT" lenType="BCD" padding="00"/>
+    <field index="31" type="N8" align="LEFT" lenType="BCD" padding="00"/>
+    <field index="32" type="N..11" align="RIGHT" lenType="BCD" padding="00"/>
+    <field index="33" type="N..11" align="LEFT" lenType="BCD" padding="00"/>
+    <field index="34" type="N..28" align="LEFT" lenType="BCD" padding="00"/>
+    <field index="35" type="N..37" align="LEFT" lenType="BCD" padding="00"/>
+    <field index="36" type="N...104" align="LEFT" lenType="BCD" padding="00"/>
+    <field index="37" type="A12" align="RIGHT" lenType="BCD" padding="00"/>
+    <field index="38" type="A6" align="RIGHT" lenType="BCD" padding="00"/>
+    <field index="39" type="A2" align="RIGHT" lenType="BCD" padding="00"/>
+    <field index="40" type="N3" align="LEFT" lenType="BCD" padding="00"/>
+    <field index="41" type="A8" align="RIGHT" lenType="BCD" padding="20"/>
+    <field index="42" type="A15" align="RIGHT" lenType="BCD" padding="20"/>
+    <field index="43" type="A40" align="LEFT" lenType="BCD" padding="00"/>
+    <field index="44" type="A..25" align="RIGHT" lenType="BCD" padding="00"/>
+    <field index="45" type="A..76" align="LEFT" lenType="BCD" padding="00"/>
+    <field index="46" type="H...999" align="LEFT" lenType="BCD" padding="00"/>
+    <field index="47" type="H...999" align="LEFT" lenType="BCD" padding="00"/>
+    <field index="48" type="H...999" align="LEFT" lenType="BCD" padding="00"/>
+    <field index="49" type="N3" align="RIGHT" lenType="BCD" padding="30"/>
+    <field index="50" type="N3" align="LEFT" lenType="BCD" padding="00"/>
+    <field index="51" type="N3" align="LEFT" lenType="BCD" padding="00"/>
+    <field index="52" type="H8" align="RIGHT" lenType="BCD" padding="00"/>
+    <field index="53" type="N16" align="RIGHT" lenType="BCD" padding="00"/>
+    <field index="54" type="A...120" align="RIGHT" lenType="BCD" padding="00"/>
+    <field index="55" type="H...255" align="RIGHT" lenType="BCD" padding="00"/>
+    <field index="56" type="H...999" align="LEFT" lenType="BCD" padding="00"/>
+    <field index="57" type="H...999" align="LEFT" lenType="BCD" padding="00"/>
+    <field index="58" type="H...999" align="LEFT" lenType="BCD" padding="00"/>
+    <field index="59" type="A...999" align="RIGHT" lenType="BCD" padding="00"/>
+    <field index="60" type="A...999" align="LEFT" lenType="BCD" padding="00"/>
+    <field index="61" type="A...99" align="LEFT" lenType="BCD" padding="00"/>
+    <field index="62" type="A...99" align="RIGHT" lenType="BCD" padding="00"/>
+    <field index="63" type="H...999" align="LEFT" lenType="BCD" padding="00"/>
+</cn8583-config>

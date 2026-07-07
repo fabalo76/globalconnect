@@ -1,0 +1,39 @@
+{
+	"launcher_theme": {
+		"background_color": "FFF0F0F0",
+		"foreground_color": "FF7B1FA2",
+		"status_bar_color": "FF000000",
+		"navigation_bar_color": "FF000000",
+		"font_color": "FFFFFFFF",
+		"font_size": 20,
+		"system_pwd_protection": true,
+		"enable_navigation_bar": true,
+		"enable_control_bar": true
+	},
+	"tms_cfg": {
+		"server_addr": "api.dev.globalconnect.one",
+		"api_host": "api.dev.globalconnect.one",
+		"mqtt_host": "atypsm4jmdcoa-ats.iot.us-east-1.amazonaws.com",
+		"server_addr_dev": "api.dev.globalconnect.one",
+		"tcp_port": 5050,
+		"tcp_ssl": false,
+		"ftp_port": 990,
+		"ftp_ssl": false,
+		"ftp_user": "tmsftp",
+		"ftp_password": "",
+		"nii": 678,
+		"conn_timeout": 10,
+		"resp_timeout": 60,
+		"attempt_counter": 2,
+		"web_port_ssl": true,
+		"web_port_dev": 8888,
+		"web_port": 443,
+        "download_secret": ""
+	},
+	"mqtt_cfg": {
+		"mqtt_port": 8883,
+		"keepalive": 240,
+		"probe_timeout": 10000,
+		"status_interval": 20
+	}
+}

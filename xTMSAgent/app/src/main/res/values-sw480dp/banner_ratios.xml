@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- N62: top −50% (4:1→8:1), bottom −25% (5:1→20:3) -->
+<resources>
+    <string name="banner_top_ratio" translatable="false">8:1</string>
+    <string name="banner_bottom_ratio" translatable="false">16:1</string>
+</resources>

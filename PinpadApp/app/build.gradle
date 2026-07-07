@@ -1,0 +1,92 @@
+plugins {
+    id 'com.android.application'
+    id 'org.jetbrains.kotlin.plugin.compose'
+    id 'org.jetbrains.kotlin.plugin.serialization'
+}
+
+android {
+    namespace = "com.uic.pinpad"
+    compileSdk = 36
+
+    defaultConfig {
+        applicationId = "com.uic.pinpad"
+        minSdk = 26
+        targetSdk = 36
+        versionCode = 124
+        versionName = "0.3.111"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        buildConfigField "String", "SERIAL_TRANSPORT", "\"AUTO\""
+        buildConfigField "int", "SERIAL_RS232_PORT", "0"
+        buildConfigField "int", "SERIAL_USB_VID", "0x6352"
+        buildConfigField "int", "SERIAL_USB_PID", "0x294A"
+        buildConfigField "int", "SERIAL_BAUD_RATE", "9600"
+    }
+
+    buildTypes {
+        debug {
+            buildConfigField "boolean", "SERIAL_TRACE_ENABLED", "true"
+            buildConfigField "boolean", "SERIAL_DETAIL_TRACE_ENABLED", "false"
+            buildConfigField "boolean", "EMV_CAPK_TRACE_ENABLED", "true"
+            buildConfigField "boolean", "EMV_SDK_DEBUG_LOG_ENABLED", "false"
+            buildConfigField "boolean", "SENSORY_KITS_ENABLED", "true"
+            buildConfigField "boolean", "SETTINGS_PASSWORD_PROTECTION_ENABLED", "true"
+        }
+        release {
+            buildConfigField "boolean", "SERIAL_TRACE_ENABLED", "false"
+            buildConfigField "boolean", "SERIAL_DETAIL_TRACE_ENABLED", "false"
+            buildConfigField "boolean", "EMV_CAPK_TRACE_ENABLED", "false"
+            buildConfigField "boolean", "EMV_SDK_DEBUG_LOG_ENABLED", "false"
+            buildConfigField "boolean", "SENSORY_KITS_ENABLED", "true"
+            buildConfigField "boolean", "SETTINGS_PASSWORD_PROTECTION_ENABLED", "true"
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_21
+        targetCompatibility JavaVersion.VERSION_21
+    }
+
+    kotlin {
+        compilerOptions {
+            jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_21
+        }
+    }
+
+    buildFeatures {
+        buildConfig = true
+        compose = true
+    }
+
+    testOptions {
+        unitTests.returnDefaultValues = true
+    }
+
+    packaging {
+        jniLibs {
+            keepDebugSymbols += ['**/*.so']
+        }
+    }
+}
+
+dependencies {
+    implementation fileTree(dir: 'libs', include: ['*.aar'])
+
+    implementation 'com.google.code.gson:gson:2.13.2'
+    implementation 'androidx.appcompat:appcompat:1.7.0'
+    implementation 'androidx.activity:activity-compose:1.11.0'
+    implementation 'androidx.core:core-ktx:1.17.0'
+    implementation 'androidx.lifecycle:lifecycle-runtime-ktx:2.9.4'
+    implementation platform('androidx.compose:compose-bom:2025.10.00')
+    implementation 'androidx.compose.ui:ui'
+    implementation 'androidx.compose.ui:ui-graphics'
+    implementation 'androidx.compose.ui:ui-tooling-preview'
+    implementation 'androidx.compose.material3:material3:1.4.0'
+    implementation 'org.jetbrains.kotlinx:kotlinx-serialization-json:1.9.0'
+
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.jetbrains.kotlin:kotlin-test-junit:2.2.20'
+
+    debugImplementation 'androidx.compose.ui:ui-tooling'
+    debugImplementation 'androidx.compose.ui:ui-test-manifest'
+}

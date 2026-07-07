@@ -1,0 +1,52 @@
+# Android / Gradle generated output
+.gradle/
+.kotlin/
+build/
+**/build/
+**/.gradle/
+**/.kotlin/
+**/.externalNativeBuild/
+**/.cxx/
+captures/
+**/captures/
+
+# Android Studio / IntelliJ local state
+.idea/
+**/.idea/
+*.iml
+
+# Local SDK and machine-specific files
+local.properties
+**/local.properties
+*.hprof
+.DS_Store
+Thumbs.db
+
+# Build artifacts and packaged apps
+*.apk
+*.ap_
+*.aab
+*.zip
+*.ZIP
+output.json
+**/app/release/
+
+# Signing keys and private material
+*.jks
+*.keystore
+*.key
+
+# Crash / JVM replay logs
+*.log
+hs_err_pid*.log
+replay_pid*.log
+sync.ffs_db
+
+# Generated graph/cache files
+graphify-out/
+**/graphify-out/
+.graphify_ast.json
+.graphify_detect.json
+.graphify_incremental.json
+.graphify_uncached.txt
+.graphify_python

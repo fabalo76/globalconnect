@@ -1,0 +1,54 @@
+# Android build + IDE
+.gradle/
+.idea/
+build/
+*/build/
+
+# Native / NDK
+.cxx/
+.externalNativeBuild/
+
+# Node (if any)
+node_modules/
+
+# Local configs
+local.properties
+
+# Outputs
+*.apk
+*.aab
+*.ap_
+*.dex
+
+# Keys / sensitive
+*.jks
+*.keystore
+
+# Graphify output (VERY IMPORTANT)
+graphify-out/
+
+# Images
+*.png
+*.jpg
+*.jpeg
+*.webp
+*.gif
+*.bmp
+*.svg
+
+# Audio
+*.mp3
+*.wav
+*.ogg
+*.m4a
+
+# Video
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.webm
+
+# OS junk
+Thumbs.db
+.DS_Store

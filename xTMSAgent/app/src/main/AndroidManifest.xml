@@ -1,0 +1,270 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <uses-permission
+        android:name="android.permission.QUERY_ALL_PACKAGES"
+        tools:ignore="QueryAllPackagesPermission" />
+    <uses-permission
+        android:name="android.permission.MANAGE_USB"
+        tools:ignore="ProtectedPermissions" />
+    <uses-permission android:name="android.permission.INTERNET" /> <!-- 允許網路功能 -->
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+    <uses-permission
+        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        tools:ignore="ScopedStorage" />
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
+        tools:ignore="ScopedStorage" />
+    <uses-permission android:name="android.permission.REQUEST_DELETE_PACKAGES" />
+    <uses-permission android:name="android.permission.MANAGE_DEVICE_ADMINS"
+        tools:ignore="ProtectedPermissions" />
+
+    <!-- MQTT: detect network changes to reconnect immediately on WiFi ↔ 4G transitions -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- MQTT status: read WiFi RSSI for signal strength in status reports -->
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <!-- MQTT status: read device IMEI and SIM ICCID for terminal identity fields -->
+    <uses-permission android:name="android.permission.READ_PHONE_STATE" />
+    <!-- MQTT status: read last known GPS fix for GpsLatitude/GpsLongitude in status reports -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <!-- HouseKeeping: daily HK alarm and task-check alarms via AlarmManager -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- Android 12 (API 31) requires SCHEDULE_EXACT_ALARM for setExactAndAllowWhileIdle -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <!-- Android 13+ (API 33) alternative that does not require user grant on system/privileged apps -->
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
+
+    <!-- MQTT: keep connection alive when screen is off -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- MQTT: required to run a foreground service on Android 9+ -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <!-- MQTT: foreground service type "dataSync" on Android 14+ -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- MQTT: show the foreground service notification on Android 13+ -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- Remote Control: foreground service type for MediaProjection (Android 14+) -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+
+    <!-- Needed to discover payment-app packages that handle our PRE_INSTALL_CHECK action -->
+    <queries>
+        <intent>
+            <action android:name="one.globalconnect.xtmsagent.ACTION_PRE_INSTALL_CHECK" />
+        </intent>
+        <intent>
+            <action android:name="com.uic.uicpaymentapp.ACTION_PRE_INSTALL_RESPONSE" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.PAY_APP" />
+        </intent>
+    </queries>
+
+    <application
+        android:name=".XtmsAgentApplication"
+        android:allowBackup="true"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:networkSecurityConfig="@xml/network_security_config"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.xTMSAgent"
+        android:requestLegacyExternalStorage="true"
+        tools:targetApi="34">
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:clearTaskOnLaunch="true"
+            android:stateNotNeeded="true">
+            <intent-filter android:priority="2">
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.HOME" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!--
+            ConfigMenuActivity — submenu opened by the "Config" launcher button (no password).
+            Standard activity with Up navigation back to the launcher.
+        -->
+        <activity
+            android:name=".ConfigMenuActivity"
+            android:exported="false"
+            android:theme="@style/Theme.xTMSAgent" />
+
+        <!--
+            TmsConfigActivity — shows TMS / MQTT settings (server fields read-only,
+            timeout / interval fields editable).  Reached from ConfigMenuActivity after
+            password verification.
+        -->
+        <activity
+            android:name=".TmsConfigActivity"
+            android:exported="false"
+            android:theme="@style/Theme.xTMSAgent" />
+
+        <!--
+            BlockedActivity — full-screen lock shown when the TMS operator blocks the terminal.
+            singleTask: only one instance ever exists; re-block commands route to onNewIntent().
+            noHistory: finishing it (on unblock) removes it from the back stack immediately.
+            excludeFromRecents: keeps the block screen out of the app switcher.
+        -->
+        <activity
+            android:name=".BlockedActivity"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:taskAffinity=""
+            android:noHistory="true"
+            android:excludeFromRecents="true"
+            android:showOnLockScreen="true"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true"
+            android:theme="@style/Theme.xTMSAgent" />
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.provider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths"/>
+        </provider>
+        <!--
+            Parameter request receiver — the payment application broadcasts
+            ACTION_REQUEST_PARAMS (explicit, targeting "one.globalconnect.xtmsagent") when it needs
+            the terminal's parameter JSON.  xTMSAgent downloads the file from the TMS
+            server and replies with ACTION_PARAMS_READY + a FileProvider URI.
+        -->
+        <receiver
+            android:name=".ParamReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="one.globalconnect.xtmsagent.ACTION_REQUEST_PARAMS" />
+            </intent-filter>
+        </receiver>
+
+        <receiver
+            android:name=".TransactionReportReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="one.globalconnect.xtmsagent.ACTION_REPORT_TRANSACTION" />
+            </intent-filter>
+        </receiver>
+
+        <receiver
+            android:name=".AdminRequestReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="one.globalconnect.xtmsagent.ACTION_REPORT_ADMIN_REQUEST" />
+            </intent-filter>
+        </receiver>
+
+        <!--
+            Receives ACTION_PRE_INSTALL_RESPONSE from the target payment app after
+            xTMSAgent asked for install consent via ACTION_PRE_INSTALL_CHECK.
+        -->
+        <receiver
+            android:name=".AppConsentReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.uic.uicpaymentapp.ACTION_PRE_INSTALL_RESPONSE" />
+            </intent-filter>
+        </receiver>
+
+        <!--
+            HouseKeeping alarm receiver — handles the daily HK alarm and the
+            hourly/precise task-check alarm fired by AlarmManager.
+            exported=false: only AlarmManager (same-package PendingIntents) reaches this.
+        -->
+        <receiver
+            android:name=".mqtt.housekeeping.TmsHkAlarmReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="one.globalconnect.xtmsagent.HK_DAILY" />
+                <action android:name="one.globalconnect.xtmsagent.HK_TASK_CHECK" />
+            </intent-filter>
+        </receiver>
+
+        <!-- TMS MQTT foreground service — maintains persistent connection to the broker -->
+        <service
+            android:name=".mqtt.TmsMqttService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync"
+            android:stopWithTask="false" />
+
+        <!--
+            Remote Control: foreground service that owns the MediaProjection session.
+            foregroundServiceType="mediaProjection" required on Android 10+.
+        -->
+        <service
+            android:name=".remote.RemoteControlService"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection"
+            android:stopWithTask="true" />
+
+        <!--
+            Transparent activity that shows the system MediaProjection consent dialog.
+            Theme.Transparent so no UI flashes behind the system dialog.
+        -->
+        <activity
+            android:name=".remote.RemoteControlPermissionActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:excludeFromRecents="true"
+            android:noHistory="true" />
+
+        <!--
+            Accessibility service for injecting touch gestures and key events.
+            Must be enabled in Settings → Accessibility → xTMSAgent → Remote Control,
+            or silently via MDM: DevicePolicyManager.setAccessibilityServices().
+        -->
+        <service
+            android:name=".remote.RemoteControlAccessibilityService"
+            android:exported="true"
+            android:label="Remote Control"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/remote_control_accessibility_service" />
+        </service>
+
+        <!-- Restart MQTT service after device reboot or application self-update -->
+        <receiver
+            android:name=".mqtt.BootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+
+        <!--
+            Device admin receiver — enables this app to be set as device owner.
+            Once device owner, the app applies DISALLOW_CONFIG_TETHERING to prevent
+            operators from enabling the Wi-Fi hotspot from the Network settings screen.
+            Set device owner via ADB:
+                adb shell dpm set-device-owner one.globalconnect.xtmsagent/.TmsDeviceAdminReceiver
+        -->
+        <receiver
+            android:name=".TmsDeviceAdminReceiver"
+            android:exported="true"
+            android:permission="android.permission.BIND_DEVICE_ADMIN">
+            <meta-data
+                android:name="android.app.device_admin"
+                android:resource="@xml/device_admin" />
+            <intent-filter>
+                <action android:name="android.app.action.DEVICE_ADMIN_ENABLED" />
+            </intent-filter>
+        </receiver>
+
+     </application>
+
+ </manifest>

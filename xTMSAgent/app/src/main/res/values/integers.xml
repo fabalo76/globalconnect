@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Default (N82/N6/N62 — SW < 360dp): 2 columns × 2 rows -->
+<resources>
+    <integer name="grid_rows">2</integer>
+    <integer name="banner_brand_weight">3</integer>
+    <integer name="banner_trailer_weight">1</integer>
+</resources>

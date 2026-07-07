@@ -1,0 +1,11 @@
+<resources>
+    <style name="Theme.Pinpad" parent="android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowActionBar">false</item>
+        <item name="android:windowFullscreen">true</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:fontFamily">sans</item>
+        <item name="android:colorAccent">#0A84FF</item>
+        <item name="android:windowBackground">@color/pinpad_background</item>
+    </style>
+</resources>

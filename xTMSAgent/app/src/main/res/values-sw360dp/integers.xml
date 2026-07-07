@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- N96 (SW ≥ 360dp): 2 columns × 3 rows -->
+<resources>
+    <integer name="grid_rows">3</integer>
+</resources>

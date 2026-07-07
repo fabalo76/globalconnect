@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Compact dimensions — N82 (~314dp SW) and N6 (~320dp SW) —  SW < 360dp -->
+<resources>
+
+    <!-- Grid buttons (item_button.xml) -->
+    <dimen name="btn_icon_size">40dp</dimen>
+    <dimen name="btn_text_size">16sp</dimen>
+
+    <!-- Main screen brand name (activity_main.xml) -->
+    <dimen name="brand_name_text_size">18sp</dimen>
+
+    <!-- Password dialogs (pwd_input.xml, pwd_change.xml, pwd_super_seed.xml) -->
+    <dimen name="pwd_title_text_size">20sp</dimen>
+    <dimen name="pwd_field_text_size">20sp</dimen>
+
+    <!-- Blocked screen (activity_blocked.xml) -->
+    <dimen name="blocked_padding">24dp</dimen>
+    <dimen name="blocked_icon_size">72dp</dimen>
+    <dimen name="blocked_icon_margin_bottom">20dp</dimen>
+    <dimen name="blocked_msg_text_size">18sp</dimen>
+    <dimen name="blocked_serial_margin_top">20dp</dimen>
+    <dimen name="blocked_serial_text_size">14sp</dimen>
+
+    <!-- TMS config screen (activity_tms_config.xml) -->
+    <dimen name="tms_container_padding">14dp</dimen>
+    <dimen name="tms_title_text_size">18sp</dimen>
+    <dimen name="tms_label_text_size">11sp</dimen>
+    <dimen name="tms_field_text_size">14sp</dimen>
+    <dimen name="tms_save_margin_top">16dp</dimen>
+
+    <!-- Banner image padding (activity_main.xml) -->
+    <dimen name="banner_img_padding_v">6dp</dimen>
+    <dimen name="banner_img_padding_h">15dp</dimen>
+
+    <!-- Page indicator dots (activity_main.xml) -->
+    <dimen name="dot_size">8dp</dimen>
+    <dimen name="dot_margin">4dp</dimen>
+
+</resources>

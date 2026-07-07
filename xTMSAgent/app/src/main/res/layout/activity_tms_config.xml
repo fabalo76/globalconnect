@@ -1,0 +1,205 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#FF1A1A2E">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="@dimen/tms_container_padding">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/config_tms"
+            android:textSize="@dimen/tms_title_text_size"
+            android:textColor="@android:color/white"
+            android:gravity="center"
+            android:paddingBottom="16dp"
+            android:fontFamily="sans-serif-medium" />
+
+        <!-- ── Server Settings (read-only) ────────────────────────────── -->
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/tms_section_server"
+            android:textSize="@dimen/tms_label_text_size"
+            android:textColor="#FFAAAAAA"
+            android:paddingTop="8dp"
+            android:paddingBottom="4dp"
+            android:textAllCaps="true" />
+
+        <TextView
+            android:id="@+id/labelServerAddr"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/tms_server_addr"
+            android:textSize="@dimen/tms_label_text_size"
+            android:textColor="#FFCCCCCC"
+            android:paddingTop="8dp" />
+
+        <EditText
+            android:id="@+id/etServerAddr"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textSize="@dimen/tms_field_text_size"
+            android:textColor="@android:color/white"
+            android:enabled="false"
+            android:alpha="0.6"
+            android:backgroundTint="#FF444444"
+            android:inputType="text" />
+
+        <TextView
+            android:id="@+id/labelTcpPort"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/tms_tcp_port"
+            android:textSize="@dimen/tms_label_text_size"
+            android:textColor="#FFCCCCCC"
+            android:paddingTop="12dp" />
+
+        <EditText
+            android:id="@+id/etTcpPort"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textSize="@dimen/tms_field_text_size"
+            android:textColor="@android:color/white"
+            android:enabled="false"
+            android:alpha="0.6"
+            android:backgroundTint="#FF444444"
+            android:inputType="number" />
+
+        <TextView
+            android:id="@+id/labelWebPort"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/tms_web_port"
+            android:textSize="@dimen/tms_label_text_size"
+            android:textColor="#FFCCCCCC"
+            android:paddingTop="12dp" />
+
+        <EditText
+            android:id="@+id/etWebPort"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textSize="@dimen/tms_field_text_size"
+            android:textColor="@android:color/white"
+            android:enabled="false"
+            android:alpha="0.6"
+            android:backgroundTint="#FF444444"
+            android:inputType="number" />
+
+        <TextView
+            android:id="@+id/labelMqttPort"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/tms_mqtt_port"
+            android:textSize="@dimen/tms_label_text_size"
+            android:textColor="#FFCCCCCC"
+            android:paddingTop="12dp" />
+
+        <EditText
+            android:id="@+id/etMqttPort"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textSize="@dimen/tms_field_text_size"
+            android:textColor="@android:color/white"
+            android:enabled="false"
+            android:alpha="0.6"
+            android:backgroundTint="#FF444444"
+            android:inputType="number" />
+
+        <!-- ── Timeout / Interval Settings (editable) ─────────────────── -->
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/tms_section_timeouts"
+            android:textSize="@dimen/tms_label_text_size"
+            android:textColor="#FFAAAAAA"
+            android:paddingTop="20dp"
+            android:paddingBottom="4dp"
+            android:textAllCaps="true" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/tms_conn_timeout"
+            android:textSize="@dimen/tms_label_text_size"
+            android:textColor="#FFCCCCCC"
+            android:paddingTop="8dp" />
+
+        <EditText
+            android:id="@+id/etConnTimeout"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textSize="@dimen/tms_field_text_size"
+            android:textColor="@android:color/white"
+            android:inputType="number" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/tms_resp_timeout"
+            android:textSize="@dimen/tms_label_text_size"
+            android:textColor="#FFCCCCCC"
+            android:paddingTop="12dp" />
+
+        <EditText
+            android:id="@+id/etRespTimeout"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textSize="@dimen/tms_field_text_size"
+            android:textColor="@android:color/white"
+            android:inputType="number" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/tms_mqtt_keepalive"
+            android:textSize="@dimen/tms_label_text_size"
+            android:textColor="#FFCCCCCC"
+            android:paddingTop="12dp" />
+
+        <EditText
+            android:id="@+id/etMqttKeepalive"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textSize="@dimen/tms_field_text_size"
+            android:textColor="@android:color/white"
+            android:inputType="number" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/tms_status_interval"
+            android:textSize="@dimen/tms_label_text_size"
+            android:textColor="#FFCCCCCC"
+            android:paddingTop="12dp" />
+
+        <EditText
+            android:id="@+id/etStatusInterval"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textSize="@dimen/tms_field_text_size"
+            android:textColor="@android:color/white"
+            android:inputType="number" />
+
+        <!-- ── Save button ─────────────────────────────────────────────── -->
+
+        <Button
+            android:id="@+id/btnTmsConfigSave"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/tms_save_margin_top"
+            android:layout_marginBottom="8dp"
+            android:text="@string/tms_save"
+            android:textSize="@dimen/tms_field_text_size"
+            android:textColor="@android:color/white"
+            android:backgroundTint="#FF0D7377" />
+
+    </LinearLayout>
+</ScrollView>

@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">DEMO POS UIC(190)</string>
+
+    <!-- Prueba de eco -->
+    <string name="echo_test_transaction">Prueba de eco</string>
+    <string name="echo_test_title">Prueba de eco</string>
+    <string name="echo_test_description">Envía un mensaje ISO 8583 de eco para verificar la conectividad del host y la configuración TLS.</string>
+    <string name="echo_test_no_acquirers">No hay adquirentes configurados para pruebas de eco.</string>
+    <string name="echo_test_acquirer_title">Seleccionar adquirente</string>
+    <string name="echo_test_acquirer_host_protocol">Protocolo host: %1$d</string>
+    <string name="echo_test_host_details">Configuración del host</string>
+    <string name="echo_test_transport">Transporte</string>
+    <string name="echo_test_transport_tls">TLS</string>
+    <string name="echo_test_transport_tcp">TCP</string>
+    <string name="echo_test_primary_host">Host primario</string>
+    <string name="echo_test_secondary_host">Host secundario</string>
+    <string name="echo_test_not_configured">No configurado</string>
+    <string name="echo_test_connect_timeout">Tiempo de espera de conexión</string>
+    <string name="echo_test_read_timeout">Tiempo de espera de lectura</string>
+    <string name="echo_test_timeout_format">%1$d s</string>
+    <string name="echo_test_attempt_cycles">Ciclos de intento</string>
+    <string name="echo_test_primary_retries">Reintentos primarios</string>
+    <string name="echo_test_secondary_retries">Reintentos secundarios</string>
+    <string name="echo_test_length_type_bcd">BCD</string>
+    <string name="echo_test_length_type_ascii">ASCII</string>
+    <string name="echo_test_length_type_binary">Binario</string>
+    <string name="echo_test_length_header">Encabezado de longitud</string>
+    <string name="echo_test_length_format">%1$d bytes (%2$s)</string>
+    <string name="echo_test_button">Probar transacción</string>
+    <string name="echo_test_status_idle">Listo para enviar una prueba de eco.</string>
+    <string name="echo_test_status_running">Enviando prueba de eco…</string>
+    <string name="echo_test_status_success">Código de respuesta %1$s desde %2$s en %3$d ms.</string>
+    <string name="echo_test_status_failure">La prueba de eco falló: %1$s</string>
+    <string name="echo_test_response_code">Código de respuesta</string>
+    <string name="echo_test_response_unknown">Desconocido</string>
+    <string name="echo_test_endpoint_label">Extremo</string>
+    <string name="echo_test_roundtrip_label">Tiempo de ida y vuelta</string>
+    <string name="echo_test_roundtrip_format">%1$d ms</string>
+    <string name="echo_test_attempt_summary_label">Detalles del intento</string>
+    <string name="echo_test_attempt_summary">Ciclo de intento %1$d, reintento del host %2$d</string>
+    <string name="echo_test_endpoint_primary">Extremo primario</string>
+    <string name="echo_test_endpoint_secondary">Extremo secundario</string>
+</resources>

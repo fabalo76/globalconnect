@@ -53,7 +53,10 @@ private const val CONSENT_TIMEOUT_MS         = 30_000L
 
 object AppUpdateManager {
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val scope = CoroutineScope(
+        SupervisorJob() + Dispatchers.IO +
+            one.globalconnect.xtmsagent.loggingCoroutineExceptionHandler(TAG)
+    )
 
     // Keyed by packageId — holds the in-flight deferred for a consent check that is
     // currently awaiting a response from the target app.

@@ -20,6 +20,7 @@ private const val TAG = "TmsHkAlarmReceiver"
 class TmsHkAlarmReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
+        try {
         val ctx = context.applicationContext
         when (intent.action) {
             ACTION_HK_DAILY -> {
@@ -31,6 +32,9 @@ class TmsHkAlarmReceiver : BroadcastReceiver() {
                 Log.i(TAG, "Task-check alarm — evaluating pending tasks")
                 TmsTaskProcessor.checkAndProcess(ctx)
             }
+        }
+        } catch (e: Exception) {
+            Log.e(TAG, "Housekeeping alarm handling failed", e)
         }
     }
 }

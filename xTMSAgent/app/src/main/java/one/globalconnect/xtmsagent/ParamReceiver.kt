@@ -15,17 +15,25 @@ private const val TAG = "ParamReceiver"
 class ParamReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
+        try {
+            handleRequest(context, intent)
+        } catch (e: Exception) {
+            Log.e(TAG, "Parameter broadcast was rejected", e)
+        }
+    }
+
+    private fun handleRequest(context: Context, intent: Intent) {
         if (intent.action != ParamConstants.ACTION_REQUEST_PARAMS) return
         val applicationId = intent.getStringExtra(ParamConstants.EXTRA_APPLICATION_ID)
             ?.trim()
             ?.takeIf { it.isNotEmpty() }
         val extras = intent.extras?.keySet()
-            ?.joinToString(prefix = "[", postfix = "]") { key -> "$key=${intent.extras?.get(key)}" }
+            ?.joinToString(prefix = "[", postfix = "]")
             ?: "[]"
         Log.i(
             TAG,
             "Parameter request received action=${intent.action} senderPackage=${intent.`package` ?: "(implicit)"} " +
-                "targetHomePackage=${context.packageName} applicationId=${applicationId ?: "(none)"} extras=$extras"
+                "targetHomePackage=${context.packageName} applicationId=${applicationId ?: "(none)"} extraKeys=$extras"
         )
         ParamManager.requestParamDownload(context.applicationContext, applicationId)
     }

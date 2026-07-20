@@ -39,7 +39,10 @@ private const val TAG = "TmsTaskProcessor"
  */
 object TmsTaskProcessor {
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val scope = CoroutineScope(
+        SupervisorJob() + Dispatchers.IO +
+            one.globalconnect.xtmsagent.loggingCoroutineExceptionHandler(TAG)
+    )
 
     /**
      * Evaluate all stored tasks and act on those whose time has come.

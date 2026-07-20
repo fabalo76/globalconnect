@@ -4,10 +4,10 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import androidx.core.content.ContextCompat
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -77,11 +77,12 @@ object TmsParamApplier {
         }
 
         val filter = IntentFilter(ACTION_PARAM_APPLIED)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            context.registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
-        } else {
-            context.registerReceiver(receiver, filter)
-        }
+        ContextCompat.registerReceiver(
+            context,
+            receiver,
+            filter,
+            ContextCompat.RECEIVER_EXPORTED,
+        )
 
         // Send broadcast to payment app
         val applyIntent = Intent(ACTION_PARAM_APPLY).apply {

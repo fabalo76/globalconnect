@@ -20,7 +20,9 @@ class RemoteControlManager(
     private val projectionData: Intent,
     private val onSessionEnded: () -> Unit,
 ) {
-    private val scope = CoroutineScope(Dispatchers.Main)
+    private val scope = CoroutineScope(
+        Dispatchers.Main + one.globalconnect.xtmsagent.loggingCoroutineExceptionHandler(TAG)
+    )
     private var timeoutJob: Job? = null
     private var viewerConnected = false
     private var client: KinesisWebRtcRemoteClient? = null

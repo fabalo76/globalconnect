@@ -10,7 +10,7 @@ import one.globalconnect.xtmsagent.mqtt.versions.AppUpdateManager
 
 private const val TAG = "AppConsentReceiver"
 
-private const val ACTION_PRE_INSTALL_RESPONSE = "com.uic.uicpaymentapp.ACTION_PRE_INSTALL_RESPONSE"
+private const val ACTION_PRE_INSTALL_RESPONSE = "one.globalconnect.paymentapp.ACTION_PRE_INSTALL_RESPONSE"
 private const val ACTION_PRE_INSTALL_DISMISS  = "one.globalconnect.xtmsagent.ACTION_PRE_INSTALL_DISMISS"
 private const val EXTRA_PKG                   = "pkg"
 private const val EXTRA_PROCEED               = "proceed"
@@ -32,6 +32,14 @@ private const val EXTRA_PROCEED               = "proceed"
 class AppConsentReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
+        try {
+            handleResponse(context, intent)
+        } catch (e: Exception) {
+            Log.e(TAG, "Pre-install consent broadcast was rejected", e)
+        }
+    }
+
+    private fun handleResponse(context: Context, intent: Intent) {
         if (intent.action != ACTION_PRE_INSTALL_RESPONSE) return
 
         val pkg     = intent.getStringExtra(EXTRA_PKG) ?: return

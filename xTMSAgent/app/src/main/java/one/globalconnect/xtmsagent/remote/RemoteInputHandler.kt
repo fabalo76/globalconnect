@@ -15,6 +15,7 @@ private const val TAG = "RemoteInputHandler"
  *   {"type":"touch","action":"down|move|up","x":0.5,"y":0.3,"pointerId":0}
  *   {"type":"touch","action":"drag","startX":0.5,"startY":0.7,"endX":0.5,"endY":0.2,"durationMs":650}
  *   {"type":"key","keyCode":4}
+ *   {"type":"globalAction","action":"notifications"}
  *   {"type":"quality","quality":"low|medium|high"}
  */
 class RemoteInputHandler(
@@ -29,6 +30,7 @@ class RemoteInputHandler(
             when (val type = obj.optString("type")) {
                 "touch" -> handleTouch(obj)
                 "key" -> handleKey(obj)
+                "globalAction" -> handleGlobalAction(obj)
                 "quality" -> handleQuality(obj)
                 else -> Log.w(TAG, "Unsupported remote input type='$type' payload=$json")
             }
@@ -81,6 +83,15 @@ class RemoteInputHandler(
         }
         val keyCode = obj.optInt("keyCode", -1)
         if (keyCode >= 0) svc.injectKey(keyCode)
+    }
+
+    private fun handleGlobalAction(obj: JSONObject) {
+        val svc = RemoteControlAccessibilityService.instance
+        if (svc == null) {
+            Log.w(TAG, "AccessibilityService not available - global action dropped")
+            return
+        }
+        svc.injectGlobalAction(obj.optString("action", ""))
     }
 
     private fun handleQuality(obj: JSONObject) {

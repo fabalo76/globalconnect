@@ -13,4 +13,8 @@
         <item name="android:statusBarColor">?attr/colorPrimaryVariant</item>
         <!-- Customize your theme here. -->
     </style>
+
+    <style name="Theme.xTMSAgent.OperatorDialog" parent="Theme.Material3.DayNight.Dialog.Alert">
+        <item name="android:windowCloseOnTouchOutside">false</item>
+    </style>
 </resources>

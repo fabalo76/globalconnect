@@ -24,7 +24,13 @@ class RemoteControlPermissionActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        mpm = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+        try {
+            mpm = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+        } catch (e: Exception) {
+            Log.e(TAG, "MediaProjection service is unavailable", e)
+            finish()
+            return
+        }
 
         if (!RemoteControlAccessibilityService.isEnabled(this)) {
             waitingForAccessibility = true
@@ -90,8 +96,12 @@ class RemoteControlPermissionActivity : Activity() {
                     putExtra(RemoteControlService.EXTRA_PROJECTION_RESULT, resultCode)
                     putExtra(RemoteControlService.EXTRA_PROJECTION_DATA, data)
                 }
-                startForegroundService(svcIntent)
-                Log.i(TAG, "MediaProjection granted; RemoteControlService started")
+                try {
+                    startForegroundService(svcIntent)
+                    Log.i(TAG, "MediaProjection granted; RemoteControlService started")
+                } catch (e: Exception) {
+                    Log.e(TAG, "Unable to start RemoteControlService", e)
+                }
             } else {
                 Log.w(TAG, "MediaProjection permission denied or cancelled")
             }

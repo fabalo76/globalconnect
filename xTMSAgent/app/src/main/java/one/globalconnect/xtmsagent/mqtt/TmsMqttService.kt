@@ -21,7 +21,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 
 private const val TAG              = "TmsMqttService"
@@ -49,6 +49,7 @@ class TmsMqttService : Service() {
     override fun onCreate() {
         super.onCreate()
         Log.i(TAG, "onCreate")
+        try {
 
         createNotificationChannel()
         startForeground(NOTIFICATION_ID, buildNotification("Connecting to TMS…"),
@@ -66,21 +67,32 @@ class TmsMqttService : Service() {
         }
 
         TmsMqttManager.initialize(this, termId, brokerHost)
+        TmsTaskStatus.connecting(termId)
         TmsStatusWorker.schedule(this)
         TmsLocationTracker.start(this)
         TmsHkScheduler.scheduleIfNeeded(this)
         TmsMqttManager.connect()
 
-        val connectedText = "TMS connected ($termId)"
-        updateNotification(connectedText)
         Log.i(TAG, "MQTT service started for $termId @ $brokerHost")
 
         serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Default).also { sc ->
             sc.launch {
-                TmsTaskStatus.taskOverride.collect { override ->
-                    updateNotification(override ?: connectedText)
+                combine(TmsTaskStatus.taskOverride, TmsTaskStatus.connection) { task, connection ->
+                    task ?: connection.text
+                }.collect { statusText ->
+                    try {
+                        updateNotification(statusText)
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Unable to update MQTT notification", e)
+                    }
                 }
             }
+        }
+        } catch (e: Exception) {
+            Log.e(TAG, "MQTT service initialization failed; service is stopping", e)
+            serviceScope?.cancel()
+            serviceScope = null
+            stopSelf()
         }
     }
 
@@ -94,8 +106,10 @@ class TmsMqttService : Service() {
         super.onDestroy()
         Log.i(TAG, "onDestroy")
         serviceScope?.cancel()
-        TmsLocationTracker.stop()
-        TmsMqttManager.disconnect()
+        runCatching { TmsLocationTracker.stop() }
+            .onFailure { Log.w(TAG, "Location tracker cleanup failed", it) }
+        runCatching { TmsMqttManager.disconnect() }
+            .onFailure { Log.w(TAG, "MQTT cleanup failed", it) }
     }
 
     override fun onBind(intent: Intent?): IBinder? = null  // not a bound service
@@ -144,12 +158,18 @@ class TmsMqttService : Service() {
          * On Android 8.0+ MUST use startForegroundService(); the service has 5 seconds
          * to call startForeground() or the system throws ForegroundServiceTimeoutException.
          */
-        fun start(context: Context) {
+        fun start(context: Context): Boolean {
             val intent = Intent(context, TmsMqttService::class.java)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(intent)
-            } else {
-                context.startService(intent)
+            return try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(intent)
+                } else {
+                    context.startService(intent)
+                }
+                true
+            } catch (e: Exception) {
+                Log.e(TAG, "Unable to start MQTT foreground service", e)
+                false
             }
         }
 
@@ -173,7 +193,9 @@ class BootReceiver : BroadcastReceiver() {
         if (intent.action == Intent.ACTION_BOOT_COMPLETED ||
             intent.action == Intent.ACTION_MY_PACKAGE_REPLACED) {
             Log.i("BootReceiver", "Boot/package-replaced — starting TmsMqttService")
-            TmsMqttService.start(context)
+            if (!TmsMqttService.start(context)) {
+                Log.e("BootReceiver", "MQTT service start was rejected by Android")
+            }
         }
     }
 }

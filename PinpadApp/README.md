@@ -59,6 +59,15 @@ Setup can currently be opened with:
 
 CANCEL is consumed by `MainActivity` so it does not close the app from the idle screen.
 
+## Operator Exit
+
+The protected setup actions, including **Exit to Android Home**, use this default credential pair:
+
+- Password 1: `22607075`
+- Password 2: `27071287`
+
+After three failed attempts, password entry is locked for 30 seconds.
+
 ## Verification
 
 Run tests from this directory:
@@ -66,5 +75,14 @@ Run tests from this directory:
 ```powershell
 $env:JAVA_HOME='C:\Program Files\Android\Android Studio\jbr'
 $env:Path="$env:JAVA_HOME\bin;$env:Path"
-D:\Source\AndroidStudio\NEXGO_REPOS\POS_Mobile\gradlew.bat -p D:\Source\AndroidStudio\NEXGO_REPOS\PinpadApp testDebugUnitTest
+D:\Source\AndroidStudio\GLOBAL_CONNECT\PinpadApp\gradlew.bat `
+  -p D:\Source\AndroidStudio\GLOBAL_CONNECT\PinpadApp `
+  testDebugUnitTest
 ```
+# Application licensing
+
+Pinpad requires the `PINPAD_APP` license issued by Global Connect ONE. It generates a non-exportable EC key in Android Keystore, requests registration through xTMSAgent, and validates the returned permanent certificate locally before starting USB/RS232 communications.
+
+The Android application ID and Kotlin namespace are `one.globalconnect.pinpad`.
+
+Set `licenseSigningPublicKeySpkiBase64` in the build environment or user-level Gradle properties to the Base64 SPKI public key returned by the deployed KMS application-license signing key. Builds without the matching trust anchor fail authorization closed at runtime.

@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Base64
 import android.util.Log
 import one.globalconnect.xtmsagent.TMSFunc
+import one.globalconnect.xtmsagent.net.DeviceApi
 import org.json.JSONObject
 import java.io.ByteArrayInputStream
 import java.io.File
@@ -39,15 +40,29 @@ class AwsIotCertificateStore(private val context: Context) {
         return buildKeyManagerFactory(certificatePem, privateKeyPem)
     }
 
-    fun clear() {
-        certificateFile.delete()
-        privateKeyFile.delete()
+    fun refresh(serialNumber: String) {
+        provision(serialNumber)
     }
 
     private fun provision(serialNumber: String) {
         val cfg = TMSFunc.tmsCfg
         val token = deviceToken(serialNumber, cfg.download_secret)
-        val url = "${cfg.webScheme}://${cfg.apiHost}:${cfg.web_port}/v1/devices/${serialNumber.urlEncode()}/iot-credentials"
+        val path = "/v1/devices/${serialNumber.urlEncode()}/iot-credentials"
+        var lastFailure: Exception? = null
+        for (url in DeviceApi.urls(path)) {
+            try {
+                provisionFromUrl(serialNumber, token, url)
+                return
+            } catch (e: Exception) {
+                if (!DeviceApi.isRecoverableHostFailure(e)) throw e
+                lastFailure = e
+                Log.w(TAG, "IoT credential endpoint failed for $url: ${e.message}")
+            }
+        }
+        throw lastFailure ?: IllegalStateException("IoT credentials endpoint is unavailable")
+    }
+
+    private fun provisionFromUrl(serialNumber: String, token: String, url: String) {
         val conn = URL(url).openConnection() as HttpURLConnection
 
         try {
@@ -73,9 +88,15 @@ class AwsIotCertificateStore(private val context: Context) {
             }
 
             certDir.mkdirs()
-            certificateFile.writeText(certificatePem, Charsets.UTF_8)
-            privateKeyFile.writeText(privateKeyPem, Charsets.UTF_8)
-            Log.i(TAG, "AWS IoT certificate provisioned for $serialNumber")
+            val certificateTemp = File(certDir, "device.crt.tmp")
+            val privateKeyTemp = File(certDir, "device.key.tmp")
+            certificateTemp.writeText(certificatePem, Charsets.UTF_8)
+            privateKeyTemp.writeText(privateKeyPem, Charsets.UTF_8)
+            certificateTemp.copyTo(certificateFile, overwrite = true)
+            privateKeyTemp.copyTo(privateKeyFile, overwrite = true)
+            certificateTemp.delete()
+            privateKeyTemp.delete()
+            Log.i(TAG, "AWS IoT certificate provisioned for $serialNumber from $url")
         } finally {
             conn.disconnect()
         }

@@ -1,5 +1,6 @@
 package one.globalconnect.xtmsagent
 
+import android.annotation.SuppressLint
 import android.content.Intent
 import android.os.Bundle
 import android.view.View
@@ -63,6 +64,7 @@ class BlockedActivity : AppCompatActivity() {
     }
 
     @Deprecated("Deprecated in Java")
+    @SuppressLint("MissingSuperCall")
     override fun onBackPressed() {
         // Terminal is blocked — back button intentionally does nothing.
     }

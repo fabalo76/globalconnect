@@ -166,7 +166,7 @@ class TmsStatusWorker(
 
         /**
          * Returns the hardware serial number from the Nexgo device SDK.
-         * Falls back to [Build.getSerial] on non-Nexgo devices (requires READ_PRIVILEGED_PHONE_STATE on API 26+).
+         * Falls back to the serial already provisioned in the encrypted credential store.
          */
         private fun readDeviceSerial(context: Context): String? {
             return try {
@@ -174,13 +174,9 @@ class TmsStatusWorker(
                 info?.sn?.takeIf { it.isNotBlank() }
             } catch (e: Exception) {
                 Log.w(TAG, "Device serial (Nexgo SDK) unavailable: ${e.message}")
-                // Fallback for non-Nexgo environments
-                try {
-                    @SuppressLint("HardwareIds")
-                    val s = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) Build.getSerial()
-                            else @Suppress("DEPRECATION") Build.SERIAL
-                    s.takeIf { it.isNotBlank() && it != Build.UNKNOWN }
-                } catch (_: Exception) { null }
+                runCatching { TmsCredentialStore(context).loadTermId() }
+                    .getOrNull()
+                    ?.takeIf { it.isNotBlank() }
             }
         }
 

@@ -8,6 +8,7 @@ import android.util.Log
 import one.globalconnect.xtmsagent.MainActivity
 import one.globalconnect.xtmsagent.TMSFunc
 import one.globalconnect.xtmsagent.mqtt.TmsMqttManager
+import one.globalconnect.xtmsagent.net.DeviceApi
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -231,12 +232,30 @@ object LauncherConfigManager {
             ?.takeIf { it.isNotBlank() }
             ?: "/v1/devices/{serial}/downloads/launcher-config"
         val endpoint = endpointTemplate.replace("{serial}", serial.urlEncode())
-        val url = if (endpoint.startsWith("http://") || endpoint.startsWith("https://")) {
-            endpoint
-        } else {
-            "${cfg.webScheme}://${cfg.apiHost}:${cfg.web_port}$endpoint"
+        var lastFailure: Exception? = null
+        for (url in DeviceApi.urls(endpoint)) {
+            try {
+                return downloadAndApplyAwsFromUrl(context, payload, serial, url)
+            } catch (e: Exception) {
+                if (!DeviceApi.isRecoverableHostFailure(e)) {
+                    Log.e(TAG, "AWS LauncherConfig download failed: ${e.message}", e)
+                    return false
+                }
+                lastFailure = e
+                Log.w(TAG, "AWS LauncherConfig endpoint failed for $url: ${e.message}")
+            }
         }
+        Log.e(TAG, "AWS LauncherConfig download failed: ${lastFailure?.message ?: "endpoint is unavailable"}", lastFailure)
+        return false
+    }
 
+    private fun downloadAndApplyAwsFromUrl(
+        context: Context,
+        payload: JSONObject?,
+        serial: String,
+        url: String
+    ): Boolean {
+        val cfg = TMSFunc.tmsCfg
         Log.i(TAG, "Downloading AWS LauncherConfig from $url")
         val conn = URL(url).openConnection() as HttpURLConnection
         return try {
@@ -266,6 +285,7 @@ object LauncherConfigManager {
             applyConfig(context, config)
             true
         } catch (e: Exception) {
+            if (DeviceApi.isRecoverableHostFailure(e)) throw e
             Log.e(TAG, "AWS LauncherConfig download failed: ${e.message}", e)
             false
         } finally {
@@ -277,23 +297,24 @@ object LauncherConfigManager {
 
     private fun applyConfig(context: Context, json: JSONObject) {
         val configId         = readConfigId(json)
-        val generatedAt      = json.optString("generatedAt", "")
-        val blockUnknown     = json.optBoolean("blockUnknownApps", false)
-        val enableNavBar     = json.optBoolean("enableNavigationBar", true)
-        val enableControlBar = json.optBoolean("enableControlBar", true)
-        val statusBarColor   = json.optString("statusBarColor", "")
-        val navBarColor      = json.optString("navigationBarColor", "")
-        val appsArray        = json.optJSONArray("apps")
+        val generatedAt      = json.optStringAny("generatedAt", "GeneratedAt")
+        val blockUnknown     = json.optBooleanAny(default = false, "blockUnknownApps", "BlockUnknownApps")
+        val enableNavBar     = json.optBooleanAny(default = true, "enableNavigationBar", "EnableNavigationBar")
+        val enableControlBar = json.optBooleanAny(default = true, "enableControlBar", "EnableControlBar")
+        val statusBarColor   = json.optStringAny("statusBarColor", "StatusBarColor")
+        val navBarColor      = json.optStringAny("navigationBarColor", "NavigationBarColor")
+        val appsArray        = json.optJSONArrayAny("apps", "Apps", "applications", "Applications")
 
         // Build new app list sorted by displayOrder
         val tempList = ArrayList<Pair<Int, MainActivity.Companion.AppInfo>>()
         if (appsArray != null) {
             for (i in 0 until appsArray.length()) {
                 val app          = appsArray.getJSONObject(i)
-                val appName      = app.optString("appName", "")
-                val pkgName      = app.optString("packageName", "")
-                val displayOrder = app.optInt("displayOrder", i * 10)
-                val btnColorRaw  = app.optString("btnColor", "FF888888")
+                val appName      = app.optStringAny("appName", "AppName", "name", "Name")
+                val pkgName      = app.optStringAny("packageName", "PackageName")
+                val displayOrder = app.optIntAny(default = i * 10, "displayOrder", "DisplayOrder")
+                val btnColorRaw  = app.optStringAny("btnColor", "BtnColor", "buttonColor", "ButtonColor")
+                    .ifBlank { "FF888888" }
                 if (pkgName.isBlank()) continue
                 // Server sends ARGB hex without '#' (e.g. "FFe22f1c"); Color.parseColor needs '#'.
                 val btnColorStr = if (btnColorRaw.startsWith("#")) btnColorRaw else "#$btnColorRaw"
@@ -395,6 +416,36 @@ object LauncherConfigManager {
         if (value.isNotBlank()) return value
         val legacyId = json.optInt("configId", -1)
         return if (legacyId >= 0) legacyId.toString() else ""
+    }
+
+    private fun JSONObject.optStringAny(vararg keys: String): String {
+        for (key in keys) {
+            val value = optString(key, "")
+            if (value.isNotBlank()) return value
+        }
+        return ""
+    }
+
+    private fun JSONObject.optBooleanAny(default: Boolean, vararg keys: String): Boolean {
+        for (key in keys) {
+            if (has(key)) return optBoolean(key, default)
+        }
+        return default
+    }
+
+    private fun JSONObject.optIntAny(default: Int, vararg keys: String): Int {
+        for (key in keys) {
+            if (has(key)) return optInt(key, default)
+        }
+        return default
+    }
+
+    private fun JSONObject.optJSONArrayAny(vararg keys: String): org.json.JSONArray? {
+        for (key in keys) {
+            val value = optJSONArray(key)
+            if (value != null) return value
+        }
+        return null
     }
 
     private fun readStoredConfigId(prefs: android.content.SharedPreferences): String {

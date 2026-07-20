@@ -55,7 +55,7 @@
             <action android:name="one.globalconnect.xtmsagent.ACTION_PRE_INSTALL_CHECK" />
         </intent>
         <intent>
-            <action android:name="com.uic.uicpaymentapp.ACTION_PRE_INSTALL_RESPONSE" />
+            <action android:name="one.globalconnect.paymentapp.ACTION_PRE_INSTALL_RESPONSE" />
         </intent>
         <intent>
             <action android:name="android.intent.action.PAY_APP" />
@@ -115,6 +115,16 @@
             excludeFromRecents: keeps the block screen out of the app switcher.
         -->
         <activity
+            android:name=".OperatorMessageActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:launchMode="singleTop"
+            android:showOnLockScreen="true"
+            android:showWhenLocked="true"
+            android:theme="@style/Theme.xTMSAgent.OperatorDialog"
+            android:turnScreenOn="true" />
+
+        <activity
             android:name=".BlockedActivity"
             android:exported="false"
             android:launchMode="singleTop"
@@ -172,7 +182,7 @@
             android:name=".AppConsentReceiver"
             android:exported="true">
             <intent-filter>
-                <action android:name="com.uic.uicpaymentapp.ACTION_PRE_INSTALL_RESPONSE" />
+                <action android:name="one.globalconnect.paymentapp.ACTION_PRE_INSTALL_RESPONSE" />
             </intent-filter>
         </receiver>
 
@@ -196,6 +206,14 @@
             android:exported="false"
             android:foregroundServiceType="dataSync"
             android:stopWithTask="false" />
+
+        <service
+            android:name=".licensing.ApplicationLicensingService"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="one.globalconnect.xtmsagent.APPLICATION_LICENSE_SERVICE" />
+            </intent-filter>
+        </service>
 
         <!--
             Remote Control: foreground service that owns the MediaProjection session.

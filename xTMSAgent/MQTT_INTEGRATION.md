@@ -257,6 +257,7 @@ Supported task types:
 - `UpdateFirmware`
 - `LauncherConfigDownload`
 - `DisplayMessage`
+- `RebootDevice`
 - `RefreshStatus`
 - `BlockDevice`
 - `UnblockDevice`

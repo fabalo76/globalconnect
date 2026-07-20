@@ -96,7 +96,7 @@
         android:textStyle="bold"
         android:elevation="8dp"
         android:visibility="gone"
-        app:layout_constraintTop_toBottomOf="@id/recyclerView_logo"
+        app:layout_constraintBottom_toTopOf="@id/recyclerView_logo_t"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent" />
 

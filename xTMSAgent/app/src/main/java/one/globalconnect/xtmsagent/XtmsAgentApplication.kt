@@ -29,12 +29,15 @@ class XtmsAgentApplication : Application() {
         super.onCreate()
         Log.i(TAG, "Application started")
 
-        provisionCredentials()
+        runSafely("credential provisioning") { provisionCredentials() }
 
         // Apply device-owner kiosk restrictions (e.g. DISALLOW_CONFIG_TETHERING).
         // Idempotent — safe on every restart. No-op if not device owner.
-        TmsDeviceAdminReceiver.applyKioskRestrictions(this)
+        runSafely("kiosk restriction initialization") {
+            TmsDeviceAdminReceiver.applyKioskRestrictions(this)
+        }
 
+        try {
         val store = TmsCredentialStore(this)
         if (!store.loadTermId().isNullOrBlank() && !store.loadBrokerHost().isNullOrBlank()) {
             Log.i(TAG, "Terminal provisioned — starting MQTT service")
@@ -43,6 +46,17 @@ class XtmsAgentApplication : Application() {
             // Provisioning will be completed in MainActivity.Init() once the Nexgo SDK
             // returns the device SN, then the service is started from there.
             Log.w(TAG, "TermID/broker not yet available — MQTT service deferred to MainActivity")
+        }
+        } catch (e: Exception) {
+            Log.e(TAG, "Application MQTT service bootstrap failed; startup will continue", e)
+        }
+    }
+
+    private inline fun runSafely(operation: String, block: () -> Unit) {
+        try {
+            block()
+        } catch (e: Exception) {
+            Log.e(TAG, "Application $operation failed; startup will continue", e)
         }
     }
 

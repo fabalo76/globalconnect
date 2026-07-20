@@ -43,11 +43,12 @@ class TmsCredentialStore(context: Context) {
     }
 
     fun saveTermId(termId: String) {
-        prefs.edit().putString(KEY_TERM_ID, termId).apply()
-        Log.d(TAG, "TermID saved: $termId")
+        val normalizedTermId = normalizeTermId(termId)
+        prefs.edit().putString(KEY_TERM_ID, normalizedTermId).apply()
+        Log.d(TAG, "TermID saved: $normalizedTermId")
     }
 
-    fun loadTermId(): String? = prefs.getString(KEY_TERM_ID, null)
+    fun loadTermId(): String? = prefs.getString(KEY_TERM_ID, null)?.let(::normalizeTermId)
 
     fun saveBrokerHost(host: String) {
         prefs.edit().putString(KEY_BROKER_HOST, host).apply()
@@ -115,4 +116,6 @@ class TmsCredentialStore(context: Context) {
             .commit()
         Log.i(TAG, "Self-unlock committed synchronously (blocked=false, selfUnlockPending=true)")
     }
+
+    private fun normalizeTermId(termId: String): String = termId.trim().uppercase(Locale.ROOT)
 }

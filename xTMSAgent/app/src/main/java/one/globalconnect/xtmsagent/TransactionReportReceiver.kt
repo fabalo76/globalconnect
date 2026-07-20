@@ -11,6 +11,14 @@ private const val TAG = "TxnReportReceiver"
 
 class TransactionReportReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
+        try {
+            handleReport(context, intent)
+        } catch (e: Exception) {
+            Log.e(TAG, "Transaction report broadcast was rejected", e)
+        }
+    }
+
+    private fun handleReport(context: Context, intent: Intent) {
         if (intent.action != TransactionReportConstants.ACTION_REPORT_TRANSACTION) return
 
         val payload = intent.getStringExtra(TransactionReportConstants.EXTRA_TRANSACTION_JSON)

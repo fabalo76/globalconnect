@@ -11,6 +11,14 @@ private const val TAG = "AdminRequestReceiver"
 
 class AdminRequestReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
+        try {
+            handleRequest(context, intent)
+        } catch (e: Exception) {
+            Log.e(TAG, "Admin request broadcast was rejected", e)
+        }
+    }
+
+    private fun handleRequest(context: Context, intent: Intent) {
         if (intent.action != AdminRequestConstants.ACTION_REPORT_ADMIN_REQUEST) return
 
         val payload = intent.getStringExtra(AdminRequestConstants.EXTRA_ADMIN_REQUEST_JSON)

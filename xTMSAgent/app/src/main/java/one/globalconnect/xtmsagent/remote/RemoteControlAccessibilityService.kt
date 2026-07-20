@@ -176,4 +176,21 @@ class RemoteControlAccessibilityService : AccessibilityService() {
             else -> Log.d(TAG, "Unsupported keyCode $keyCode — ignored")
         }
     }
+
+    fun injectGlobalAction(action: String) {
+        val globalAction = when (action.lowercase()) {
+            "notifications", "notification_shade", "status_bar" -> GLOBAL_ACTION_NOTIFICATIONS
+            "back" -> GLOBAL_ACTION_BACK
+            "home" -> GLOBAL_ACTION_HOME
+            "recents" -> GLOBAL_ACTION_RECENTS
+            else -> {
+                Log.w(TAG, "Unsupported global action '$action'")
+                return
+            }
+        }
+
+        if (!performGlobalAction(globalAction)) {
+            Log.w(TAG, "Android rejected global action '$action'")
+        }
+    }
 }

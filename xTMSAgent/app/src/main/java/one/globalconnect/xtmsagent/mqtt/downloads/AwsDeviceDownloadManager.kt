@@ -2,9 +2,14 @@ package one.globalconnect.xtmsagent.mqtt.downloads
 
 import android.content.Context
 import android.util.Log
+import androidx.work.ExistingWorkPolicy
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.WorkManager
+import androidx.work.workDataOf
 import one.globalconnect.xtmsagent.MainActivity
 import one.globalconnect.xtmsagent.TMSFunc
 import one.globalconnect.xtmsagent.mqtt.TmsTaskStatus
+import one.globalconnect.xtmsagent.net.DeviceApi
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -16,6 +21,8 @@ import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.security.MessageDigest
+import java.time.Instant
+import java.util.concurrent.TimeUnit
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 
@@ -26,14 +33,21 @@ private const val INSTALL_TIMEOUT_MS = 180_000L
 
 object AwsDeviceDownloadManager {
 
-    data class Result(val success: Boolean, val errorMessage: String? = null)
+    data class Result(
+        val success: Boolean,
+        val errorMessage: String? = null,
+        val status: String? = null,
+        val statusMessage: String? = null
+    )
 
     suspend fun executeTask(
         context: Context,
+        taskId: String,
         taskType: String,
         payload: JSONObject?
     ): Result = withContext(Dispatchers.IO) {
         try {
+            ensureNotCancelled(context, taskId)
             val isFirmware = taskType.equals("FirmwareDownload", ignoreCase = true)
                 || taskType.equals("UpdateFirmware", ignoreCase = true)
             val response = requestDownload(context, isFirmware, payload)
@@ -49,27 +63,87 @@ object AwsDeviceDownloadManager {
             }
 
             val downloaded = files.map { file ->
-                val localFile = downloadSignedFile(context, response.downloadId, file)
+                ensureNotCancelled(context, taskId)
+                val localFile = downloadSignedFile(context, taskId, file)
                 verifyFile(localFile, file)
                 localFile
             }
 
-            if (isFirmware) {
-                installApkFiles(context, downloaded)
-                Log.i(TAG, "Firmware download staged: ${downloaded.joinToString { it.name }}")
-            } else {
-                val apk = downloaded.firstOrNull { it.name.endsWith(".apk", ignoreCase = true) }
-                    ?: throw IllegalStateException("Application download did not include an APK file")
-                installApk(context, apk)
-                MainActivity.writeLog("AWS app download installed: ${apk.name}")
+            ensureNotCancelled(context, taskId)
+            val effectiveAt = parseEffectiveAt(payload)
+            if (effectiveAt != null && effectiveAt.isAfter(Instant.now())) {
+                persistStagedTask(context, taskId, taskType, effectiveAt, downloaded)
+                scheduleApply(context, taskId, effectiveAt)
+                TmsTaskStatus.taskOverride.value = null
+                return@withContext Result(
+                    success = true,
+                    status = "pendingEffective",
+                    statusMessage = "Downloaded; waiting for effective time"
+                )
             }
 
+            applyDownloadedFiles(context, taskId, taskType, downloaded)
+            taskDirectory(context, taskId).deleteRecursively()
             TmsTaskStatus.taskOverride.value = null
-            Result(success = true)
+            Result(success = true, status = "applied")
         } catch (e: Exception) {
+            if (isCancelled(context, taskId)) {
+                Log.i(TAG, "AWS task $taskId cancelled")
+                TmsTaskStatus.taskOverride.value = null
+                return@withContext Result(success = true, status = "cancelled", statusMessage = "Task cancelled")
+            }
             Log.e(TAG, "AWS download task failed: ${e.message}", e)
             TmsTaskStatus.taskOverride.value = null
             Result(success = false, errorMessage = e.message ?: "Download task failed")
+        }
+    }
+
+    fun cancelTask(context: Context, taskId: String): Boolean {
+        if (taskId.isBlank()) return false
+        WorkManager.getInstance(context).cancelUniqueWork(workName(taskId))
+        val directory = taskDirectory(context, taskId)
+        directory.deleteRecursively()
+        directory.mkdirs()
+        cancelledMarker(context, taskId).writeText(Instant.now().toString())
+        Log.i(TAG, "Cancelled AWS task $taskId and removed staged artifacts")
+        return true
+    }
+
+    suspend fun applyStagedTask(context: Context, taskId: String): Result = withContext(Dispatchers.IO) {
+        try {
+            ensureNotCancelled(context, taskId)
+            val metadataFile = metadataFile(context, taskId)
+            if (!metadataFile.isFile) return@withContext Result(false, "Staged task metadata not found")
+            val metadata = JSONObject(metadataFile.readText())
+            val taskType = metadata.getString("taskType")
+            val names = metadata.getJSONArray("files")
+            val files = (0 until names.length()).map { File(taskDirectory(context, taskId), names.getString(it)) }
+            if (files.any { !it.isFile }) return@withContext Result(false, "One or more staged task files are missing")
+            applyDownloadedFiles(context, taskId, taskType, files)
+            taskDirectory(context, taskId).deleteRecursively()
+            Result(true, status = "applied")
+        } catch (e: Exception) {
+            if (isCancelled(context, taskId)) {
+                Result(true, status = "cancelled", statusMessage = "Task cancelled")
+            } else {
+                Log.e(TAG, "Unable to apply staged AWS task $taskId", e)
+                Result(false, e.message ?: "Staged task apply failed")
+            }
+        }
+    }
+
+    private suspend fun applyDownloadedFiles(context: Context, taskId: String, taskType: String, downloaded: List<File>) {
+        ensureNotCancelled(context, taskId)
+        val isFirmware = taskType.equals("FirmwareDownload", ignoreCase = true)
+            || taskType.equals("UpdateFirmware", ignoreCase = true)
+        if (isFirmware) {
+            installApkFiles(context, downloaded)
+            Log.i(TAG, "Firmware files installed: ${downloaded.joinToString { it.name }}")
+        } else {
+            val apk = downloaded.firstOrNull { it.name.endsWith(".apk", ignoreCase = true) }
+                ?: throw IllegalStateException("Application download did not include an APK file")
+            installApk(context, apk)
+            MainActivity.writeLog("AWS app download installed: ${apk.name}")
         }
     }
 
@@ -78,9 +152,22 @@ object AwsDeviceDownloadManager {
         val serial = cfg.sn.ifBlank { MainActivity.vg_sSN }
         val token = deviceToken(serial, cfg.download_secret)
         val endpoint = if (isFirmware) "firmware" else "app"
-        val url = "${cfg.webScheme}://${cfg.apiHost}:${cfg.web_port}/v1/devices/${serial.urlEncode()}/downloads/$endpoint"
+        val path = "/v1/devices/${serial.urlEncode()}/downloads/$endpoint"
         val request = buildDownloadRequest(payload, isFirmware).toString()
+        var lastFailure: Exception? = null
+        for (url in DeviceApi.urls(path)) {
+            try {
+                return requestDownloadFromUrl(url, token, request)
+            } catch (e: Exception) {
+                if (!DeviceApi.isRecoverableHostFailure(e)) throw e
+                lastFailure = e
+                Log.w(TAG, "Device download endpoint failed for $url: ${e.message}")
+            }
+        }
+        throw lastFailure ?: IllegalStateException("Device download endpoint is unavailable")
+    }
 
+    private fun requestDownloadFromUrl(url: String, token: String, request: String): DownloadResponse {
         val conn = URL(url).openConnection() as HttpURLConnection
         try {
             conn.requestMethod = "POST"
@@ -240,10 +327,54 @@ object AwsDeviceDownloadManager {
             .joinToString("") { "%02x".format(it) }
     }
 
-    private fun stagingFile(context: Context, downloadId: String, fileName: String): File {
+    private fun stagingFile(context: Context, taskId: String, fileName: String): File {
         val safeName = fileName.replace(Regex("""[^A-Za-z0-9._-]"""), "_")
-        return File(File(context.filesDir, "aws_downloads/$downloadId"), safeName)
+        return File(taskDirectory(context, taskId), safeName)
     }
+
+    private fun persistStagedTask(context: Context, taskId: String, taskType: String, effectiveAt: Instant, files: List<File>) {
+        val metadata = JSONObject()
+            .put("taskId", taskId)
+            .put("taskType", taskType)
+            .put("effectiveAt", effectiveAt.toString())
+            .put("files", JSONArray(files.map { it.name }))
+        metadataFile(context, taskId).writeText(metadata.toString())
+    }
+
+    private fun scheduleApply(context: Context, taskId: String, effectiveAt: Instant) {
+        val delayMs = (effectiveAt.toEpochMilli() - System.currentTimeMillis()).coerceAtLeast(0L)
+        val request = OneTimeWorkRequestBuilder<AwsTaskApplyWorker>()
+            .setInitialDelay(delayMs, TimeUnit.MILLISECONDS)
+            .setInputData(workDataOf(AwsTaskApplyWorker.KEY_TASK_ID to taskId))
+            .build()
+        WorkManager.getInstance(context).enqueueUniqueWork(workName(taskId), ExistingWorkPolicy.REPLACE, request)
+    }
+
+    private fun parseEffectiveAt(payload: JSONObject?): Instant? {
+        val value = payload?.optString("effectiveAt")?.takeIf { it.isNotBlank() }
+            ?: payload?.optString("EffectiveAt")?.takeIf { it.isNotBlank() }
+            ?: return null
+        return runCatching { Instant.parse(value) }
+            .onFailure { Log.w(TAG, "Invalid effectiveAt '$value'; applying immediately") }
+            .getOrNull()
+    }
+
+    private fun taskDirectory(context: Context, taskId: String): File {
+        val safeTaskId = taskId.replace(Regex("""[^A-Za-z0-9._-]"""), "_")
+        return File(context.filesDir, "aws_tasks/$safeTaskId")
+    }
+
+    private fun metadataFile(context: Context, taskId: String) = File(taskDirectory(context, taskId), "task.json")
+
+    private fun cancelledMarker(context: Context, taskId: String) = File(taskDirectory(context, taskId), ".cancelled")
+
+    private fun isCancelled(context: Context, taskId: String) = taskId.isNotBlank() && cancelledMarker(context, taskId).isFile
+
+    private fun ensureNotCancelled(context: Context, taskId: String) {
+        if (isCancelled(context, taskId)) throw IllegalStateException("Task $taskId was cancelled")
+    }
+
+    private fun workName(taskId: String) = "aws-task-$taskId"
 
     private fun String.ensureApkExtension(): String =
         if (endsWith(".apk", ignoreCase = true)) this else "$this.apk"

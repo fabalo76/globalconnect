@@ -13,6 +13,7 @@
 	"tms_cfg": {
 		"server_addr": "api.dev.globalconnect.one",
 		"api_host": "api.dev.globalconnect.one",
+		"api_host_fallback": "yc1aix2k96.execute-api.us-east-1.amazonaws.com",
 		"mqtt_host": "atypsm4jmdcoa-ats.iot.us-east-1.amazonaws.com",
 		"server_addr_dev": "api.dev.globalconnect.one",
 		"tcp_port": 5050,

@@ -24,6 +24,8 @@ The older `tms/terminal/{TermID}/...`, broker-password, TCP/FTP, `easy`, `paramr
 
 AWS IoT provisioning is device-scoped. A terminal can register its Thing/certificate and exchange MQTT on `tms/device/{serial}/...` as long as it is registered as a Global Connect ONE device with IoT enabled; it does not need to be assigned to a lane. Lane context is only used when resolving payment parameters, downloads that depend on merchant/branch/lane configuration, and operator workflow.
 
+The exported application licensing service is a generic broker for offline application licenses. It verifies the caller UID, package, and installed APK signer, then relays registration over the authenticated device MQTT connection. Licensed applications generate and retain their own Android Keystore private keys; xTMSAgent never receives application private keys.
+
 ---
 
 ## Log File

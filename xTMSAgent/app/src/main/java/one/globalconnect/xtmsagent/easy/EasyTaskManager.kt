@@ -68,7 +68,10 @@ private val RETRY_DELAY_MS = longArrayOf(
  */
 object EasyTaskManager {
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO + CoroutineName("EasyTaskManager"))
+    private val scope = CoroutineScope(
+        SupervisorJob() + Dispatchers.IO + CoroutineName("EasyTaskManager") +
+            one.globalconnect.xtmsagent.loggingCoroutineExceptionHandler(TAG)
+    )
 
     /**
      * Entry point called by TmsMqttManager when a JSON payload arrives on the easy topic.

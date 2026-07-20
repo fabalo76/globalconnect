@@ -25,13 +25,13 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.graphics.toColorInt
 import androidx.core.view.doOnLayout
+import androidx.lifecycle.lifecycleScope
 import androidx.viewpager2.widget.ViewPager2
 import com.nexgo.oaf.apiv3.APIProxy
 import one.globalconnect.xtmsagent.btn_move.GridAdapter
 import one.globalconnect.xtmsagent.launcher.ACTION_LAUNCHER_CONFIG_UPDATED
 import one.globalconnect.xtmsagent.launcher.LauncherConfigManager
 import one.globalconnect.xtmsagent.mqtt.TmsMqttManager
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -442,7 +442,7 @@ class ConfigMenuActivity : AppCompatActivity() {
             statusText.text = "${statusText.text}\n$line"
         }
 
-        CoroutineScope(Dispatchers.Main).launch {
+        lifecycleScope.launch(loggingCoroutineExceptionHandler(TAG)) {
             val updates = mutableListOf<String>()
 
             // ── Launcher config ───────────────────────────────────────────────

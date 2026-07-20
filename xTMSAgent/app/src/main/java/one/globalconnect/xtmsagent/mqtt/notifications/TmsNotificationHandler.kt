@@ -4,11 +4,13 @@ import android.content.Context
 import android.content.Intent
 import android.util.Log
 import com.nexgo.oaf.apiv3.APIProxy
+import one.globalconnect.xtmsagent.admin.AdminRequestManager
 import one.globalconnect.xtmsagent.BlockedActivity
 import one.globalconnect.xtmsagent.R
 import one.globalconnect.xtmsagent.launcher.LauncherConfigManager
 import one.globalconnect.xtmsagent.mqtt.persistence.TmsCredentialStore
 import one.globalconnect.xtmsagent.params.ParamManager
+import org.json.JSONObject
 
 private const val TAG = "TmsNotifHandler"
 
@@ -100,6 +102,10 @@ class TmsNotificationHandler(private val context: Context) {
             return
         }
 
+        if (handleJsonNotification(payload)) {
+            return
+        }
+
         val notification = try {
             parseNotification(payload)
         } catch (e: Exception) {
@@ -117,6 +123,66 @@ class TmsNotificationHandler(private val context: Context) {
     }
 
     // ── Packet parser ─────────────────────────────────────────────────────────
+
+    private fun handleJsonNotification(payload: ByteArray): Boolean {
+        val firstNonWhitespace = payload.firstOrNull {
+            !it.toInt().toChar().isWhitespace()
+        }?.toInt()?.toChar() ?: return false
+        if (firstNonWhitespace != '{') return false
+
+        val json = try {
+            JSONObject(String(payload, Charsets.UTF_8))
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to parse JSON notification: ${e.message}", e)
+            return true
+        }
+
+        val type = json.optString("type", json.optString("messageType", "notification"))
+        Log.i(TAG, "JSON notification received type=$type")
+        if (type.equals("admin_request_confirmed", ignoreCase = true)) {
+            AdminRequestManager.notifyPaymentAppMessage(context, buildAdminRequestConfirmedPayload(json))
+            return true
+        }
+
+        readJsonString(json, "message", "messageText", "title", "ticketTitle")?.let { message ->
+            context.sendBroadcast(
+                Intent(ACTION_SHOW_OPERATOR_MESSAGE).apply {
+                    `package` = context.packageName
+                    putExtra(EXTRA_MESSAGE_TEXT, message)
+                }
+            )
+        }
+        return true
+    }
+
+    private fun buildAdminRequestConfirmedPayload(source: JSONObject): JSONObject {
+        val ticketId = source.optString("ticketId", "")
+        val message = readJsonString(source, "message", "messageText")
+            ?: if (ticketId.isBlank()) "Ticket created" else "Ticket ${ticketId.take(8)} created"
+
+        return JSONObject()
+            .put("taskType", "display_message")
+            .put("type", "display_message")
+            .put("params", JSONObject()
+                .put("messageText", message)
+                .put("timeoutSeconds", 120)
+                .put("printTicket", true)
+                .put("ticketId", ticketId)
+                .put("ticketTitle", source.optString("ticketTitle", ""))
+                .put("requestType", source.optString("requestType", ""))
+                .put("deviceSerial", source.optString("deviceSerial", ""))
+                .put("terminalId", source.optString("terminalId", ""))
+                .put("laneId", source.optString("laneId", ""))
+                .put("createdAt", source.optString("createdAt", "")))
+    }
+
+    private fun readJsonString(json: JSONObject, vararg keys: String): String? {
+        for (key in keys) {
+            val value = json.optString(key, "")
+            if (value.isNotBlank()) return value
+        }
+        return null
+    }
 
     private fun parseNotification(payload: ByteArray): TmsNotification {
         val flags = payload[0].toInt() and 0xFF  // treat as unsigned byte

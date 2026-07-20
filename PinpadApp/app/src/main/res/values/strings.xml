@@ -1,5 +1,9 @@
 <resources>
     <string name="app_name">PINPAD</string>
+    <string name="license_required_title">PINPAD authorization required</string>
+    <string name="license_required_message">Connect the device to TMS to register this application.</string>
+    <string name="license_retry">Retry registration</string>
+    <string name="license_registering">Registering application…</string>
     <string name="haptics_not_supported_message" formatted="false">Haptics are not supported on this device.</string>
     <string name="idle_default">NEXGO WELCOME</string>
     <string name="prompt_swipe_card">SWIPE CARD</string>

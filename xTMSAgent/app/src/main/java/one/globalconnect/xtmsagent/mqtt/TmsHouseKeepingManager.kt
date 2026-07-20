@@ -46,7 +46,10 @@ private const val TAG = "TmsHouseKeepingMgr"
  */
 object TmsHouseKeepingManager {
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val scope = CoroutineScope(
+        SupervisorJob() + Dispatchers.IO +
+            one.globalconnect.xtmsagent.loggingCoroutineExceptionHandler(TAG)
+    )
 
     // ── Outbound ──────────────────────────────────────────────────────────────
 

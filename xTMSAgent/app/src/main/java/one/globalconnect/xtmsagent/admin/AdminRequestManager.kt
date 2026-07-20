@@ -35,6 +35,27 @@ object AdminRequestManager {
         }
     }
 
+    fun notifyPaymentAppMessage(context: Context, payload: JSONObject): Boolean {
+        val paymentPkg = findPaymentAppPackage(context)
+        if (paymentPkg.isNullOrBlank()) {
+            Log.w(TAG, "Admin message skipped: no payment app declares $ACTION_PAY_APP")
+            return false
+        }
+
+        context.sendBroadcast(
+            Intent(AdminRequestConstants.ACTION_ADMIN_MESSAGE).apply {
+                `package` = paymentPkg
+                putExtra(AdminRequestConstants.EXTRA_ADMIN_MESSAGE_JSON, payload.toString())
+            }
+        )
+        Log.i(
+            TAG,
+            "ACTION_ADMIN_MESSAGE -> $paymentPkg type=${payload.optString("type", "(none)")} " +
+                "ticketId=${payload.optJSONObject("params")?.optString("ticketId", "")?.ifBlank { "(none)" }}"
+        )
+        return true
+    }
+
     private fun notifyPaymentAppAck(context: Context, requestId: String?) {
         val paymentPkg = findPaymentAppPackage(context) ?: return
         context.sendBroadcast(

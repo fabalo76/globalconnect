@@ -51,21 +51,23 @@ import javax.xml.transform.stream.StreamResult
 import kotlin.concurrent.schedule
 import androidx.core.net.toUri
 import androidx.core.graphics.toColorInt
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import one.globalconnect.xtmsagent.mqtt.TmsTaskStatus
+import one.globalconnect.xtmsagent.mqtt.TmsStatusSeverity
 import kotlin.io.path.Path
 import kotlin.io.path.listDirectoryEntries
 import kotlin.io.path.name
 import android.content.BroadcastReceiver
 import android.content.IntentFilter
 import one.globalconnect.xtmsagent.launcher.ACTION_LAUNCHER_CONFIG_UPDATED
+import one.globalconnect.xtmsagent.launcher.LauncherConfigManager
 import one.globalconnect.xtmsagent.mqtt.TmsMqttManager
 import one.globalconnect.xtmsagent.mqtt.TmsMqttService
+import one.globalconnect.xtmsagent.mqtt.shouldShowTmsConnectionStatus
 import one.globalconnect.xtmsagent.mqtt.ACTION_HOUSEKEEPING_COMPLETE
 import one.globalconnect.xtmsagent.mqtt.notifications.ACTION_BLOCK_TERMINAL
 import one.globalconnect.xtmsagent.mqtt.notifications.ACTION_SHOW_OPERATOR_MESSAGE
@@ -1149,21 +1151,43 @@ class MainActivity : AppCompatActivity() {
         val strip = findViewById<TextView>(R.id.tmsNotifStrip)
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
-                TmsTaskStatus.taskOverride.collect { msg ->
-                    if (msg == null) hideTmsStrip(strip) else showTmsStrip(strip, msg)
+                combine(TmsTaskStatus.taskOverride, TmsTaskStatus.connection) { task, connection ->
+                    Pair(task, connection)
+                }.collect { (task, connection) ->
+                    if (task != null) {
+                        showTmsStrip(strip, task, taskStatusColor(task))
+                    } else if (shouldShowTmsConnectionStatus(
+                            connection,
+                            LauncherConfigManager.isConfigApplied(this@MainActivity),
+                        )
+                    ) {
+                        showTmsStrip(strip, connection.text, connectionStatusColor(connection.severity))
+                    } else {
+                        hideTmsStrip(strip)
+                    }
                 }
             }
         }
     }
 
-    private fun showTmsStrip(strip: TextView, msg: String) {
-        val bg = when {
+    private fun taskStatusColor(msg: String): Int =
+        when {
             msg.startsWith("Downloading", ignoreCase = true) -> 0xFFE65100.toInt()
             msg.startsWith("Installing",  ignoreCase = true) -> 0xFF1565C0.toInt()
             msg.startsWith("Installed",   ignoreCase = true) -> 0xFF2E7D32.toInt()
             msg.contains("failed",        ignoreCase = true) -> 0xFFB71C1C.toInt()
             else                                             -> 0xFF424242.toInt()
         }
+
+    private fun connectionStatusColor(severity: TmsStatusSeverity): Int =
+        when (severity) {
+            TmsStatusSeverity.CONNECTED -> 0xFF2E7D32.toInt()
+            TmsStatusSeverity.CONNECTING -> 0xFF1565C0.toInt()
+            TmsStatusSeverity.WARNING -> 0xFFE65100.toInt()
+            TmsStatusSeverity.ERROR -> 0xFFB71C1C.toInt()
+        }
+
+    private fun showTmsStrip(strip: TextView, msg: String, bg: Int) {
         strip.setBackgroundColor(bg)
         strip.text = msg
         if (strip.visibility != View.VISIBLE) {

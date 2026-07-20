@@ -5,7 +5,6 @@ import android.content.Intent
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
-import android.net.NetworkRequest
 import android.util.Log
 import one.globalconnect.xtmsagent.BlockedActivity
 import one.globalconnect.xtmsagent.MainActivity
@@ -18,16 +17,20 @@ import one.globalconnect.xtmsagent.easy.EasyAckReport
 import one.globalconnect.xtmsagent.launcher.LauncherConfigManager
 import one.globalconnect.xtmsagent.params.ParamManager
 import one.globalconnect.xtmsagent.BuildConfig
+import one.globalconnect.xtmsagent.OperatorMessageActivity
 import one.globalconnect.xtmsagent.mqtt.downloads.AwsDeviceDownloadManager
 import one.globalconnect.xtmsagent.mqtt.notifications.ACTION_BLOCK_TERMINAL
 import one.globalconnect.xtmsagent.mqtt.notifications.ACTION_TERMINAL_NOT_REGISTERED
 import one.globalconnect.xtmsagent.mqtt.notifications.ACTION_UNBLOCK_TERMINAL
+import one.globalconnect.xtmsagent.mqtt.notifications.EXTRA_MESSAGE_TEXT
 import one.globalconnect.xtmsagent.mqtt.notifications.TmsNotificationHandler
 import one.globalconnect.xtmsagent.mqtt.persistence.TmsCredentialStore
 import one.globalconnect.xtmsagent.mqtt.status.TmsStatusWorker
 import one.globalconnect.xtmsagent.mqtt.versions.AppUpdateManager
 import one.globalconnect.xtmsagent.mqtt.versions.TermVersionChecker
 import one.globalconnect.xtmsagent.mqtt.tls.AwsIotCertificateStore
+import one.globalconnect.xtmsagent.licensing.ApplicationLicenseBroker
+import one.globalconnect.xtmsagent.licensing.KioskModeController
 import com.hivemq.client.mqtt.datatypes.MqttQos
 import com.hivemq.client.mqtt.mqtt3.Mqtt3AsyncClient
 import com.hivemq.client.mqtt.mqtt3.exceptions.Mqtt3ConnAckException
@@ -79,6 +82,7 @@ object TmsMqttManager {
     @Volatile private var mqttClient: Mqtt3AsyncClient? = null
     @Volatile private var isConnected: Boolean = false
     @Volatile private var isShuttingDown: Boolean = false
+    @Volatile private var networkAvailable: Boolean = false
     private val networkCallbackRegistered = AtomicBoolean(false)
     @Volatile private var consecutiveAuthFailures: Int = 0
     // Set when publishFullStatusReport() fails because the client is not connected.
@@ -86,7 +90,8 @@ object TmsMqttManager {
     @Volatile private var pendingStatusPublish: Boolean = false
 
     private val managerScope = CoroutineScope(
-        SupervisorJob() + Dispatchers.IO + CoroutineName("TmsMqttManager")
+        SupervisorJob() + Dispatchers.IO + CoroutineName("TmsMqttManager") +
+            one.globalconnect.xtmsagent.loggingCoroutineExceptionHandler(TAG)
     )
 
     private var reconnectJob: Job? = null
@@ -116,10 +121,11 @@ object TmsMqttManager {
         isShuttingDown = false
         consecutiveAuthFailures = 0
         isConnecting.set(false)
+        networkAvailable = hasActiveNetwork()
         if (networkCallbackRegistered.compareAndSet(false, true)) {
             registerNetworkCallback()
         }
-        Log.i(TAG, "Initialized for terminal $termId @ $brokerHost")
+        Log.i(TAG, "Initialized for terminal $termId @ $brokerHost networkAvailable=$networkAvailable")
     }
 
     private fun handleTaskMessage(payload: ByteArray) {
@@ -149,9 +155,25 @@ object TmsMqttManager {
                 }
                 "applicationdownload", "firmwaredownload", "updatefirmware" -> {
                     managerScope.launch(Dispatchers.IO) {
-                        val result = AwsDeviceDownloadManager.executeTask(appContext, taskType, payload)
-                        publishTaskAck(taskId, result.success, result.errorMessage)
+                        val result = AwsDeviceDownloadManager.executeTask(appContext, taskId, taskType, payload)
+                        publishTaskAck(taskId, result.success, result.errorMessage, result.status, result.statusMessage)
                         if (result.success) publishFullStatusReport()
+                    }
+                }
+                "canceltask" -> {
+                    val originalTaskId = readPayloadString(payload, "originalTaskId", "OriginalTaskId") ?: taskId
+                    val cancelled = AwsDeviceDownloadManager.cancelTask(appContext, originalTaskId)
+                    publishTaskAck(
+                        originalTaskId,
+                        cancelled,
+                        if (cancelled) null else "Task identifier is missing",
+                        if (cancelled) "cancelled" else "failed",
+                        if (cancelled) "Staged task and schedule removed" else null
+                    )
+                }
+                "exitkiosk" -> {
+                    KioskModeController.setLocked(appContext, false) { success, error ->
+                        publishTaskAck(taskId, success, error, if (success) "executed" else "failed")
                     }
                 }
                 "deleteapplication", "applicationdelete" -> {
@@ -175,6 +197,9 @@ object TmsMqttManager {
                     showDisplayMessage(payload)
                     publishTaskAck(taskId, true)
                 }
+                "rebootdevice", "reboot" -> {
+                    handleRebootDeviceTask(taskId)
+                }
                 "blockdevice", "blocklane" -> {
                     handleBlockTask(payload)
                     publishTaskAck(taskId, true)
@@ -195,6 +220,27 @@ object TmsMqttManager {
         } catch (e: Exception) {
             Log.e(TAG, "Global Connect task failed: id=$taskId type=$taskType message=${e.message}", e)
             publishTaskAck(taskId, false, e.message ?: "Task failed")
+        }
+    }
+
+    private fun handleRebootDeviceTask(taskId: String) {
+        managerScope.launch(Dispatchers.IO) {
+            val platform = try {
+                com.nexgo.oaf.apiv3.APIProxy.getDeviceEngine(appContext).platform
+            } catch (e: Exception) {
+                Log.e(TAG, "RebootDevice failed: ${e.message}", e)
+                publishTaskAck(taskId, false, e.message ?: "Device reboot failed")
+                return@launch
+            }
+
+            Log.w(TAG, "RebootDevice requested by Global Connect")
+            publishTaskAck(taskId, true)
+            delay(1_000L)
+            try {
+                platform.rebootDevice()
+            } catch (e: Exception) {
+                Log.e(TAG, "rebootDevice() failed after task ACK: ${e.message}", e)
+            }
         }
     }
 
@@ -311,16 +357,25 @@ object TmsMqttManager {
     }
 
     private fun showDisplayMessage(payload: org.json.JSONObject?) {
-        val text = payload?.let {
-            if (it.has("messageText")) it.optString("messageText") else it.optString("MessageText")
-        } ?: ""
+        val text = readPayloadString(
+            payload,
+            "messageText",
+            "MessageText",
+            "message",
+            "Message",
+            "text",
+            "Text"
+        ) ?: ""
         if (text.isBlank()) {
             Log.w(TAG, "DisplayMessage task missing message text")
             return
         }
-        android.os.Handler(android.os.Looper.getMainLooper()).post {
-            android.widget.Toast.makeText(appContext, text, android.widget.Toast.LENGTH_LONG).show()
-        }
+        appContext.startActivity(
+            Intent(appContext, OperatorMessageActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                putExtra(EXTRA_MESSAGE_TEXT, text)
+            }
+        )
     }
 
     private fun handleConfigResponseMessage(payload: ByteArray) {
@@ -348,6 +403,14 @@ object TmsMqttManager {
      *  connection attempt is already in progress (e.g. triggered by onAvailable callback). */
     fun connect() {
         if (isConnected || isShuttingDown || isConnecting.get()) return
+        if (!hasActiveNetwork()) {
+            networkAvailable = false
+            TmsTaskStatus.disconnected("TMS offline: no active network ($termId)")
+            Log.d(TAG, "MQTT connection paused: no active cellular, Ethernet, or Wi-Fi network")
+            return
+        }
+        networkAvailable = true
+        TmsTaskStatus.connecting(termId)
         scheduleReconnect(backoffIndex = 0)
     }
 
@@ -359,6 +422,7 @@ object TmsMqttManager {
         mqttClient?.disconnect()
         mqttClient = null
         isConnected = false
+        TmsTaskStatus.disconnected("TMS disconnected ($termId)")
         Log.i(TAG, "Disconnected and shut down")
     }
 
@@ -370,8 +434,8 @@ object TmsMqttManager {
         isShuttingDown = false
         consecutiveAuthFailures = 0
         credentialStore.clearLegacyMqttCredentials()
-        awsIotCertificateStore.clear()
-        Log.i(TAG, "Resuming MQTT connection after user retry")
+        Log.i(TAG, "Resuming MQTT connection after user retry with existing AWS IoT credentials")
+        TmsTaskStatus.connecting(termId)
         scheduleReconnect(backoffIndex = 0)
     }
 
@@ -386,6 +450,14 @@ object TmsMqttManager {
      */
     private fun scheduleReconnect(backoffIndex: Int) {
         if (isShuttingDown) return
+        if (!hasActiveNetwork()) {
+            networkAvailable = false
+            isConnecting.set(false)
+            TmsTaskStatus.disconnected("TMS offline: no active network ($termId)")
+            Log.d(TAG, "MQTT reconnect paused: no active network")
+            return
+        }
+        networkAvailable = true
         cancelReconnectJob()
         isConnecting.set(true)
         val myGeneration = ++connectGeneration
@@ -406,12 +478,24 @@ object TmsMqttManager {
     private suspend fun connectWithBackoff(backoffIndex: Int) {
         var attempt = backoffIndex
         while (!isShuttingDown && !isConnected) {
+            if (!hasActiveNetwork()) {
+                networkAvailable = false
+                TmsTaskStatus.disconnected("TMS offline: no active network ($termId)")
+                Log.d(TAG, "MQTT reconnect loop paused until network availability callback")
+                return
+            }
             val delayMs = backoffDelay(attempt)
             if (delayMs > 0) {
                 Log.d(TAG, "Waiting ${delayMs} ms before connect attempt ${attempt + 1}")
                 delay(delayMs)
             }
             if (isShuttingDown || isConnected) break
+            if (!hasActiveNetwork()) {
+                networkAvailable = false
+                TmsTaskStatus.disconnected("TMS offline: no active network ($termId)")
+                Log.d(TAG, "MQTT reconnect cancelled during backoff: network is unavailable")
+                return
+            }
 
             try {
                 attemptConnect()
@@ -420,7 +504,16 @@ object TmsMqttManager {
                 throw e  // propagate cancellation
             } catch (e: Exception) {
                 Log.w(TAG, "Connect attempt failed: ${e.message}")
-                attempt = min(attempt + 1, BACKOFF_STEPS_MS.size - 1)
+                if (isShuttingDown) break
+                if (!hasActiveNetwork()) {
+                    networkAvailable = false
+                    TmsTaskStatus.disconnected("TMS offline: no active network ($termId)")
+                    Log.d(TAG, "MQTT retries paused after network loss")
+                    return
+                }
+                val nextAttempt = min(attempt + 1, BACKOFF_STEPS_MS.size - 1)
+                TmsTaskStatus.connectionFailed(e, backoffDelay(nextAttempt))
+                attempt = nextAttempt
             }
         }
     }
@@ -441,6 +534,7 @@ object TmsMqttManager {
     private suspend fun attemptConnect() = withContext(Dispatchers.IO) {
         Log.d(TAG, "Attempting MQTT connection to $brokerHost:${TMSFunc.mqttCfg.mqtt_port}…")
 
+        TmsTaskStatus.connecting(termId)
         val keyManagerFactory = awsIotCertificateStore.getOrProvision(termId)
 
         // Build a fresh client for each attempt — HiveMQ clients are not reusable after disconnect.
@@ -464,6 +558,7 @@ object TmsMqttManager {
             // Genuine mid-session drop — release the connecting flag and schedule reconnect.
             isConnecting.set(false)
             Log.w(TAG, "Connection dropped: ${event.cause.message}. Scheduling reconnect.")
+            TmsTaskStatus.disconnected("TMS connection dropped ($termId)")
             scheduleReconnect(backoffIndex = 1)  // start from 5 s, not immediate
         }
         mqttClient = client
@@ -489,7 +584,9 @@ object TmsMqttManager {
             reconnectJob = null
             consecutiveAuthFailures = 0
             isConnected = true
+            TmsTaskStatus.connected(termId)
             subscribeToTopics(client)
+            flushPendingTaskAcks()
 
             // If an offline self-unlock was performed while disconnected, publish blk=0
             // immediately — before the server has a chance to re-deliver its persistent
@@ -520,13 +617,26 @@ object TmsMqttManager {
         } catch (e: ExecutionException) {
             val connAckEx = e.cause as? Mqtt3ConnAckException
             val code = connAckEx?.mqttMessage?.returnCode
+            val isAuthenticationFailure =
+                code == Mqtt3ConnAckReturnCode.BAD_USER_NAME_OR_PASSWORD ||
+                    code == Mqtt3ConnAckReturnCode.NOT_AUTHORIZED
+            var certificateRefreshed = false
 
-            if (code == Mqtt3ConnAckReturnCode.BAD_USER_NAME_OR_PASSWORD ||
-                code == Mqtt3ConnAckReturnCode.NOT_AUTHORIZED) {
+            if (isAuthenticationFailure) {
+                try {
+                    awsIotCertificateStore.refresh(termId)
+                    certificateRefreshed = true
+                    Log.w(TAG, "MQTT authentication failed ($code); replacement AWS IoT certificate downloaded.")
+                } catch (refreshError: Exception) {
+                    Log.w(TAG, "MQTT authentication failed ($code); no replacement certificate available: " +
+                        refreshError.message)
+                }
+            }
+
+            if (isAuthenticationFailure) {
 
                 credentialStore.clearLegacyMqttCredentials()
-                awsIotCertificateStore.clear()
-                consecutiveAuthFailures++
+                consecutiveAuthFailures = if (certificateRefreshed) 0 else consecutiveAuthFailures + 1
 
                 if (consecutiveAuthFailures >= 2) {
                     // Two consecutive auth rejections after fresh AWS IoT certificate provisioning
@@ -534,6 +644,7 @@ object TmsMqttManager {
                     Log.e(TAG, "Terminal not registered in TMS — halting reconnect after " +
                         "$consecutiveAuthFailures consecutive auth failures.")
                     isShuttingDown = true  // stop the connectWithBackoff loop
+                    TmsTaskStatus.terminalNotRegistered(termId)
                     appContext.sendBroadcast(
                         Intent(ACTION_TERMINAL_NOT_REGISTERED).apply {
                             `package` = appContext.packageName
@@ -541,7 +652,7 @@ object TmsMqttManager {
                     )
                 } else {
                     Log.w(TAG, "MQTT auth rejected ($code) — attempt $consecutiveAuthFailures. " +
-                        "Clearing AWS IoT certificate and retrying provisioning.")
+                        "Retrying with the current or newly provisioned certificate.")
                 }
             } else {
                 Log.w(TAG, "MQTT CONNECT failed: $code (${e.cause?.message})")
@@ -630,6 +741,19 @@ object TmsMqttManager {
             .whenComplete { _, err ->
                 if (err != null) Log.e(TAG, "Subscribe $configResponseTopic failed: ${err.message}")
                 else Log.i(TAG, "Subscribed: $configResponseTopic (QoS 1)")
+            }
+
+        val licenseResponseTopic = termApplicationLicenseResponseTopic(termId)
+        client.subscribeWith()
+            .topicFilter(licenseResponseTopic)
+            .qos(MqttQos.AT_LEAST_ONCE)
+            .callback { message ->
+                ApplicationLicenseBroker.complete(String(message.payloadAsBytes, Charsets.UTF_8))
+            }
+            .send()
+            .whenComplete { _, err ->
+                if (err != null) Log.e(TAG, "Subscribe $licenseResponseTopic failed: ${err.message}")
+                else Log.i(TAG, "Subscribed: $licenseResponseTopic (QoS 1)")
             }
 
     }
@@ -980,6 +1104,28 @@ object TmsMqttManager {
         return true
     }
 
+    fun publishApplicationLicenseRequest(
+        payload: org.json.JSONObject,
+        onComplete: ((Boolean, String?) -> Unit)? = null,
+    ): Boolean {
+        val client = mqttClient
+        if (client == null || !isConnected) {
+            onComplete?.invoke(false, "MQTT client is not connected")
+            return false
+        }
+        val topic = termApplicationLicenseRequestTopic(termId)
+        val bytes = payload.toString().toByteArray(Charsets.UTF_8)
+        client.publishWith()
+            .topic(topic)
+            .qos(MqttQos.AT_LEAST_ONCE)
+            .payload(bytes)
+            .send()
+            .whenComplete { _, err ->
+                onComplete?.invoke(err == null, err?.message)
+            }
+        return true
+    }
+
     private fun reportTopic(payload: org.json.JSONObject): String {
         val messageType = payload.optString("messageType", payload.optString("type", ""))
         return if (messageType.equals("settlement", ignoreCase = true)
@@ -1089,14 +1235,24 @@ object TmsMqttManager {
             }
     }
 
-    private fun publishTaskAck(taskId: String, success: Boolean, errorMessage: String? = null) {
+    private fun publishTaskAck(
+        taskId: String,
+        success: Boolean,
+        errorMessage: String? = null,
+        statusOverride: String? = null,
+        statusMessage: String? = null,
+        queueWhenOffline: Boolean = true
+    ) {
         val client = mqttClient
         if (client == null || !isConnected) {
-            Log.w(TAG, "publishTaskAck: not connected - taskId=$taskId success=$success dropped")
+            if (queueWhenOffline && ::appContext.isInitialized) {
+                PendingTaskAckStore.enqueue(appContext, taskId, success, errorMessage, statusOverride, statusMessage)
+            }
+            Log.w(TAG, "publishTaskAck: not connected - taskId=$taskId success=$success queued=$queueWhenOffline")
             return
         }
         val now = Instant.now().toString()
-        val status = if (success) "completed" else "failed"
+        val status = statusOverride ?: if (success) "completed" else "failed"
         val result = org.json.JSONObject().apply {
             if (success) put("message", "Task completed")
             else if (!errorMessage.isNullOrBlank()) put("message", errorMessage)
@@ -1107,6 +1263,7 @@ object TmsMqttManager {
             .put("status", status)
             .put("success", success)
             .put("errorMessage", if (errorMessage.isNullOrBlank()) org.json.JSONObject.NULL else errorMessage)
+            .put("statusMessage", if (statusMessage.isNullOrBlank()) org.json.JSONObject.NULL else statusMessage)
             .put("result", result)
             .put("acknowledgedAt", now)
             .put("ts", now)
@@ -1118,9 +1275,21 @@ object TmsMqttManager {
             .payload(payload)
             .send()
             .whenComplete { _, err ->
-                if (err != null) Log.w(TAG, "Task ACK publish failed for taskId=$taskId: ${err.message}")
+                if (err != null) {
+                    Log.w(TAG, "Task ACK publish failed for taskId=$taskId: ${err.message}")
+                    if (queueWhenOffline) PendingTaskAckStore.enqueue(appContext, taskId, success, errorMessage, statusOverride, statusMessage)
+                }
                 else Log.d(TAG, "Task ACK published -> taskId=$taskId success=$success")
             }
+    }
+
+    private fun flushPendingTaskAcks() {
+        val pending = PendingTaskAckStore.takeAll(appContext)
+        if (pending.isEmpty()) return
+        Log.i(TAG, "Publishing ${pending.size} queued task ACK(s)")
+        pending.forEach { ack ->
+            publishTaskAck(ack.taskId, ack.success, ack.errorMessage, ack.status, ack.statusMessage)
+        }
     }
 
     /**
@@ -1299,32 +1468,77 @@ object TmsMqttManager {
 
     private fun registerNetworkCallback() {
         val cm = appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-        val request = NetworkRequest.Builder()
-            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-            .build()
-
-        cm.registerNetworkCallback(request, object : ConnectivityManager.NetworkCallback() {
+        cm.registerDefaultNetworkCallback(object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
-                if (isShuttingDown) return
-                Log.d(TAG, "Network available.")
-                // Disconnect the current client (if any) so we use the new interface.
-                // Setting isConnected = false before disconnect() ensures the disconnect
-                // listener sees wasConnected = false and does NOT spawn a parallel reconnect —
-                // scheduleReconnect() below is the sole owner of the new attempt.
-                isConnected = false
-                mqttClient?.disconnect()
-                // Release the connecting flag so scheduleReconnect can proceed even if a
-                // connection attempt was in flight on the old network path.
-                isConnecting.set(false)
-                scheduleReconnect(backoffIndex = 0)
+                updateNetworkAvailability("available")
+            }
+
+            override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
+                updateNetworkAvailability("capabilities changed")
             }
 
             override fun onLost(network: Network) {
-                Log.w(TAG, "Network lost.")
-                // The MQTT client's disconnect listener will fire and call scheduleReconnect
-                // once the connection actually drops. Nothing to do here.
+                managerScope.launch {
+                    delay(250L)
+                    updateNetworkAvailability("lost")
+                }
             }
         })
+    }
+
+    fun publishExternalTaskAck(
+        context: Context,
+        taskId: String,
+        success: Boolean,
+        errorMessage: String? = null,
+        status: String? = null,
+        statusMessage: String? = null
+    ) {
+        if (!::appContext.isInitialized) {
+            PendingTaskAckStore.enqueue(context, taskId, success, errorMessage, status, statusMessage)
+            TmsMqttService.start(context)
+            return
+        }
+        publishTaskAck(taskId, success, errorMessage, status, statusMessage)
+    }
+
+    private fun updateNetworkAvailability(reason: String) {
+        val available = hasActiveNetwork()
+        val wasAvailable = networkAvailable
+        networkAvailable = available
+
+        if (!available) {
+            if (!wasAvailable && !isConnected && !isConnecting.get()) return
+            connectGeneration++
+            cancelReconnectJob()
+            isConnecting.set(false)
+            isConnected = false
+            val client = mqttClient
+            mqttClient = null
+            client?.disconnect()
+            if (!isShuttingDown) {
+                TmsTaskStatus.disconnected("TMS offline: no active network ($termId)")
+            }
+            Log.w(TAG, "Network unavailable ($reason); MQTT retries paused")
+            return
+        }
+
+        if (isShuttingDown || wasAvailable || isConnected) return
+        Log.i(TAG, "Network available ($reason); reconnecting to TMS immediately")
+        TmsTaskStatus.connecting(termId, "Network available. Reconnecting to TMS")
+        isConnecting.set(false)
+        scheduleReconnect(backoffIndex = 0)
+    }
+
+    private fun hasActiveNetwork(): Boolean {
+        val cm = appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val network = cm.activeNetwork ?: return false
+        val capabilities = cm.getNetworkCapabilities(network) ?: return false
+        if (!capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) return false
+        return capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) ||
+            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) ||
+            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
+            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────

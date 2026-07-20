@@ -30,20 +30,28 @@ class RemoteControlService : Service() {
     private var manager: RemoteControlManager? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        when (intent?.action) {
-            ACTION_START -> startRemoteSession(intent)
-            ACTION_STOP -> {
-                Log.i(TAG, "Received ACTION_STOP")
-                manager?.stop()
-                manager = null
-                stopSelf()
+        try {
+            when (intent?.action) {
+                ACTION_START -> startRemoteSession(intent)
+                ACTION_STOP -> {
+                    Log.i(TAG, "Received ACTION_STOP")
+                    manager?.stop()
+                    manager = null
+                    stopSelf()
+                }
             }
+        } catch (e: Exception) {
+            Log.e(TAG, "Remote control command failed; session is stopping", e)
+            runCatching { manager?.stop() }
+            manager = null
+            stopSelf()
         }
         return START_NOT_STICKY
     }
 
     override fun onDestroy() {
-        manager?.stop()
+        runCatching { manager?.stop() }
+            .onFailure { Log.w(TAG, "Remote control cleanup failed", it) }
         manager = null
         super.onDestroy()
     }
@@ -84,7 +92,15 @@ class RemoteControlService : Service() {
             projectionData = projectionData,
             onSessionEnded = { stopSelf() },
         )
-        manager?.start()
+        try {
+            manager?.start()
+        } catch (e: Exception) {
+            Log.e(TAG, "Unable to start remote control manager", e)
+            runCatching { manager?.stop() }
+            manager = null
+            stopSelf()
+            return
+        }
         Log.i(TAG, "Kinesis remote control session started for $terminalId")
     }
 

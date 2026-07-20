@@ -80,4 +80,5 @@
     <string name="app_update_download_failed">Error al descargar actualización: %1$s</string>
     <string name="app_update_install_failed">Error al instalar actualización: %1$s</string>
     <string name="app_update_deferred">Actualización diferida (terminal ocupada): %1$s</string>
+    <string name="accessibility_service_description">Permite que el control remoto de TMS envie eventos tactiles y de teclado durante una sesion de soporte remoto.</string>
 </resources>

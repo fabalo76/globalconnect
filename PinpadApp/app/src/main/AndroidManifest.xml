@@ -6,6 +6,12 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
 
+    <queries>
+        <intent>
+            <action android:name="one.globalconnect.xtmsagent.APPLICATION_LICENSE_SERVICE" />
+        </intent>
+    </queries>
+
     <application
         android:name=".PinpadApplication"
         android:allowBackup="false"

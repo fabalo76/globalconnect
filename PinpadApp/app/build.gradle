@@ -5,15 +5,15 @@ plugins {
 }
 
 android {
-    namespace = "com.uic.pinpad"
+    namespace = "one.globalconnect.pinpad"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.uic.pinpad"
+        applicationId = "one.globalconnect.pinpad"
         minSdk = 26
         targetSdk = 36
-        versionCode = 124
-        versionName = "0.3.111"
+        versionCode = 126
+        versionName = "0.3.113"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         buildConfigField "String", "SERIAL_TRANSPORT", "\"AUTO\""
@@ -21,6 +21,8 @@ android {
         buildConfigField "int", "SERIAL_USB_VID", "0x6352"
         buildConfigField "int", "SERIAL_USB_PID", "0x294A"
         buildConfigField "int", "SERIAL_BAUD_RATE", "9600"
+        def licensePublicKey = providers.gradleProperty("licenseSigningPublicKeySpkiBase64").orElse("").get()
+        buildConfigField "String", "LICENSE_SIGNING_PUBLIC_KEY_SPKI_BASE64", "\"${licensePublicKey}\""
     }
 
     buildTypes {

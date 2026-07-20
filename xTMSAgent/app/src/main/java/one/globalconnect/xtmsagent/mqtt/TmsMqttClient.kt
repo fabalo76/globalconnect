@@ -25,6 +25,8 @@ fun termTransactionTopic(env: String, termId: String) =
     "\$aws/rules/tms_transaction_ingest_$env/tms/device/$termId/transaction"
 fun termSettlementTopic(termId: String) = "tms/device/$termId/settlement"
 fun termAdminRequestTopic(termId: String) = "tms/device/$termId/admin/request"
+fun termApplicationLicenseRequestTopic(termId: String) = "tms/device/$termId/license/request"
+fun termApplicationLicenseResponseTopic(termId: String) = "tms/device/$termId/license/response"
 fun termCfgAckTopic(termId: String) = termConfigRequestTopic(termId)
 fun termParamReqTopic(termId: String) = termConfigRequestTopic(termId)
 fun termParamResTopic(termId: String) = termConfigResponseTopic(termId)

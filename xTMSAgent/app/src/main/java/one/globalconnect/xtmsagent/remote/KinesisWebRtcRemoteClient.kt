@@ -58,7 +58,8 @@ class KinesisWebRtcRemoteClient(
     private var remoteDescriptionSet = false
     private var viewerClientId: String? = null
     private val pendingRemoteIce = mutableListOf<IceCandidate>()
-    private val stopped = AtomicBoolean(false)
+    private val lifecycle = RemotePeerLifecycleGate()
+    private val nativeResourceLock = Any()
 
     init {
         val wm = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
@@ -84,6 +85,10 @@ class KinesisWebRtcRemoteClient(
             }
 
             override fun onSdpOffer(senderClientId: String, sdp: String) {
+                if (!lifecycle.tryBeginNegotiation()) {
+                    Log.d(WEBRTC_TAG, "Ignoring SDP offer while stopping or negotiating")
+                    return
+                }
                 viewerClientId = senderClientId
                 onViewerConnected()
                 handleSdpOffer(senderClientId, sdp)
@@ -106,20 +111,28 @@ class KinesisWebRtcRemoteClient(
     }
 
     fun stop() {
-        if (!stopped.compareAndSet(false, true)) return
+        val decision = lifecycle.requestStop()
+        if (!decision.newlyRequested) return
         try { signalingClient?.disconnect() } catch (_: Exception) {}
-        try { videoCapturer?.stopCapture() } catch (_: Exception) {}
-        try { videoCapturer?.dispose() } catch (_: Exception) {}
-        try { videoTrack?.dispose() } catch (_: Exception) {}
-        try { peerConnection?.close() } catch (_: Exception) {}
-        try { peerConnection?.dispose() } catch (_: Exception) {}
-        try { peerConnectionFactory?.dispose() } catch (_: Exception) {}
-        try { eglBase.release() } catch (_: Exception) {}
         signalingClient = null
-        videoCapturer = null
-        videoTrack = null
-        peerConnection = null
-        peerConnectionFactory = null
+        if (decision.canFinalize) finalizeStop()
+    }
+
+    private fun finalizeStop() {
+        if (!lifecycle.tryFinalize()) return
+        synchronized(nativeResourceLock) {
+            try { videoCapturer?.stopCapture() } catch (_: Exception) {}
+            try { videoCapturer?.dispose() } catch (_: Exception) {}
+            try { videoTrack?.dispose() } catch (_: Exception) {}
+            try { peerConnection?.close() } catch (_: Exception) {}
+            try { peerConnection?.dispose() } catch (_: Exception) {}
+            try { peerConnectionFactory?.dispose() } catch (_: Exception) {}
+            try { eglBase.release() } catch (_: Exception) {}
+            videoCapturer = null
+            videoTrack = null
+            peerConnection = null
+            peerConnectionFactory = null
+        }
         onSessionEnded()
     }
 
@@ -168,16 +181,19 @@ class KinesisWebRtcRemoteClient(
     }
 
     private fun applyQuality(value: String) {
+        if (lifecycle.isStopping()) return
         val quality = RemoteVideoQuality.from(value) ?: return
-        if (quality == currentQuality) return
-        currentQuality = quality
-        val capture = quality.captureSize(screenWidth, screenHeight)
-        try {
-            videoCapturer?.changeCaptureFormat(capture.width, capture.height, quality.fps)
-            applyBitrate(quality)
-            Log.i(WEBRTC_TAG, "Remote video quality changed to ${quality.name.lowercase()} ${capture.width}x${capture.height}@${quality.fps} ${quality.bitrateBps}bps")
-        } catch (e: Exception) {
-            Log.w(WEBRTC_TAG, "Failed to change remote video quality to ${quality.name.lowercase()}: ${e.message}")
+        synchronized(nativeResourceLock) {
+            if (lifecycle.isStopping() || quality == currentQuality) return
+            currentQuality = quality
+            val capture = quality.captureSize(screenWidth, screenHeight)
+            try {
+                videoCapturer?.changeCaptureFormat(capture.width, capture.height, quality.fps)
+                applyBitrate(quality)
+                Log.i(WEBRTC_TAG, "Remote video quality changed to ${quality.name.lowercase()} ${capture.width}x${capture.height}@${quality.fps} ${quality.bitrateBps}bps")
+            } catch (e: Exception) {
+                Log.w(WEBRTC_TAG, "Failed to change remote video quality to ${quality.name.lowercase()}: ${e.message}")
+            }
         }
     }
 
@@ -189,57 +205,107 @@ class KinesisWebRtcRemoteClient(
     }
 
     private fun handleSdpOffer(senderClientId: String, sdp: String) {
-        val peer = peerConnection ?: return
-        peer.setRemoteDescription(object : SimpleSdpObserver() {
-            override fun onSetSuccess() {
-                remoteDescriptionSet = true
-                drainRemoteIce()
-                createAndSendAnswer(senderClientId)
+        val completed = AtomicBoolean(false)
+        val completeNegotiation: (Boolean) -> Unit = { stopAfterCompletion ->
+            if (completed.compareAndSet(false, true)) {
+                val shouldFinalize = lifecycle.completeNegotiation()
+                if (stopAfterCompletion) stop()
+                if (shouldFinalize) finalizeStop()
             }
+        }
+        val peer = peerConnection ?: run {
+            completeNegotiation(true)
+            return
+        }
+        try {
+            peer.setRemoteDescription(object : SimpleSdpObserver() {
+                override fun onSetSuccess() {
+                    if (lifecycle.isStopping()) {
+                        completeNegotiation(false)
+                        return
+                    }
+                    remoteDescriptionSet = true
+                    drainRemoteIce()
+                    createAndSendAnswer(senderClientId, completeNegotiation)
+                }
 
-            override fun onSetFailure(error: String) {
-                Log.e(WEBRTC_TAG, "Failed to set remote SDP offer: $error")
-                stop()
-            }
-        }, SessionDescription(SessionDescription.Type.OFFER, sdp))
+                override fun onSetFailure(error: String) {
+                    Log.e(WEBRTC_TAG, "Failed to set remote SDP offer: $error")
+                    completeNegotiation(true)
+                }
+            }, SessionDescription(SessionDescription.Type.OFFER, sdp))
+        } catch (e: Exception) {
+            Log.e(WEBRTC_TAG, "Failed to apply remote SDP offer", e)
+            completeNegotiation(true)
+        }
     }
 
-    private fun createAndSendAnswer(recipientClientId: String) {
-        val peer = peerConnection ?: return
-        peer.createAnswer(object : SimpleSdpObserver() {
-            override fun onCreateSuccess(description: SessionDescription) {
-                peer.setLocalDescription(object : SimpleSdpObserver() {
-                    override fun onSetSuccess() {
-                        signalingClient?.sendAnswer(recipientClientId, description)
+    private fun createAndSendAnswer(
+        recipientClientId: String,
+        completeNegotiation: (Boolean) -> Unit,
+    ) {
+        val peer = peerConnection ?: run {
+            completeNegotiation(true)
+            return
+        }
+        try {
+            peer.createAnswer(object : SimpleSdpObserver() {
+                override fun onCreateSuccess(description: SessionDescription) {
+                    if (lifecycle.isStopping()) {
+                        completeNegotiation(false)
+                        return
                     }
+                    try {
+                        peer.setLocalDescription(object : SimpleSdpObserver() {
+                            override fun onSetSuccess() {
+                                if (!lifecycle.isStopping()) {
+                                    signalingClient?.sendAnswer(recipientClientId, description)
+                                }
+                                completeNegotiation(false)
+                            }
 
-                    override fun onSetFailure(error: String) {
-                        Log.e(WEBRTC_TAG, "Failed to set local SDP answer: $error")
-                        stop()
+                            override fun onSetFailure(error: String) {
+                                Log.e(WEBRTC_TAG, "Failed to set local SDP answer: $error")
+                                completeNegotiation(true)
+                            }
+                        }, description)
+                    } catch (e: Exception) {
+                        Log.e(WEBRTC_TAG, "Failed to apply local SDP answer", e)
+                        completeNegotiation(true)
                     }
-                }, description)
-            }
+                }
 
-            override fun onCreateFailure(error: String) {
-                Log.e(WEBRTC_TAG, "Failed to create SDP answer: $error")
-                stop()
-            }
-        }, MediaConstraints())
+                override fun onCreateFailure(error: String) {
+                    Log.e(WEBRTC_TAG, "Failed to create SDP answer: $error")
+                    completeNegotiation(true)
+                }
+            }, MediaConstraints())
+        } catch (e: Exception) {
+            Log.e(WEBRTC_TAG, "Failed to create SDP answer", e)
+            completeNegotiation(true)
+        }
     }
 
     private fun addRemoteIce(candidate: IceCandidate) {
-        val peer = peerConnection ?: return
-        if (!remoteDescriptionSet) {
-            pendingRemoteIce += candidate
-            return
+        if (lifecycle.isStopping()) return
+        synchronized(nativeResourceLock) {
+            if (lifecycle.isStopping()) return
+            val peer = peerConnection ?: return
+            if (!remoteDescriptionSet) {
+                pendingRemoteIce += candidate
+                return
+            }
+            peer.addIceCandidate(candidate)
         }
-        peer.addIceCandidate(candidate)
     }
 
     private fun drainRemoteIce() {
-        val peer = peerConnection ?: return
-        pendingRemoteIce.forEach { peer.addIceCandidate(it) }
-        pendingRemoteIce.clear()
+        synchronized(nativeResourceLock) {
+            if (lifecycle.isStopping()) return
+            val peer = peerConnection ?: return
+            pendingRemoteIce.forEach { peer.addIceCandidate(it) }
+            pendingRemoteIce.clear()
+        }
     }
 
     private fun buildIceServers(): List<PeerConnection.IceServer> {
@@ -258,33 +324,40 @@ class KinesisWebRtcRemoteClient(
 
     private val peerObserver = object : PeerConnection.Observer {
         override fun onIceCandidate(candidate: IceCandidate) {
+            if (lifecycle.isStopping()) return
             val recipient = viewerClientId ?: return
             signalingClient?.sendIceCandidate(recipient, candidate)
         }
 
         override fun onDataChannel(dataChannel: DataChannel) {
-            if (dataChannel.label() != DATA_CHANNEL_LABEL) {
-                Log.d(WEBRTC_TAG, "Ignoring data channel ${dataChannel.label()}")
-                return
-            }
-            dataChannel.registerObserver(object : DataChannel.Observer {
-                override fun onBufferedAmountChange(previousAmount: Long) = Unit
-                override fun onStateChange() {
-                    Log.i(WEBRTC_TAG, "Control data channel state=${dataChannel.state()}")
+            synchronized(nativeResourceLock) {
+                if (lifecycle.isStopping()) return
+                if (dataChannel.label() != DATA_CHANNEL_LABEL) {
+                    Log.d(WEBRTC_TAG, "Ignoring data channel ${dataChannel.label()}")
+                    return
                 }
-
-                override fun onMessage(buffer: DataChannel.Buffer) {
-                    if (buffer.binary) {
-                        Log.d(WEBRTC_TAG, "Ignoring binary control data channel message")
-                        return
+                dataChannel.registerObserver(object : DataChannel.Observer {
+                    override fun onBufferedAmountChange(previousAmount: Long) = Unit
+                    override fun onStateChange() {
+                        if (!lifecycle.isStopping()) {
+                            Log.i(WEBRTC_TAG, "Control data channel state=${dataChannel.state()}")
+                        }
                     }
-                    val data = ByteArray(buffer.data.remaining())
-                    buffer.data.get(data)
-                    val message = String(data, Charsets.UTF_8)
-                    Log.d(WEBRTC_TAG, "Control data channel message received: $message")
-                    inputHandler.handle(message)
-                }
-            })
+
+                    override fun onMessage(buffer: DataChannel.Buffer) {
+                        if (lifecycle.isStopping()) return
+                        if (buffer.binary) {
+                            Log.d(WEBRTC_TAG, "Ignoring binary control data channel message")
+                            return
+                        }
+                        val data = ByteArray(buffer.data.remaining())
+                        buffer.data.get(data)
+                        val message = String(data, Charsets.UTF_8)
+                        Log.d(WEBRTC_TAG, "Control data channel message received: $message")
+                        inputHandler.handle(message)
+                    }
+                })
+            }
         }
 
         override fun onIceConnectionChange(state: PeerConnection.IceConnectionState) {

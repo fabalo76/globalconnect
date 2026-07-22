@@ -10,6 +10,14 @@
     <!-- Splash screen theme — shown from icon tap until appInitialized emits true.
          Replaces the system white window with a branded screen so there is no
          blank flash before Compose renders its first frame. -->
+    <style name="Theme.UICPaymentApp.DialogHost" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowActionBar">false</item>
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:backgroundDimEnabled">true</item>
+    </style>
+
     <style name="Theme.UICPaymentApp.Starting" parent="Theme.SplashScreen">
         <item name="windowSplashScreenBackground">#FDFCFF</item>
         <item name="windowSplashScreenAnimatedIcon">@drawable/splash_logo</item>

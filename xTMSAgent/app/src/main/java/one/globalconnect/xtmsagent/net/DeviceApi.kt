@@ -7,6 +7,15 @@ import java.net.UnknownHostException
 import javax.net.ssl.SSLException
 
 object DeviceApi {
+    fun primaryUrl(pathOrUrl: String): String {
+        if (pathOrUrl.startsWith("http://") || pathOrUrl.startsWith("https://")) {
+            return pathOrUrl
+        }
+
+        val cfg = TMSFunc.tmsCfg
+        return "${cfg.webScheme}://${cfg.apiHost.trim()}:${cfg.web_port}$pathOrUrl"
+    }
+
     fun urls(pathOrUrl: String): List<String> {
         if (pathOrUrl.startsWith("http://") || pathOrUrl.startsWith("https://")) {
             return listOf(pathOrUrl)

@@ -69,13 +69,16 @@ class KinesisSignalingClient(
     }
 
     fun disconnect() {
+        if (closed) return
         closed = true
-        webSocket?.close(1000, "session ended")
+        webSocket?.cancel()
         webSocket = null
+        httpClient.dispatcher.cancelAll()
         httpClient.dispatcher.executorService.shutdown()
     }
 
     private fun send(action: String, recipientClientId: String, messagePayload: String) {
+        if (closed) return
         val message = JSONObject()
             .put("action", action)
             .put("recipientClientId", recipientClientId)
@@ -87,12 +90,17 @@ class KinesisSignalingClient(
 
     private val socketListener = object : WebSocketListener() {
         override fun onOpen(webSocket: WebSocket, response: Response) {
+            if (closed) {
+                webSocket.cancel()
+                return
+            }
             this@KinesisSignalingClient.webSocket = webSocket
             Log.i(SIGNALING_TAG, "Kinesis signaling connected")
             listener.onSignalingOpen()
         }
 
         override fun onMessage(webSocket: WebSocket, text: String) {
+            if (closed) return
             try {
                 val event = JSONObject(text)
                 val messageType = event.optString("messageType")
@@ -101,10 +109,12 @@ class KinesisSignalingClient(
                 when (messageType.uppercase()) {
                     "SDP_OFFER" -> {
                         val offer = JSONObject(decodePayload(payload))
+                        if (closed) return
                         listener.onSdpOffer(senderClientId, offer.getString("sdp"))
                     }
                     "ICE_CANDIDATE" -> {
                         val candidateJson = JSONObject(decodePayload(payload))
+                        if (closed) return
                         listener.onIceCandidate(
                             senderClientId,
                             IceCandidate(

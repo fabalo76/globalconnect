@@ -1,0 +1,44 @@
+<resources>
+    <string name="app_name">Global Connect POS</string>
+
+    <!-- Echo test transaction -->
+    <string name="echo_test_transaction">Echo test</string>
+    <string name="echo_test_title">Echo test</string>
+    <string name="echo_test_description">Send an ISO 8583 echo message to verify host connectivity and TLS settings.</string>
+    <string name="echo_test_no_acquirers">No acquirers are configured for echo tests.</string>
+    <string name="echo_test_acquirer_title">Select acquirer</string>
+    <string name="echo_test_acquirer_host_protocol">Host protocol: %1$d</string>
+    <string name="echo_test_host_details">Host configuration</string>
+    <string name="echo_test_transport">Transport</string>
+    <string name="echo_test_transport_tls">TLS</string>
+    <string name="echo_test_transport_tcp">TCP</string>
+    <string name="echo_test_primary_host">Primary host</string>
+    <string name="echo_test_secondary_host">Secondary host</string>
+    <string name="echo_test_not_configured">Not configured</string>
+    <string name="echo_test_connect_timeout">Connect timeout</string>
+    <string name="echo_test_read_timeout">Read timeout</string>
+    <string name="echo_test_timeout_format">%1$d s</string>
+    <string name="echo_test_attempt_cycles">Attempt cycles</string>
+    <string name="echo_test_primary_retries">Primary retries</string>
+    <string name="echo_test_secondary_retries">Secondary retries</string>
+    <string name="echo_test_length_type_bcd">BCD</string>
+    <string name="echo_test_length_type_ascii">ASCII</string>
+    <string name="echo_test_length_type_binary">Binary</string>
+    <string name="echo_test_length_header">Length header</string>
+    <string name="echo_test_length_format">%1$d bytes (%2$s)</string>
+    <string name="echo_test_button">Test transaction</string>
+    <string name="echo_test_status_idle">Ready to send an echo test.</string>
+    <string name="echo_test_status_running">Sending echo test…</string>
+    <string name="echo_test_status_success">Response code %1$s from %2$s in %3$d ms.</string>
+    <string name="echo_test_status_failure">Echo test failed: %1$s</string>
+    <string name="echo_test_response_code">Response code</string>
+    <string name="echo_test_response_unknown">Unknown</string>
+    <string name="echo_test_endpoint_label">Endpoint</string>
+    <string name="echo_test_roundtrip_label">Round-trip time</string>
+    <string name="echo_test_roundtrip_format">%1$d ms</string>
+    <string name="echo_test_attempt_summary_label">Attempt details</string>
+    <string name="echo_test_attempt_summary">Attempt cycle %1$d, host retry %2$d</string>
+    <string name="echo_test_endpoint_primary">Primary endpoint</string>
+    <string name="echo_test_endpoint_secondary">Secondary endpoint</string>
+</resources>
+

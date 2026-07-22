@@ -23,31 +23,31 @@
 
     <!--
         Android 11+ package visibility: without this block, queryBroadcastReceivers()
-        returns nothing and UIC Home is never found regardless of which flavor is installed.
+        returns nothing and xTMSAgent is never found regardless of which flavor is installed.
         Declaring the intent action here makes the package manager visible to any app
-        (banpais, uic, or future flavors) that registers a receiver for this action.
+        (banpais, globalconnect, or future flavors) that registers a receiver for this action.
     -->
     <queries>
         <intent>
-            <action android:name="com.uic.home.ACTION_REQUEST_PARAMS" />
+            <action android:name="one.globalconnect.xtmsagent.ACTION_REQUEST_PARAMS" />
         </intent>
         <intent>
-            <action android:name="com.uic.home.ACTION_REPORT_TRANSACTION" />
+            <action android:name="one.globalconnect.xtmsagent.ACTION_REPORT_TRANSACTION" />
         </intent>
         <intent>
-            <action android:name="com.uic.home.ACTION_REPORT_ADMIN_REQUEST" />
+            <action android:name="one.globalconnect.xtmsagent.ACTION_REPORT_ADMIN_REQUEST" />
         </intent>
         <intent>
-            <action android:name="com.uic.home.ACTION_FORCE_SETTLEMENT" />
+            <action android:name="one.globalconnect.xtmsagent.ACTION_FORCE_SETTLEMENT" />
         </intent>
-        <!-- Needed to discover UIC Home when sending PRE_INSTALL_RESPONSE -->
+        <!-- Needed to discover xTMSAgent when sending PRE_INSTALL_RESPONSE -->
         <intent>
-            <action android:name="com.uic.home.ACTION_PRE_INSTALL_CHECK" />
+            <action android:name="one.globalconnect.xtmsagent.ACTION_PRE_INSTALL_CHECK" />
         </intent>
     </queries>
 
     <application
-        android:name=".UICApplication"
+        android:name=".GlobalConnectPaymentApplication"
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
@@ -73,6 +73,11 @@
             android:name=".cardreader.nexgo.PixiePinEntryActivity"
             android:exported="false"
             android:theme="@style/Theme.UICPaymentApp" />
+        <activity
+            android:name=".admin.AdminRequestStatusActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:theme="@style/Theme.UICPaymentApp.DialogHost" />
 <!--        <receiver android:enabled="true" android:name=".BootUpReceiver"-->
 <!--            android:exported="true"-->
 <!--            android:permission="android.permission.RECEIVE_BOOT_COMPLETED">-->
@@ -83,20 +88,20 @@
 <!--        </receiver>-->
 
         <!--
-            Receives TMS parameter download results from the UIC Home application.
-            exported=true so UIC Home (a different process) can send the reply broadcast.
-            UIC Home targets this receiver explicitly via `package` = this app's package name.
+            Receives TMS parameter download results from the xTMSAgent application.
+            exported=true so xTMSAgent (a different process) can send the reply broadcast.
+            xTMSAgent targets this receiver explicitly via `package` = this app's package name.
 
             Two scenarios:
-              Pull — this app requests params on first install (UICApplication.requestParamsFromUicHome)
-              Push — UIC Home receives a TMS server MQTT notification and delivers updated params
+              Pull — this app requests params on first install (GlobalConnectPaymentApplication.requestParamsFromXtmsAgent)
+              Push — xTMSAgent receives a TMS server MQTT notification and delivers updated params
         -->
         <receiver
             android:name=".TmsParamsReceiver"
             android:exported="true">
             <intent-filter>
-                <action android:name="com.uic.home.ACTION_PARAMS_READY" />
-                <action android:name="com.uic.home.ACTION_PARAMS_FAILED" />
+                <action android:name="one.globalconnect.xtmsagent.ACTION_PARAMS_READY" />
+                <action android:name="one.globalconnect.xtmsagent.ACTION_PARAMS_FAILED" />
             </intent-filter>
         </receiver>
 
@@ -104,8 +109,8 @@
             android:name=".transactions.TransactionReportAckReceiver"
             android:exported="true">
             <intent-filter>
-                <action android:name="com.uic.home.ACTION_TRANSACTION_REPORT_ACK" />
-                <action android:name="com.uic.home.ACTION_TRANSACTION_REPORT_FAILED" />
+                <action android:name="one.globalconnect.xtmsagent.ACTION_TRANSACTION_REPORT_ACK" />
+                <action android:name="one.globalconnect.xtmsagent.ACTION_TRANSACTION_REPORT_FAILED" />
             </intent-filter>
         </receiver>
 
@@ -113,8 +118,16 @@
             android:name=".admin.AdminRequestAckReceiver"
             android:exported="true">
             <intent-filter>
-                <action android:name="com.uic.home.ACTION_ADMIN_REQUEST_ACK" />
-                <action android:name="com.uic.home.ACTION_ADMIN_REQUEST_FAILED" />
+                <action android:name="one.globalconnect.xtmsagent.ACTION_ADMIN_REQUEST_ACK" />
+                <action android:name="one.globalconnect.xtmsagent.ACTION_ADMIN_REQUEST_FAILED" />
+            </intent-filter>
+        </receiver>
+
+        <receiver
+            android:name=".admin.AdminMessageReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="one.globalconnect.xtmsagent.ACTION_ADMIN_MESSAGE" />
             </intent-filter>
         </receiver>
 
@@ -122,20 +135,20 @@
             android:name=".settlement.ForceSettlementReceiver"
             android:exported="true">
             <intent-filter>
-                <action android:name="com.uic.home.ACTION_FORCE_SETTLEMENT" />
+                <action android:name="one.globalconnect.xtmsagent.ACTION_FORCE_SETTLEMENT" />
             </intent-filter>
         </receiver>
 
         <!--
-            Receives pre-install consent checks from UIC Home before it installs an APK update.
+            Receives pre-install consent checks from xTMSAgent before it installs an APK update.
             Responds with ACTION_PRE_INSTALL_RESPONSE (proceed or postpone).
         -->
         <receiver
             android:name=".TmsAppUpdateReceiver"
             android:exported="true">
             <intent-filter>
-                <action android:name="com.uic.home.ACTION_PRE_INSTALL_CHECK" />
-                <action android:name="com.uic.home.ACTION_PRE_INSTALL_DISMISS" />
+                <action android:name="one.globalconnect.xtmsagent.ACTION_PRE_INSTALL_CHECK" />
+                <action android:name="one.globalconnect.xtmsagent.ACTION_PRE_INSTALL_DISMISS" />
             </intent-filter>
         </receiver>
     </application>

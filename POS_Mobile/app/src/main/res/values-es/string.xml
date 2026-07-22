@@ -24,8 +24,8 @@
     <string name="sale_no_amount_required">No se requiere monto para esta transacción.</string>
     <string name="msg_amount_prompt_total">Total:</string>
 
-    <string name="msg_tax1_discount">Descuento de Impuesto</string>
-    <string name="msg_tax1_discount_short">Desc.Imp.</string>
+    <string name="msg_tax1_discount">Desc. ISV</string>
+    <string name="msg_tax1_discount_short">Desc. ISV</string>
 
     <string name="msg_charge_amount_prompt">%1$s $%2$s</string>
     <string name="msg_amount_refund">Ingrese Monto de Devolución:</string>
@@ -574,6 +574,7 @@
     <string name="end_of_day">Fin del Día</string>
     <string name="checkout">Venta</string>
     <string name="successful_void">Anulación exitosa</string>
+    <string name="successful_reversal">Reversión exitosa</string>
     <string name="system_settings_2">Configuración del Sistema</string>
     <string name="tip_screen">Pantalla de Propinas</string>
     <string name="posttip">Propina Posterior</string>
@@ -708,7 +709,7 @@
     <string name="merchant_copy">COPIA COMERCIO</string>
     <string name="customer_copy">COPIA CLIENTE</string>
     <string name="thank_you">Gracias</string>
-    <string name="poweredbyuic">Powered by UIC PayWorld</string>
+    <string name="poweredbyuic">Powered by Global Connect ONE</string>
     <string name="condensed_report">Reporte Condensado</string>
     <string name="summary_report_title">Reporte Resumen</string>
     <string name="audit_report_title">Reporte de Auditoría</string>
@@ -861,6 +862,10 @@
     <string name="totals_label_debits">Débitos</string>
     <string name="audit_report">Reporte de Auditoría</string>
     <string name="reprint_last">ReImprimir Ultima</string>
+    <string name="reprint_last_printing">Imprimiendo la última transacción…</string>
+    <string name="reprint_last_printed">La última transacción fue enviada a la impresora.</string>
+    <string name="reprint_last_no_transactions">No hay transacciones disponibles para reimprimir.</string>
+    <string name="reprint_last_failed">No se pudo reimprimir la última transacción.</string>
     <string name="reprint_settlement">ReImprimir Cierre</string>
     <string name="settlement_reprint_title">Reimprimir cierre</string>
     <string name="settlement_reprint_no_settlements">No hay recibos de cierre disponibles.</string>
@@ -1127,7 +1132,7 @@
     <string name="setting_initialize_success_title">Parámetros Actualizados</string>
     <string name="setting_initialize_success_body">La configuración del terminal fue descargada y aplicada correctamente.</string>
     <string name="setting_initialize_timeout_title">Tiempo de Espera Agotado</string>
-    <string name="setting_initialize_timeout_body">No se recibió respuesta del gestor de terminales.\nAsegúrese de que UIC Home esté en ejecución y el terminal tenga acceso a la red.</string>
+    <string name="setting_initialize_timeout_body">No se recibió respuesta del gestor de terminales.\nAsegúrese de que xTMSAgent esté en ejecución y el terminal tenga acceso a la red.</string>
     <string name="setting_initialize_error_title">Solicitud Fallida</string>
     <string name="tms_no_parameters">Sin Parámetros</string>
     <string name="tms_no_parameters_body">Este terminal aún no ha recibido su configuración del servidor TMS.</string>
@@ -1139,6 +1144,20 @@
     <string name="admin_request_executive_call">Solicitar Llamada Ejecutiva</string>
     <string name="admin_request_training">Solicitar Capacitacion</string>
     <string name="admin_request_sent">Solicitud administrativa enviada</string>
+    <string name="admin_request_sent_detail">La solicitud fue enviada. Se imprimira un recibo cuando la solicitud haya sido procesada.</string>
     <string name="admin_request_failed">No se pudo enviar la solicitud administrativa</string>
+    <string name="admin_request_failed_detail">No se pudo enviar la solicitud. Intente nuevamente.</string>
+    <string name="admin_request_failed_detail_with_error">No se pudo enviar la solicitud: %1$s</string>
+    <string name="admin_request_dismiss">Aceptar</string>
+    <string name="admin_ticket_receipt_title">SOLICITUD ADMIN.</string>
+    <string name="admin_ticket_id">Ticket</string>
+    <string name="admin_ticket_title">Titulo</string>
+    <string name="admin_ticket_request_type">Solicitud</string>
+    <string name="admin_ticket_terminal_id">Terminal</string>
+    <string name="admin_ticket_device_serial">Serie</string>
+    <string name="admin_ticket_lane_id">Carril</string>
+    <string name="admin_ticket_created_at">Creado</string>
+    <string name="admin_ticket_message">Mensaje</string>
+    <string name="admin_ticket_footer">Conserve este recibo para seguimiento.</string>
 
 </resources>

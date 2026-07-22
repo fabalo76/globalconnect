@@ -15,7 +15,7 @@ dependencyResolutionManagement {
         mavenCentral()
     }
 }
-rootProject.name = "UICMockApp"
+rootProject.name = "GlobalConnectPaymentApp"
 include ':app'
 include ':app:benchmark'
 include ':iso8583'

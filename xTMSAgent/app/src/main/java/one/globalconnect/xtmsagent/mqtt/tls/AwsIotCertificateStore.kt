@@ -5,11 +5,13 @@ import android.util.Base64
 import android.util.Log
 import one.globalconnect.xtmsagent.TMSFunc
 import one.globalconnect.xtmsagent.net.DeviceApi
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import java.io.ByteArrayInputStream
 import java.io.File
-import java.net.HttpURLConnection
-import java.net.URL
 import java.security.KeyFactory
 import java.security.KeyStore
 import java.security.PrivateKey
@@ -19,10 +21,10 @@ import java.security.spec.PKCS8EncodedKeySpec
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 import javax.net.ssl.KeyManagerFactory
+import java.util.concurrent.TimeUnit
 
 private const val TAG = "AwsIotCertStore"
-private const val CONNECT_TIMEOUT_MS = 30_000
-private const val READ_TIMEOUT_MS = 30_000
+private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
 
 class AwsIotCertificateStore(private val context: Context) {
 
@@ -48,58 +50,55 @@ class AwsIotCertificateStore(private val context: Context) {
         val cfg = TMSFunc.tmsCfg
         val token = deviceToken(serialNumber, cfg.download_secret)
         val path = "/v1/devices/${serialNumber.urlEncode()}/iot-credentials"
-        var lastFailure: Exception? = null
-        for (url in DeviceApi.urls(path)) {
-            try {
-                provisionFromUrl(serialNumber, token, url)
-                return
-            } catch (e: Exception) {
-                if (!DeviceApi.isRecoverableHostFailure(e)) throw e
-                lastFailure = e
-                Log.w(TAG, "IoT credential endpoint failed for $url: ${e.message}")
-            }
-        }
-        throw lastFailure ?: IllegalStateException("IoT credentials endpoint is unavailable")
+        val url = DeviceApi.primaryUrl(path)
+        provisionFromUrl(serialNumber, token, url)
     }
 
     private fun provisionFromUrl(serialNumber: String, token: String, url: String) {
-        val conn = URL(url).openConnection() as HttpURLConnection
+        val cfg = TMSFunc.tmsCfg
+        val client = OkHttpClient.Builder()
+            .connectTimeout(cfg.conn_timeout.toLong(), TimeUnit.SECONDS)
+            .readTimeout(cfg.resp_timeout.toLong(), TimeUnit.SECONDS)
+            .callTimeout((cfg.conn_timeout + cfg.resp_timeout).toLong(), TimeUnit.SECONDS)
+            .retryOnConnectionFailure(false)
+            .build()
+        val request = Request.Builder()
+            .url(url)
+            .header("Authorization", "Device $token")
+            .header("Connection", "close")
+            .post("{}".toRequestBody(JSON_MEDIA_TYPE))
+            .build()
 
-        try {
-            conn.requestMethod = "POST"
-            conn.setRequestProperty("Content-Type", "application/json; charset=UTF-8")
-            conn.setRequestProperty("Authorization", "Device $token")
-            conn.doOutput = true
-            conn.doInput = true
-            conn.connectTimeout = CONNECT_TIMEOUT_MS
-            conn.readTimeout = READ_TIMEOUT_MS
-            conn.outputStream.use { it.write("{}".toByteArray(Charsets.UTF_8)) }
-
-            if (conn.responseCode != HttpURLConnection.HTTP_OK) {
-                val err = conn.errorStream?.bufferedReader()?.readText() ?: ""
-                throw IllegalStateException("IoT credentials HTTP ${conn.responseCode}: $err")
+        client.newCall(request).execute().use { response ->
+            val responseBody = response.body?.string().orEmpty()
+            if (!response.isSuccessful) {
+                throw IllegalStateException("IoT credentials HTTP ${response.code}: $responseBody")
             }
 
-            val json = JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
+            val json = JSONObject(responseBody)
             val certificatePem = json.optString("certificatePem", json.optString("CertificatePem"))
             val privateKeyPem = json.optString("privateKey", json.optString("PrivateKey"))
             if (certificatePem.isBlank() || privateKeyPem.isBlank()) {
                 throw IllegalStateException("IoT credentials response is missing certificate material")
             }
 
+            buildKeyManagerFactory(certificatePem, privateKeyPem)
             certDir.mkdirs()
-            val certificateTemp = File(certDir, "device.crt.tmp")
-            val privateKeyTemp = File(certDir, "device.key.tmp")
-            certificateTemp.writeText(certificatePem, Charsets.UTF_8)
-            privateKeyTemp.writeText(privateKeyPem, Charsets.UTF_8)
-            certificateTemp.copyTo(certificateFile, overwrite = true)
-            privateKeyTemp.copyTo(privateKeyFile, overwrite = true)
-            certificateTemp.delete()
-            privateKeyTemp.delete()
+            writeCredentialFile(certificateFile, certificatePem)
+            writeCredentialFile(privateKeyFile, privateKeyPem)
             Log.i(TAG, "AWS IoT certificate provisioned for $serialNumber from $url")
-        } finally {
-            conn.disconnect()
         }
+    }
+
+    private fun writeCredentialFile(target: File, contents: String) {
+        val temp = File(target.parentFile, "${target.name}.tmp")
+        temp.outputStream().use { stream ->
+            stream.write(contents.toByteArray(Charsets.UTF_8))
+            stream.flush()
+            stream.fd.sync()
+        }
+        temp.copyTo(target, overwrite = true)
+        temp.delete()
     }
 
     private fun buildKeyManagerFactory(certificatePem: String, privateKeyPem: String): KeyManagerFactory {

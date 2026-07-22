@@ -2,7 +2,7 @@
 
 ## Overview
 
-LATAM Payment Application is a POS payment solution built by **UIC** for Nexgo Android POS devices deployed across Latin American merchant environments. It handles card and cash transactions, terminal configuration via TMS, and operates as a managed payment client under the **UIC Home** launcher application.
+LATAM Payment Application is a POS payment solution built for Global Connect for Nexgo Android POS devices deployed across Latin American merchant environments. It handles card and cash transactions, terminal configuration via TMS, and operates as a managed payment client under the **xTMSAgent** launcher application.
 
 ## Features
 
@@ -13,12 +13,12 @@ LATAM Payment Application is a POS payment solution built by **UIC** for Nexgo A
 - Dynamic terminal configuration delivered via TMS (Terminal Management System)
 - Multi-language and multi-currency support with runtime locale switching
 - SQLCipher-encrypted local transaction database
-- Coordinated application update and parameter update lifecycle managed by UIC Home
+- Coordinated application update and parameter update lifecycle managed by xTMSAgent
 
 ## Architecture
 
 ```
-UIC Home Launcher  ──►  TMS Server (MQTT/HTTP)
+xTMSAgent Launcher  ──►  TMS Server (MQTT/HTTP)
        │
        │  Broadcast Intents
        ▼
@@ -30,7 +30,7 @@ LATAM Payment App
        └── ISO 8583 Module (host messaging)
 ```
 
-For full details on the UIC Home ↔ Payment App protocol, see [docs/uic_home_interaction.md](docs/uic_home_interaction.md).
+For full details on the xTMSAgent ↔ Payment App protocol, see [docs/xtmsagent_interaction.md](docs/xtmsagent_interaction.md).
 
 ## Getting Started
 
@@ -57,7 +57,7 @@ Open in Android Studio via **File → Open...**, select the `POS_Mobile` project
 
 ## ISO 8583 Module
 
-The `iso8583` Gradle module is a UIC-authored implementation for composing and parsing ISO 8583 financial messages. All public classes include Javadoc and are namespaced under `com.uic.pos.iso8583`.
+The `iso8583` Gradle module is a payment application implementation for composing and parsing ISO 8583 financial messages. All public classes include Javadoc and are namespaced under `com.uic.pos.iso8583`.
 
 Default field layout: `app/src/main/assets/iso8583_ISSWITCH_config.xml`
 
@@ -69,16 +69,16 @@ val factory = Iso8583Provider.createFactory(context, "iso8583_MY_HOST_config.xml
 
 ## TMS Configuration
 
-Terminal parameters are delivered as a JSON document (`TMS_Database`) by UIC Home on startup and whenever the TMS server publishes an update. The app validates the `StructVersion` field before applying any parameter set. See [docs/uic_home_interaction.md](docs/uic_home_interaction.md) for the full parameter exchange protocol.
+Terminal parameters are delivered as a JSON document (`TMS_Database`) by xTMSAgent on startup and whenever the TMS server publishes an update. The app validates the `StructVersion` field before applying any parameter set. See [docs/xtmsagent_interaction.md](docs/xtmsagent_interaction.md) for the full parameter exchange protocol.
 
 ## Documentation Index
 
 | Document | Description |
 |----------|-------------|
-| [docs/uic_home_interaction.md](docs/uic_home_interaction.md) | UIC Home ↔ Payment App IPC protocol: parameter requests, pushed updates, coordinated app update consent flow |
+| [docs/xtmsagent_interaction.md](docs/xtmsagent_interaction.md) | xTMSAgent ↔ Payment App IPC protocol: parameter requests, pushed updates, coordinated app update consent flow |
 | [docs/settlement_flow_overview.md](docs/settlement_flow_overview.md) | Settlement batch processing flow inherited from legacy C++ reference |
 | [AGENTS.md](AGENTS.md) | Agent and AI-assisted development guidelines for this project |
 
 ## Support
 
-Contact the UIC development team through your standard support channel for questions, feature requests, or issue reports.
+Contact the Global Connect development team through your standard support channel for questions, feature requests, or issue reports.

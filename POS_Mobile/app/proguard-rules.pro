@@ -27,7 +27,7 @@
     public static *** e(...);
 }
 
--keep class com.nexgo.oaf.apiv3.** { *; }
+-keep class com.nexgo.** { *; }
 -keep class com.xinguodu.** { *; }
 # Preserve all SQLCipher classes, methods, and native bindings
 -keep class net.zetetic.database.** { *; }

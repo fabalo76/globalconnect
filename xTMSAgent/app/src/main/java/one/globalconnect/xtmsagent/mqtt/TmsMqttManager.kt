@@ -39,8 +39,8 @@ import one.globalconnect.xtmsagent.settlement.ForceSettlementManager
 import java.util.concurrent.ExecutionException
 import kotlinx.coroutines.*
 import java.io.ByteArrayOutputStream
-import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import java.util.zip.GZIPOutputStream
 import kotlin.math.min
 import java.time.Instant
@@ -103,6 +103,8 @@ object TmsMqttManager {
     // finally from a cancelled job does not clear the flag for a newer job.
     private val isConnecting = AtomicBoolean(false)
     @Volatile private var connectGeneration = 0
+    private val clientSequence = AtomicLong(0)
+    @Volatile private var activeClientSequence = 0L
 
     /**
      * Must be called once before [connect]. Idempotent — safe to call on service restarts.
@@ -121,6 +123,7 @@ object TmsMqttManager {
         isShuttingDown = false
         consecutiveAuthFailures = 0
         isConnecting.set(false)
+        activeClientSequence = 0L
         networkAvailable = hasActiveNetwork()
         if (networkCallbackRegistered.compareAndSet(false, true)) {
             registerNetworkCallback()
@@ -419,6 +422,7 @@ object TmsMqttManager {
         isShuttingDown = true
         isConnecting.set(false)
         cancelReconnectJob()
+        activeClientSequence = 0L
         mqttClient?.disconnect()
         mqttClient = null
         isConnected = false
@@ -458,8 +462,11 @@ object TmsMqttManager {
             return
         }
         networkAvailable = true
+        if (!isConnecting.compareAndSet(false, true)) {
+            Log.d(TAG, "MQTT connection attempt already in progress")
+            return
+        }
         cancelReconnectJob()
-        isConnecting.set(true)
         val myGeneration = ++connectGeneration
         reconnectJob = managerScope.launch {
             try {
@@ -503,7 +510,7 @@ object TmsMqttManager {
             } catch (e: CancellationException) {
                 throw e  // propagate cancellation
             } catch (e: Exception) {
-                Log.w(TAG, "Connect attempt failed: ${e.message}")
+                Log.w(TAG, "Connect attempt failed: ${connectionFailureDescription(e)}")
                 if (isShuttingDown) break
                 if (!hasActiveNetwork()) {
                     networkAvailable = false
@@ -536,6 +543,9 @@ object TmsMqttManager {
 
         TmsTaskStatus.connecting(termId)
         val keyManagerFactory = awsIotCertificateStore.getOrProvision(termId)
+        val attemptSequence = clientSequence.incrementAndGet()
+        activeClientSequence = attemptSequence
+        val startedAtNanos = System.nanoTime()
 
         // Build a fresh client for each attempt — HiveMQ clients are not reusable after disconnect.
         //
@@ -549,6 +559,10 @@ object TmsMqttManager {
         //   On a CONNECT rejection (wasConnected == false) isConnecting stays true; the
         //   connectWithBackoff loop is still running and will retry — no new job is needed.
         val client = buildAwsIotMqttClient(brokerHost, termId, keyManagerFactory) { event ->
+            if (activeClientSequence != attemptSequence) {
+                Log.d(TAG, "Ignoring disconnect from stale MQTT client attempt $attemptSequence")
+                return@buildAwsIotMqttClient
+            }
             val wasConnected = isConnected
             isConnected = false
             if (isShuttingDown || !wasConnected) {
@@ -556,6 +570,7 @@ object TmsMqttManager {
                 return@buildAwsIotMqttClient
             }
             // Genuine mid-session drop — release the connecting flag and schedule reconnect.
+            activeClientSequence = 0L
             isConnecting.set(false)
             Log.w(TAG, "Connection dropped: ${event.cause.message}. Scheduling reconnect.")
             TmsTaskStatus.disconnected("TMS connection dropped ($termId)")
@@ -563,21 +578,24 @@ object TmsMqttManager {
         }
         mqttClient = client
 
+        var connectionEstablished = false
         try {
             val connAck = connectAwsIotMqttClient(client)
-                .get(30, TimeUnit.SECONDS)
+                .get()
 
             // connectAwsIotMqttClient().get() is a BLOCKING call — coroutine cancellation cannot
             // interrupt it mid-flight. Check whether our coroutine is still the active one
             // before claiming the connection; if not, disconnect the ghost and bail out.
-            if (!isActive || isShuttingDown) {
-                Log.w(TAG, "Coroutine cancelled while CONNECT was in flight — disconnecting ghost connection")
+            if (!isActive || isShuttingDown || activeClientSequence != attemptSequence) {
+                Log.w(TAG, "MQTT attempt $attemptSequence is no longer active; disconnecting it")
                 client.disconnect()
                 return@withContext
             }
 
             // Only SUCCESS reaches here — HiveMQ throws ExecutionException for all error codes.
-            Log.i(TAG, "MQTT connected. Session present: ${connAck.isSessionPresent}")
+            connectionEstablished = true
+            val elapsedMs = (System.nanoTime() - startedAtNanos) / 1_000_000L
+            Log.i(TAG, "MQTT connected in ${elapsedMs}ms. Session present: ${connAck.isSessionPresent}")
             // Clear the reference without cancelling — we are the reconnect job and will
             // complete naturally. This ensures cancelReconnectJob() in scheduleReconnect()
             // does not try to cancel a completed job on the next reconnect cycle.
@@ -658,6 +676,11 @@ object TmsMqttManager {
                 Log.w(TAG, "MQTT CONNECT failed: $code (${e.cause?.message})")
             }
             throw e  // re-throw so connectWithBackoff can apply backoff / exit loop
+        } finally {
+            if (!connectionEstablished && activeClientSequence == attemptSequence) {
+                activeClientSequence = 0L
+                if (mqttClient === client) mqttClient = null
+            }
         }
     }
 
@@ -1513,6 +1536,7 @@ object TmsMqttManager {
             cancelReconnectJob()
             isConnecting.set(false)
             isConnected = false
+            activeClientSequence = 0L
             val client = mqttClient
             mqttClient = null
             client?.disconnect()
@@ -1546,6 +1570,11 @@ object TmsMqttManager {
     private fun cancelReconnectJob() {
         reconnectJob?.cancel()
         reconnectJob = null
+    }
+
+    private fun connectionFailureDescription(error: Throwable): String {
+        val cause = (error as? ExecutionException)?.cause ?: error
+        return "${cause.javaClass.simpleName}: ${cause.message ?: "no detail"}"
     }
 
     private fun backoffDelay(index: Int): Long {

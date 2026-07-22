@@ -24,8 +24,8 @@
     <string name="sale_no_amount_required">No amount required for this transaction.</string>
     <string name="msg_amount_prompt_total">Total:</string>
 
-    <string name="msg_tax1_discount">Tax Discount</string>
-    <string name="msg_tax1_discount_short">Tax Disc.</string>
+    <string name="msg_tax1_discount">ISV Disc.</string>
+    <string name="msg_tax1_discount_short">ISV Disc.</string>
     <string name="msg_charge_amount_prompt">%1$s $%2$s</string>
     <string name="msg_amount_refund">Enter Refund Amount:</string>
     <string name="msg_amount_prefix">$</string>
@@ -535,6 +535,7 @@
     <string name="end_of_day">End Of Day</string>
     <string name="checkout">Sale</string>
     <string name="successful_void">Voided successfully</string>
+    <string name="successful_reversal">Reversed successfully</string>
     <string name="system_settings_2">System Settings</string>
     <string name="tip_screen">Tip Screen</string>
     <string name="posttip">PostTip</string>
@@ -671,7 +672,7 @@
     <string name="merchant_copy">MERCHANT COPY</string>
     <string name="customer_copy">CUSTOMER COPY</string>
     <string name="thank_you">Thank You</string>
-    <string name="poweredbyuic">Powered by UIC Payworld</string>
+    <string name="poweredbyuic">Powered by Global Connect ONE</string>
     <string name="condensed_report">Condensed Report</string>
     <string name="summary_report_title">Summary Report</string>
     <string name="audit_report_title">Audit Report</string>
@@ -862,6 +863,10 @@
     <string name="totals_label_debits">Debits</string>
     <string name="audit_report">Audit Report</string>
     <string name="reprint_last">RePrint Transaction</string>
+    <string name="reprint_last_printing">Printing the last transaction…</string>
+    <string name="reprint_last_printed">The last transaction was sent to the printer.</string>
+    <string name="reprint_last_no_transactions">No transaction is available to reprint.</string>
+    <string name="reprint_last_failed">Unable to reprint the last transaction.</string>
     <string name="reprint_settlement">RePrint Settlement</string>
     <string name="settlement_reprint_title">Reprint settlement</string>
     <string name="settlement_reprint_no_settlements">No settlement receipts are available.</string>
@@ -1146,7 +1151,7 @@
     <string name="setting_initialize_success_title">Parameters Updated</string>
     <string name="setting_initialize_success_body">Terminal configuration was downloaded and applied successfully.</string>
     <string name="setting_initialize_timeout_title">Request Timed Out</string>
-    <string name="setting_initialize_timeout_body">No response received from the terminal manager.\nEnsure UIC Home is running and the terminal has network access.</string>
+    <string name="setting_initialize_timeout_body">No response received from the terminal manager.\nEnsure xTMSAgent is running and the terminal has network access.</string>
     <string name="setting_initialize_error_title">Request Failed</string>
     <string name="tms_no_parameters">No Parameters</string>
     <string name="tms_no_parameters_body">This terminal has not yet received its configuration from the TMS server.</string>
@@ -1157,6 +1162,20 @@
     <string name="admin_request_executive_call">Request Executive Call</string>
     <string name="admin_request_training">Request Training</string>
     <string name="admin_request_sent">Admin request sent</string>
+    <string name="admin_request_sent_detail">The request was sent. A receipt will be printed once the request has been processed.</string>
     <string name="admin_request_failed">Admin request failed</string>
+    <string name="admin_request_failed_detail">The request could not be sent. Please try again.</string>
+    <string name="admin_request_failed_detail_with_error">The request could not be sent: %1$s</string>
+    <string name="admin_request_dismiss">OK</string>
+    <string name="admin_ticket_receipt_title">ADMIN REQUEST</string>
+    <string name="admin_ticket_id">Ticket</string>
+    <string name="admin_ticket_title">Title</string>
+    <string name="admin_ticket_request_type">Request</string>
+    <string name="admin_ticket_terminal_id">Terminal</string>
+    <string name="admin_ticket_device_serial">Serial</string>
+    <string name="admin_ticket_lane_id">Lane</string>
+    <string name="admin_ticket_created_at">Created</string>
+    <string name="admin_ticket_message">Message</string>
+    <string name="admin_ticket_footer">Keep this receipt for follow-up.</string>
 </resources>
 

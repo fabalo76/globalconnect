@@ -7,9 +7,13 @@ import com.hivemq.client.mqtt.mqtt3.message.connect.connack.Mqtt3ConnAck
 import com.hivemq.client.mqtt.lifecycle.MqttClientDisconnectedContext
 import one.globalconnect.xtmsagent.TMSFunc
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.TimeUnit
 import javax.net.ssl.KeyManagerFactory
 
 private const val TAG = "TmsMqttClient"
+private const val SOCKET_CONNECT_TIMEOUT_SECONDS = 15L
+private const val TLS_HANDSHAKE_TIMEOUT_SECONDS = 30L
+private const val MQTT_CONNECT_TIMEOUT_SECONDS = 15L
 
 fun termNotifyTopic(termId: String) = "tms/device/$termId/notify"
 fun termStatusTopic(termId: String) = "tms/device/$termId/status"
@@ -44,12 +48,17 @@ fun buildAwsIotMqttClient(
 ): Mqtt3AsyncClient {
     return Mqtt3Client.builder()
         .identifier(termId)
-        .serverHost(brokerHost)
-        .serverPort(TMSFunc.mqttCfg.mqtt_port)
-        .sslConfig()
-            .keyManagerFactory(keyManagerFactory)
-            .protocols(listOf("TLSv1.2", "TLSv1.3"))
-            .applySslConfig()
+        .transportConfig()
+            .serverHost(brokerHost)
+            .serverPort(TMSFunc.mqttCfg.mqtt_port)
+            .socketConnectTimeout(SOCKET_CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+            .mqttConnectTimeout(MQTT_CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+            .sslConfig()
+                .keyManagerFactory(keyManagerFactory)
+                .protocols(listOf("TLSv1.2", "TLSv1.3"))
+                .handshakeTimeout(TLS_HANDSHAKE_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                .applySslConfig()
+            .applyTransportConfig()
         .addConnectedListener {
             Log.i(TAG, "AWS IoT MQTT connected (clientId=$termId)")
         }

@@ -36,10 +36,14 @@
     <string name="config_tms">TMS Config</string>
     <string name="config_wifi">WiFi Config</string>
     <string name="config_update">Update</string>
+    <string name="config_diagnostics">Diagnostics</string>
     <string name="config_network">Mobile / SIM</string>
     <string name="config_back">Back</string>
     <string name="config_update_triggered">Update check started</string>
     <string name="update_checking">Checking for updates…</string>
+    <string name="update_connecting_iot">Connecting to IoT…</string>
+    <string name="update_iot_connected">✓ IoT connected</string>
+    <string name="update_iot_connection_failed">Unable to connect to IoT. Update was not started.\n\n%1$s</string>
     <string name="update_dialog_title">Update</string>
     <string name="update_checking_launcher">Checking launcher config…</string>
     <string name="update_launcher_updated">✓ Launcher config updated</string>
@@ -51,6 +55,13 @@
     <string name="update_summary_applied">Applied:\n• </string>
     <string name="update_summary_uptodate">No updates available. All up to date.</string>
     <string name="update_launcher_config_updated">Launcher config updated</string>
+    <!-- DiagnosticsActivity -->
+    <string name="diagnostics_title">Device Diagnostics</string>
+    <string name="diagnostics_refresh">Refresh</string>
+    <string name="diagnostics_share">Share</string>
+    <string name="diagnostics_loading">Collecting diagnostics…</string>
+    <string name="diagnostics_share_title">Share diagnostic report</string>
+    <string name="diagnostics_no_share_target">No application is available to share the report. The report remains visible on this screen.</string>
     <!-- TmsConfigActivity -->
     <string name="tms_section_server">Server Settings (read-only)</string>
     <string name="tms_section_timeouts">Timeout / Interval Settings</string>

@@ -33,7 +33,6 @@ import android.graphics.drawable.GradientDrawable
 import android.widget.LinearLayout
 import com.nexgo.oaf.apiv3.APIProxy
 import com.nexgo.oaf.apiv3.SystemServiceHelper
-import com.nexgo.oaf.apiv3.platform.OnPlatformInitListener
 import one.globalconnect.xtmsagent.btn_move.GridAdapter
 import java.io.File
 import java.io.FileInputStream
@@ -57,6 +56,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import one.globalconnect.xtmsagent.mqtt.TmsTaskStatus
+import one.globalconnect.xtmsagent.nexgo.NexgoSystemServiceInitializer
 import one.globalconnect.xtmsagent.mqtt.TmsStatusSeverity
 import kotlin.io.path.Path
 import kotlin.io.path.listDirectoryEntries
@@ -1290,17 +1290,17 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun initSystemService() {
-        try {
-            SystemServiceHelper.getInstance().init(this, object : OnPlatformInitListener {
-                override fun onPlatformInitResult(resultCode: Int) {
-                    Logd(Exception("SystemServiceHelper ready, resultCode=$resultCode"))
+        lifecycleScope.launch {
+            try {
+                val resultCode = NexgoSystemServiceInitializer.await(this@MainActivity)
+                Logd(Exception("SystemServiceHelper ready, resultCode=$resultCode"))
+                if (resultCode == SystemServiceHelper.RETURN_SUCC) {
                     applySystemServiceRestrictions()
-                    // Re-apply device bars now that the service is bound (avoids NPE on first call)
                     ApplyDeviceBars()
                 }
-            })
-        } catch (e: Exception) {
-            Logd(Exception("SystemServiceHelper.init failed: ${e.message}"))
+            } catch (e: Exception) {
+                Logd(Exception("SystemServiceHelper.init failed: ${e.message}"))
+            }
         }
     }
 

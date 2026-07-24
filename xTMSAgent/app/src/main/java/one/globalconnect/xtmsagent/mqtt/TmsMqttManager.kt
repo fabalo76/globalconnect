@@ -44,6 +44,7 @@ import java.util.concurrent.atomic.AtomicLong
 import java.util.zip.GZIPOutputStream
 import kotlin.math.min
 import java.time.Instant
+import kotlinx.coroutines.flow.first
 
 private const val TAG = "TmsMqttManager"
 
@@ -102,6 +103,7 @@ object TmsMqttManager {
     // block of the launched coroutine, guarded by connectGeneration so a stale
     // finally from a cancelled job does not clear the flag for a newer job.
     private val isConnecting = AtomicBoolean(false)
+    private val connectionAttemptActive = AtomicBoolean(false)
     @Volatile private var connectGeneration = 0
     private val clientSequence = AtomicLong(0)
     @Volatile private var activeClientSequence = 0L
@@ -156,7 +158,7 @@ object TmsMqttManager {
                     val sent = publishConfigRequest(payload)
                     publishTaskAck(taskId, sent, if (sent) null else "MQTT client is not connected")
                 }
-                "applicationdownload", "firmwaredownload", "updatefirmware" -> {
+                "applicationdownload", "firmwaredownload", "updatefirmware", "bootanimationdownload" -> {
                     managerScope.launch(Dispatchers.IO) {
                         val result = AwsDeviceDownloadManager.executeTask(appContext, taskId, taskType, payload)
                         publishTaskAck(taskId, result.success, result.errorMessage, result.status, result.statusMessage)
@@ -417,6 +419,71 @@ object TmsMqttManager {
         scheduleReconnect(backoffIndex = 0)
     }
 
+    /**
+     * Ensures a manual operation has a live IoT connection before it publishes.
+     * A pending reconnect backoff is cancelled so the operator does not have to
+     * wait several minutes for the next automatic attempt.
+     */
+    suspend fun ensureConnected(timeoutMillis: Long = 30_000L): TmsConnectionStatus {
+        if (isConnected) return TmsTaskStatus.connection.value
+
+        val startedAt = System.currentTimeMillis()
+        while (!::appContext.isInitialized) {
+            if (System.currentTimeMillis() - startedAt >= timeoutMillis) {
+                return TmsTaskStatus.connection.value
+            }
+            delay(100)
+        }
+
+        if (!requestImmediateConnection()) {
+            return TmsTaskStatus.connection.value
+        }
+        if (isConnected) return TmsTaskStatus.connection.value
+
+        val elapsed = System.currentTimeMillis() - startedAt
+        val remaining = (timeoutMillis - elapsed).coerceAtLeast(1L)
+        return withTimeoutOrNull(remaining) {
+            TmsTaskStatus.connection.first { status ->
+                status.connected ||
+                    status.severity == TmsStatusSeverity.ERROR ||
+                    (!networkAvailable && status.severity == TmsStatusSeverity.WARNING)
+            }
+        } ?: TmsTaskStatus.connection.value
+    }
+
+    private fun requestImmediateConnection(): Boolean {
+        if (isConnected) return true
+        if (!hasActiveNetwork()) {
+            networkAvailable = false
+            TmsTaskStatus.disconnected("TMS offline: no active network ($termId)")
+            Log.w(TAG, "Manual IoT connection request rejected: no active network")
+            return false
+        }
+
+        networkAvailable = true
+        if (isShuttingDown) {
+            isShuttingDown = false
+            consecutiveAuthFailures = 0
+            credentialStore.clearLegacyMqttCredentials()
+        }
+
+        if (connectionAttemptActive.get()) {
+            TmsTaskStatus.connecting(termId, "Waiting for active IoT connection")
+            Log.i(TAG, "Manual IoT connection request is waiting for the active attempt")
+            return true
+        }
+
+        // Invalidate and cancel a coroutine that is sleeping in exponential backoff.
+        // Its finally block must not release the flag owned by the new generation.
+        connectGeneration++
+        cancelReconnectJob()
+        isConnecting.set(false)
+        TmsTaskStatus.connecting(termId, "Connecting to IoT for update")
+        Log.i(TAG, "Manual update requested an immediate IoT connection")
+        scheduleReconnect(backoffIndex = 0)
+        return true
+    }
+
     /** Gracefully disconnects and stops all reconnect attempts. */
     fun disconnect() {
         isShuttingDown = true
@@ -505,7 +572,12 @@ object TmsMqttManager {
             }
 
             try {
-                attemptConnect()
+                connectionAttemptActive.set(true)
+                try {
+                    attemptConnect()
+                } finally {
+                    connectionAttemptActive.set(false)
+                }
                 return  // success — disconnect listener will call scheduleReconnect if dropped
             } catch (e: CancellationException) {
                 throw e  // propagate cancellation

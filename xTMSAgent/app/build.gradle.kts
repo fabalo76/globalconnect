@@ -5,6 +5,25 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+val releaseStoreFilePath = providers.gradleProperty("XTMS_RELEASE_STORE_FILE")
+    .orElse(providers.environmentVariable("XTMS_RELEASE_STORE_FILE"))
+    .orNull
+val releaseStorePassword = providers.gradleProperty("XTMS_RELEASE_STORE_PASSWORD")
+    .orElse(providers.environmentVariable("XTMS_RELEASE_STORE_PASSWORD"))
+    .orNull
+val releaseKeyAlias = providers.gradleProperty("XTMS_RELEASE_KEY_ALIAS")
+    .orElse(providers.environmentVariable("XTMS_RELEASE_KEY_ALIAS"))
+    .orNull
+val releaseKeyPassword = providers.gradleProperty("XTMS_RELEASE_KEY_PASSWORD")
+    .orElse(providers.environmentVariable("XTMS_RELEASE_KEY_PASSWORD"))
+    .orNull
+val productionSigningConfigured = listOf(
+    releaseStoreFilePath,
+    releaseStorePassword,
+    releaseKeyAlias,
+    releaseKeyPassword,
+).all { !it.isNullOrBlank() }
+
 android {
     namespace = "one.globalconnect.xtmsagent"
     //noinspection GradleDependency
@@ -43,8 +62,8 @@ android {
         minSdk = 29
         //noinspection OldTargetApi
         targetSdk = 35
-        versionCode = 46
-        versionName = "2.1.2.46"
+        versionCode = 47
+        versionName = "2.1.2.47"
         buildConfigField("String", "GLOBAL_CONNECT_ENV", "\"dev\"")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -59,6 +78,14 @@ android {
             storePassword = "android"
             keyAlias = "androiddebugkey"
             keyPassword = "android"
+        }
+        if (productionSigningConfigured) {
+            create("production") {
+                storeFile = file(requireNotNull(releaseStoreFilePath))
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            }
         }
     }
 
@@ -84,7 +111,7 @@ android {
             buildConfigField("String", "VERSION", "\"${generateGitInfo()}\"")
             buildConfigField("String", "BUILD_TYPE", "\"release\"")
             isMinifyEnabled = false
-            signingConfig = signingConfigs.getByName("debugKeystore")
+            signingConfig = signingConfigs.findByName("production")
         }
     }
     compileOptions {
@@ -94,9 +121,11 @@ android {
     kotlinOptions {
         jvmTarget = "19"
     }
-    val signingLabels = mapOf(
-        signingConfigs.getByName("debugKeystore") to "GlobalConnectDebugKey"
-    )
+    val signingLabels = mutableMapOf(
+        signingConfigs.getByName("debugKeystore") to "GlobalConnectDebugKey",
+    ).apply {
+        signingConfigs.findByName("production")?.let { put(it, "GlobalConnectProductionKey") }
+    }
 
     applicationVariants.all {
         this.outputs

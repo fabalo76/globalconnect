@@ -32,6 +32,7 @@ import one.globalconnect.xtmsagent.btn_move.GridAdapter
 import one.globalconnect.xtmsagent.launcher.ACTION_LAUNCHER_CONFIG_UPDATED
 import one.globalconnect.xtmsagent.launcher.LauncherConfigManager
 import one.globalconnect.xtmsagent.mqtt.TmsMqttManager
+import one.globalconnect.xtmsagent.mqtt.TmsMqttService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -167,6 +168,15 @@ class ConfigMenuActivity : AppCompatActivity() {
                 backgroundColor = "#E65100".toColorInt(),
                 iconDrawable    = ContextCompat.getDrawable(this, R.drawable.update),
                 onClickAction   = Runnable { triggerUpdate() }
+            ),
+            GridAdapter.ButtonItem(
+                text            = getString(R.string.config_diagnostics),
+                packageName     = "cfg_diagnostics",
+                backgroundColor = "#455A64".toColorInt(),
+                iconDrawable    = ContextCompat.getDrawable(this, R.drawable.ic_tms_server),
+                onClickAction   = Runnable {
+                    startActivity(Intent(this, DiagnosticsActivity::class.java))
+                }
             )
         )
 
@@ -445,6 +455,20 @@ class ConfigMenuActivity : AppCompatActivity() {
         lifecycleScope.launch(loggingCoroutineExceptionHandler(TAG)) {
             val updates = mutableListOf<String>()
 
+            statusText.text = getString(R.string.update_connecting_iot)
+            TmsMqttService.start(this@ConfigMenuActivity)
+            val connection = withContext(Dispatchers.IO) {
+                TmsMqttManager.ensureConnected()
+            }
+            if (!connection.connected) {
+                Log.w(TAG, "Manual update aborted: IoT connection unavailable: ${connection.text}")
+                MainActivity.writeLog("Manual update aborted: IoT connection unavailable")
+                progressDlg.dismiss()
+                showMsg(getString(R.string.update_iot_connection_failed, connection.text))
+                return@launch
+            }
+            appendLine(getString(R.string.update_iot_connected))
+
             // ── Launcher config ───────────────────────────────────────────────
             // Must run first — a config change may assign a different prog-app file set,
             // so verreq must see the updated assignment.
@@ -452,7 +476,7 @@ class ConfigMenuActivity : AppCompatActivity() {
             val launcherReceiver = object : BroadcastReceiver() {
                 override fun onReceive(ctx: Context?, intent: Intent?) { launcherUpdated = true }
             }
-            statusText.text = getString(R.string.update_checking_launcher)
+            appendLine(getString(R.string.update_checking_launcher))
             ContextCompat.registerReceiver(this@ConfigMenuActivity, launcherReceiver, IntentFilter(ACTION_LAUNCHER_CONFIG_UPDATED), ContextCompat.RECEIVER_NOT_EXPORTED)
 
             withContext(Dispatchers.IO) {

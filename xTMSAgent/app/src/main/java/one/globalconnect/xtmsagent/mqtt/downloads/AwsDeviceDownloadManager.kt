@@ -10,6 +10,8 @@ import one.globalconnect.xtmsagent.MainActivity
 import one.globalconnect.xtmsagent.TMSFunc
 import one.globalconnect.xtmsagent.mqtt.TmsTaskStatus
 import one.globalconnect.xtmsagent.net.DeviceApi
+import one.globalconnect.xtmsagent.nexgo.NexgoSystemAsset
+import one.globalconnect.xtmsagent.nexgo.NexgoSystemAssetInstaller
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -50,7 +52,8 @@ object AwsDeviceDownloadManager {
             ensureNotCancelled(context, taskId)
             val isFirmware = taskType.equals("FirmwareDownload", ignoreCase = true)
                 || taskType.equals("UpdateFirmware", ignoreCase = true)
-            val response = requestDownload(context, isFirmware, payload)
+            val isBootAnimation = taskType.equals("BootAnimationDownload", ignoreCase = true)
+            val response = requestDownload(context, isFirmware, isBootAnimation, payload)
             val files = response.files.ifEmpty {
                 listOf(
                     DownloadFile(
@@ -136,7 +139,10 @@ object AwsDeviceDownloadManager {
         ensureNotCancelled(context, taskId)
         val isFirmware = taskType.equals("FirmwareDownload", ignoreCase = true)
             || taskType.equals("UpdateFirmware", ignoreCase = true)
-        if (isFirmware) {
+        val isBootAnimation = taskType.equals("BootAnimationDownload", ignoreCase = true)
+        if (isBootAnimation) {
+            installBootMedia(context, downloaded)
+        } else if (isFirmware) {
             installApkFiles(context, downloaded)
             Log.i(TAG, "Firmware files installed: ${downloaded.joinToString { it.name }}")
         } else {
@@ -147,13 +153,22 @@ object AwsDeviceDownloadManager {
         }
     }
 
-    private fun requestDownload(context: Context, isFirmware: Boolean, payload: JSONObject?): DownloadResponse {
+    private fun requestDownload(
+        context: Context,
+        isFirmware: Boolean,
+        isBootAnimation: Boolean,
+        payload: JSONObject?
+    ): DownloadResponse {
         val cfg = TMSFunc.tmsCfg
         val serial = cfg.sn.ifBlank { MainActivity.vg_sSN }
         val token = deviceToken(serial, cfg.download_secret)
-        val endpoint = if (isFirmware) "firmware" else "app"
+        val endpoint = when {
+            isBootAnimation -> "boot-animation"
+            isFirmware -> "firmware"
+            else -> "app"
+        }
         val path = "/v1/devices/${serial.urlEncode()}/downloads/$endpoint"
-        val request = buildDownloadRequest(payload, isFirmware).toString()
+        val request = buildDownloadRequest(payload, isFirmware, isBootAnimation).toString()
         var lastFailure: Exception? = null
         for (url in DeviceApi.urls(path)) {
             try {
@@ -191,9 +206,18 @@ object AwsDeviceDownloadManager {
         }
     }
 
-    private fun buildDownloadRequest(payload: JSONObject?, isFirmware: Boolean): JSONObject {
+    private fun buildDownloadRequest(
+        payload: JSONObject?,
+        isFirmware: Boolean,
+        isBootAnimation: Boolean
+    ): JSONObject {
         val request = JSONObject()
-        val id = payload?.optString(if (isFirmware) "firmwareVersionId" else "applicationVersionId")
+        val idKey = when {
+            isBootAnimation -> "bootAnimationId"
+            isFirmware -> "firmwareVersionId"
+            else -> "applicationVersionId"
+        }
+        val id = payload?.optString(idKey)
             ?.takeIf { it.isNotBlank() }
             ?: payload?.optString("id")?.takeIf { it.isNotBlank() }
             ?: payload?.optString("Id")?.takeIf { it.isNotBlank() }
@@ -205,8 +229,36 @@ object AwsDeviceDownloadManager {
 
         if (id != null) request.put("id", id)
         if (versionId != null) request.put("versionId", versionId)
-        if (!isFirmware && packageName != null) request.put("packageName", packageName)
+        if (!isFirmware && !isBootAnimation && packageName != null) request.put("packageName", packageName)
         return request
+    }
+
+    private suspend fun installBootMedia(context: Context, files: List<File>) {
+        val animation = files.firstOrNull { it.name.equals("bootanimation.zip", ignoreCase = true) }
+            ?: throw IllegalStateException("Boot animation package is missing")
+        val logo = files.firstOrNull { it.name.equals("xgd_logo.bin", ignoreCase = true) }
+
+        if (logo != null) {
+            TmsTaskStatus.taskOverride.value = "Installing: ${logo.name}"
+            val result = NexgoSystemAssetInstaller.installPowerLogo(context, logo, sha256Hex(logo))
+            if (!result.success) {
+                throw IllegalStateException("Boot logo installation failed: ${result.code}")
+            }
+        }
+
+        TmsTaskStatus.taskOverride.value = "Installing: ${animation.name}"
+        val result = NexgoSystemAssetInstaller.installAnimation(
+            context,
+            NexgoSystemAsset.BOOT_ANIMATION,
+            animation,
+            sha256Hex(animation)
+        )
+        if (!result.success) {
+            throw IllegalStateException("Boot animation installation failed: ${result.code}")
+        }
+        MainActivity.writeLog(
+            "Boot media installed: animation=${animation.name} logo=${logo?.name ?: "unchanged"}"
+        )
     }
 
     private fun downloadSignedFile(context: Context, downloadId: String, file: DownloadFile): File {

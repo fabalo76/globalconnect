@@ -3,8 +3,14 @@ package one.globalconnect.xtmsagent
 import android.app.Application
 import android.util.Log
 import com.nexgo.oaf.apiv3.APIProxy
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import one.globalconnect.xtmsagent.diagnostics.NexgoDiagnosticsManager
 import one.globalconnect.xtmsagent.mqtt.TmsMqttService
 import one.globalconnect.xtmsagent.mqtt.persistence.TmsCredentialStore
+import one.globalconnect.xtmsagent.nexgo.NexgoDeviceOwnerProvisioner
 
 private const val TAG = "XtmsAgentApplication"
 
@@ -24,12 +30,36 @@ private const val TAG = "XtmsAgentApplication"
  * Registered in AndroidManifest.xml via android:name=".XtmsAgentApplication".
  */
 class XtmsAgentApplication : Application() {
+    private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     override fun onCreate() {
         super.onCreate()
         Log.i(TAG, "Application started")
 
         runSafely("credential provisioning") { provisionCredentials() }
+        applicationScope.launch {
+            try {
+                val result = NexgoDeviceOwnerProvisioner.ensureDeviceOwner(this@XtmsAgentApplication)
+                val message = "deviceOwner success=${result.success} code=${result.code} " +
+                    "sdkResult=${result.sdkResultCode}"
+                NexgoDiagnosticsManager.record(this@XtmsAgentApplication, message)
+                if (result.success) {
+                    Log.i(TAG, "Nexgo $message")
+                    TmsDeviceAdminReceiver.applyKioskRestrictions(this@XtmsAgentApplication)
+                } else {
+                    Log.w(TAG, "Nexgo $message")
+                }
+            } catch (exception: Exception) {
+                Log.e(TAG, "Nexgo device owner provisioning failed", exception)
+                NexgoDiagnosticsManager.record(
+                    this@XtmsAgentApplication,
+                    "deviceOwner success=false code=provisioning_exception",
+                )
+            }
+            runSafely("Nexgo diagnostics refresh") {
+                NexgoDiagnosticsManager.refresh(this@XtmsAgentApplication)
+            }
+        }
 
         // Apply device-owner kiosk restrictions (e.g. DISALLOW_CONFIG_TETHERING).
         // Idempotent — safe on every restart. No-op if not device owner.

@@ -133,5 +133,44 @@ Standalone C++ clients should follow the same topic and payload contract in [MQT
 ./gradlew installDebug
 ```
 
+### Updating a debug device-owner installation
+
+Android protects the device-owner package from `am force-stop` and normal uninstall.
+For a CT20P running the `globalconnectDebug` flavor, update it in place without
+Android Studio's force-stop step:
+
+```powershell
+.\tools\install-globalconnect-debug.ps1
+```
+
+Debug APKs declare `android:testOnly="true"` and include a debug-only owner
+release receiver. To remove xTMSAgent from a development device:
+
+```powershell
+.\tools\uninstall-globalconnect-debug.ps1
+```
+
+Release builds do not declare `testOnly` and remain protected while they are the
+device owner.
+
+### Production signing
+
+Release APKs are never signed with the Android debug key. Configure the production key outside the repository through user-level Gradle properties (`%USERPROFILE%/.gradle/gradle.properties`) or environment variables:
+
+```properties
+XTMS_RELEASE_STORE_FILE=C:/secure/path/xtms-release.jks
+XTMS_RELEASE_STORE_PASSWORD=provided-outside-source-control
+XTMS_RELEASE_KEY_ALIAS=provided-outside-source-control
+XTMS_RELEASE_KEY_PASSWORD=provided-outside-source-control
+```
+
+Then build the required client flavor, for example:
+
+```powershell
+.\gradlew.bat assembleGlobalconnectRelease
+```
+
+When these four values are absent, Gradle produces an explicitly `unsigned` release APK. Keep the same production key for every upgrade of a deployed application ID.
+
 **compileSdk:** 36  
 **minSdk:** 29

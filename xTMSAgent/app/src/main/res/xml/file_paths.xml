@@ -11,4 +11,5 @@
     <files-path name="apk_files" path="app_data/" />
     <!-- Parameter JSON shared with the payment app via FileProvider URI -->
     <files-path name="params" path="params/" />
+    <files-path name="diagnostics" path="diagnostics/" />
 </paths>

@@ -1,5 +1,6 @@
 package one.globalconnect.xtmsagent.mqtt
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -42,5 +43,33 @@ class TmsTaskStatusTest {
         )
 
         assertFalse(shouldShowTmsConnectionStatus(status, launcherConfigApplied = false))
+    }
+
+    @Test
+    fun alreadyProvisionedCertificateShowsSupportMessageWithoutRetry() {
+        val error = IllegalStateException(
+            """IoT credentials HTTP 409: {"code":"IOT_CERTIFICATE_ALREADY_PROVISIONED"}"""
+        )
+
+        TmsTaskStatus.connectionFailed(error, nextRetryMs = 268_361)
+
+        assertEquals(
+            "TMS certificate is already provisioned for this terminal. Contact support for assistance.",
+            TmsTaskStatus.connection.value.text,
+        )
+        assertEquals(TmsStatusSeverity.ERROR, TmsTaskStatus.connection.value.severity)
+    }
+
+    @Test
+    fun tlsCertificateFailureStillShowsMismatchMessage() {
+        TmsTaskStatus.connectionFailed(
+            IllegalStateException("SSLPeerUnverifiedException: certificate not verified"),
+            nextRetryMs = null,
+        )
+
+        assertEquals(
+            "TMS security error: certificate mismatch on network",
+            TmsTaskStatus.connection.value.text,
+        )
     }
 }

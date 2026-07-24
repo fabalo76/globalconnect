@@ -58,10 +58,14 @@
     <string name="config_tms">Config. TMS</string>
     <string name="config_wifi">Config. WiFi</string>
     <string name="config_update">Actualizar</string>
+    <string name="config_diagnostics">Diagnóstico</string>
     <string name="config_network">Móvil / SIM</string>
     <string name="config_back">Volver</string>
     <string name="config_update_triggered">Verificación de actualización iniciada</string>
     <string name="update_checking">Verificando actualizaciones…</string>
+    <string name="update_connecting_iot">Conectando a IoT…</string>
+    <string name="update_iot_connected">✓ IoT conectado</string>
+    <string name="update_iot_connection_failed">No se pudo conectar a IoT. La actualización no se inició.\n\n%1$s</string>
     <string name="update_dialog_title">Actualizar</string>
     <string name="update_checking_launcher">Verificando config. del launcher…</string>
     <string name="update_launcher_updated">✓ Config. del launcher actualizada</string>
@@ -73,6 +77,13 @@
     <string name="update_summary_applied">Aplicado:\n• </string>
     <string name="update_summary_uptodate">No hay actualizaciones disponibles. Todo al día.</string>
     <string name="update_launcher_config_updated">Config. del launcher actualizada</string>
+    <!-- DiagnosticsActivity -->
+    <string name="diagnostics_title">Diagnóstico del dispositivo</string>
+    <string name="diagnostics_refresh">Actualizar</string>
+    <string name="diagnostics_share">Compartir</string>
+    <string name="diagnostics_loading">Recopilando diagnóstico…</string>
+    <string name="diagnostics_share_title">Compartir informe de diagnóstico</string>
+    <string name="diagnostics_no_share_target">No hay una aplicación disponible para compartir el informe. El informe permanece visible en esta pantalla.</string>
     <!-- AppUpdateManager -->
     <string name="app_update_downloading">Descargando actualización: %1$s v%2$s…</string>
     <string name="app_update_installing">Instalando actualización: %1$s…</string>

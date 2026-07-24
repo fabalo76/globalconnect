@@ -2,7 +2,15 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <!-- Remove HOME + DEFAULT below to test without taking over the home screen -->
-    <application>
+    <application android:testOnly="true">
+        <receiver
+            android:name=".debug.DebugDeviceOwnerControlReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="one.globalconnect.xtmsagent.DEBUG_CLEAR_DEVICE_OWNER" />
+            </intent-filter>
+        </receiver>
+
         <activity
             android:name=".MainActivity"
             android:exported="true">

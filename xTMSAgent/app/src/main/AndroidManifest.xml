@@ -107,6 +107,10 @@
             android:name=".TmsConfigActivity"
             android:exported="false"
             android:theme="@style/Theme.xTMSAgent" />
+        <activity
+            android:name=".DiagnosticsActivity"
+            android:exported="false"
+            android:theme="@style/Theme.xTMSAgent" />
 
         <!--
             BlockedActivity — full-screen lock shown when the TMS operator blocks the terminal.

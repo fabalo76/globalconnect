@@ -54,17 +54,21 @@ object TmsTaskStatus {
     }
 
     fun connectionFailed(error: Throwable, nextRetryMs: Long? = null) {
-        val base = classify(error)
+        val causeText = buildCauseText(error)
+        val alreadyProvisioned = isIotCertificateAlreadyProvisioned(causeText)
+        val base = classify(causeText, error)
         val retry = nextRetryMs
-            ?.takeIf { it > 0 }
+            ?.takeIf { it > 0 && !alreadyProvisioned }
             ?.let { " Retry in ${((it + 999) / 1000)}s." }
             ?: ""
         connection.value = TmsConnectionStatus(base + retry, TmsStatusSeverity.ERROR)
     }
 
-    private fun classify(error: Throwable): String {
-        val text = buildCauseText(error)
+    private fun classify(text: String, error: Throwable): String {
         return when {
+            isIotCertificateAlreadyProvisioned(text) ->
+                "TMS certificate is already provisioned for this terminal. Contact support for assistance."
+
             text.contains("not verified", ignoreCase = true) ||
                 text.contains("SSLPeerUnverifiedException", ignoreCase = true) ||
                 text.contains("certificate", ignoreCase = true) ->
@@ -99,3 +103,6 @@ object TmsTaskStatus {
         return parts.joinToString(" | ")
     }
 }
+
+internal fun isIotCertificateAlreadyProvisioned(causeText: String): Boolean =
+    causeText.contains("IOT_CERTIFICATE_ALREADY_PROVISIONED", ignoreCase = true)

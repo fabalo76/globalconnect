@@ -23,6 +23,7 @@ import one.globalconnect.xtmsagent.BuildConfig
 import one.globalconnect.xtmsagent.TMSFunc
 import one.globalconnect.xtmsagent.mqtt.TmsMqttManager
 import one.globalconnect.xtmsagent.mqtt.persistence.TmsCredentialStore
+import one.globalconnect.xtmsagent.nexgo.NexgoRuntimeInspector
 import org.json.JSONObject
 import java.net.Inet4Address
 import java.net.NetworkInterface
@@ -136,6 +137,7 @@ class TmsStatusWorker(
                 put("ver", BuildConfig.VERSION_NAME)
                 put("os",  "Android ${Build.VERSION.RELEASE}")
                 put("mdl", Build.MODEL)
+                put("nexgo", NexgoRuntimeInspector.inspect(context).toJson())
                 val apps = buildInstalledAppsString(context)
                 put("apps", apps)
                 // Device identity fields (only in full payload, not periodic heartbeat)

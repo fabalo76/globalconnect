@@ -1,7 +1,17 @@
 package one.globalconnect.pinpad.device
 
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.media.AudioAttributes
+import android.media.AudioManager
+import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.speech.tts.TextToSpeech
 import android.util.Log
+import androidx.core.content.ContextCompat
 import com.nexgo.oaf.apiv3.DeviceEngine
 import com.nexgo.oaf.apiv3.SdkResult
 import com.nexgo.oaf.apiv3.card.cpu.CPUCardHandler
@@ -25,12 +35,15 @@ import com.nexgo.oaf.apiv3.emv.EmvEntryModeEnum
 import one.globalconnect.pinpad.logging.PinpadTraceLog
 import one.globalconnect.pinpad.model.PinpadTransactionDisplay
 import one.globalconnect.pinpad.protocol.PinpadKeypadKey
+import one.globalconnect.pinpad.requirements.ApplicationRequirementClient
 import one.globalconnect.pinpad.storage.PinpadJpegStore
+import one.globalconnect.pinpad.storage.PinpadMediaStore
 import one.globalconnect.pinpad.storage.PinpadPreferences
 import one.globalconnect.pinpad.storage.PusnStore
 import one.globalconnect.pinpad.ui.PinpadDisplayController
 import java.nio.charset.StandardCharsets
 import java.security.SecureRandom
+import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -41,8 +54,48 @@ class PinpadDeviceCommands(
     context: Context,
     private val deviceEngine: DeviceEngine,
 ) {
+    private val applicationContext = context.applicationContext
     private val prefs = PinpadPreferences(context)
+    private val audioManager = context.getSystemService(AudioManager::class.java)
+    private val textToSpeechHandler = Handler(Looper.getMainLooper())
+    @Volatile private var textToSpeech: TextToSpeech? = null
+    @Volatile private var selectedTextToSpeechEngine: String? = null
+    private val textToSpeechReady = AtomicBoolean(false)
+    private val textToSpeechFailed = AtomicBoolean(false)
+    private val textToSpeechInitializing = AtomicBoolean(false)
+    private val applicationRequirementsRequested = ConcurrentHashMap.newKeySet<String>()
+    private val speechProvisioningRequested = ConcurrentHashMap.newKeySet<String>()
+    private val textToSpeechRequirementRetry = Runnable {
+        val missing = firstMissingTextToSpeechRequirement()
+        if (missing != null) {
+            applicationRequirementsRequested.remove(missing.first)
+            requestTextToSpeechApplication(missing)
+        } else {
+            initializeTextToSpeech()
+        }
+    }
+    private val speechVoiceReadinessCheck = Runnable {
+        textToSpeech?.takeIf { selectedTextToSpeechEngine == RHVOICE_ENGINE_PACKAGE }
+            ?.let(::requestMissingSpeechVoices)
+    }
+    private val applicationRequirementReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action != ApplicationRequirementClient.ACTION_APPLICATION_REQUIREMENT_READY) {
+                return
+            }
+            val capability = intent.getStringExtra(ApplicationRequirementClient.EXTRA_CAPABILITY)
+                ?.takeIf { it in REQUIRED_TEXT_TO_SPEECH_CAPABILITIES }
+                ?: return
+            PinpadTraceLog.device(
+                "text-to-speech application requirement ready capability=$capability; rescanning packages",
+            )
+            textToSpeechHandler.removeCallbacks(textToSpeechRequirementRetry)
+            applicationRequirementsRequested.remove(capability)
+            initializeTextToSpeech()
+        }
+    }
     private val jpegStore = PinpadJpegStore(context)
+    private val mediaStore = PinpadMediaStore(context)
     private val pusnStore = PusnStore(context) {
         runCatching { deviceEngine.deviceInfo.sn }.getOrDefault("")
     }
@@ -96,10 +149,19 @@ class PinpadDeviceCommands(
     @Volatile private var samCpuCardPowered = false
 
     init {
+        registerApplicationRequirementReceiver()
+        initializeTextToSpeech()
         contactEmv.applyStoredConfiguration()
     }
 
     fun shutdown() {
+        runCatching { applicationContext.unregisterReceiver(applicationRequirementReceiver) }
+        textToSpeechHandler.removeCallbacksAndMessages(null)
+        textToSpeech?.stop()
+        textToSpeech?.shutdown()
+        textToSpeech = null
+        textToSpeechReady.set(false)
+        textToSpeechInitializing.set(false)
         secretKeyQueue.shutdownNow()
     }
 
@@ -520,13 +582,6 @@ class PinpadDeviceCommands(
         PinpadDisplayController.updateIdleMessage(prompt)
         PinpadTraceLog.device("idle prompt chars=${prompt.length}")
         return true
-    }
-
-    fun acknowledgeBaudRateChange(baudCode: Char?, mode: Char?): Char {
-        val validBaud = baudCode in '1'..'8'
-        val validMode = mode == null || mode in setOf('1', '2', '3', 'A', 'B', 'C') || mode.code in setOf(0x81, 0x82, 0x83, 0xC1, 0xC2, 0xC3)
-        PinpadTraceLog.device("baud change requested code=${baudCode ?: "<missing>"} mode=${mode ?: "<default>"} accepted=${validBaud && validMode}")
-        return if (validBaud && validMode) '0' else '1'
     }
 
     fun controlBeeper(count: Int, durationUnits: Int, intervalUnits: Int): Boolean {
@@ -1080,6 +1135,290 @@ class PinpadDeviceCommands(
     }
 
     fun downloadBootLogoPacket(payload: String): Char = jpegStore.bootLogoPacket(payload)
+
+    fun initializeMediaTable(): Boolean = mediaStore.initialize()
+
+    fun mediaTable(): List<PinpadMediaStore.MediaEntry> = mediaStore.table()
+
+    fun downloadMediaPacket(payload: String): Char = mediaStore.downloadPacket(payload)
+
+    fun startMediaUpload(fileName: String): PinpadMediaStore.MediaUploadPacket = mediaStore.startUpload(fileName)
+
+    fun nextMediaUploadPacket(): PinpadMediaStore.MediaUploadPacket = mediaStore.nextUploadPacket()
+
+    fun deleteMedia(names: List<String>): List<Char> = mediaStore.delete(names)
+
+    fun playMedia(name: String): Char {
+        val result = mediaStore.playableFile(name)
+        if (result.path != null && result.type != null) {
+            PinpadDisplayController.showMedia(
+                path = result.path,
+                video = result.type == PinpadMediaStore.MediaType.Mp4,
+            )
+        }
+        return result.status
+    }
+
+    fun setMediaVolume(payload: String): Char {
+        if (payload.length != 2 || payload.any { !it.isDigit() }) return '1'
+        val percentage = payload.toIntOrNull()?.takeIf { it in 0..99 } ?: return '1'
+        return runCatching {
+            val maximum = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+            val streamVolume = if (percentage == 0) {
+                0
+            } else {
+                ((percentage * maximum) + 98) / 99
+            }
+            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, streamVolume, 0)
+            PinpadTraceLog.device(
+                "media volume percentage=$percentage streamVolume=$streamVolume maximum=$maximum",
+            )
+            '0'
+        }.onFailure {
+            Log.w(TAG, "Unable to set media volume", it)
+        }.getOrDefault('2')
+    }
+
+    fun speakText(languageTag: String, text: String): Char {
+        if (text.isBlank() || text.length > MAX_SPEECH_CHARACTERS) return '1'
+        if (textToSpeechFailed.get()) initializeTextToSpeech()
+        if (!textToSpeechReady.get()) return '2'
+        val engine = textToSpeech ?: return '2'
+        val locales = speechLocales(languageTag) ?: return '1'
+        val locale = locales.firstOrNull { candidate ->
+            engine.isLanguageAvailable(candidate) >= TextToSpeech.LANG_AVAILABLE
+        } ?: run {
+            requestSpeechVoiceProvisioning(engine, locales.first())
+            return '2'
+        }
+
+        return runCatching {
+            val selectedVoice = if (
+                selectedTextToSpeechEngine == RHVOICE_ENGINE_PACKAGE &&
+                isSpanishSpeechLanguage(languageTag)
+            ) {
+                val mateo = runCatching { engine.voices }
+                    .getOrNull()
+                    .orEmpty()
+                    .firstOrNull { it.name.equals(RHVOICE_SPANISH_VOICE, ignoreCase = true) }
+                    ?: run {
+                        requestSpeechVoiceProvisioning(engine, locales.first())
+                        return '2'
+                    }
+                if (engine.setVoice(mateo) != TextToSpeech.SUCCESS) return '2'
+                mateo.name
+            } else {
+                if (engine.setLanguage(locale) < TextToSpeech.LANG_AVAILABLE) return '2'
+                engine.voice?.name
+            }
+            val utteranceId = "M17-${System.currentTimeMillis()}"
+            val speechParameters = Bundle().apply {
+                putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, TTS_MAX_OUTPUT_VOLUME)
+            }
+            val result = engine.speak(
+                text,
+                TextToSpeech.QUEUE_FLUSH,
+                speechParameters,
+                utteranceId,
+            )
+            PinpadTraceLog.device(
+                "text-to-speech language=${locale.toLanguageTag()} voice=${selectedVoice ?: "default"} " +
+                    "chars=${text.length} result=$result",
+            )
+            if (result == TextToSpeech.SUCCESS) '0' else '3'
+        }.onFailure {
+            Log.w(TAG, "Unable to speak text", it)
+        }.getOrDefault('3')
+    }
+
+    private fun initializeTextToSpeech() {
+        if (!textToSpeechInitializing.compareAndSet(false, true)) return
+        textToSpeechHandler.removeCallbacks(speechVoiceReadinessCheck)
+        textToSpeech?.shutdown()
+        textToSpeech = null
+        textToSpeechReady.set(false)
+        textToSpeechFailed.set(false)
+
+        val installedEngines = installedTextToSpeechEngines()
+        val missingRequirement = firstMissingTextToSpeechRequirement()
+        if (missingRequirement != null) requestTextToSpeechApplication(missingRequirement)
+        val rhVoiceInstalled = RHVOICE_ENGINE_PACKAGE in installedEngines
+        val rhVoiceProvisioned = rhVoiceInstalled && missingRequirement == null
+        if (installedEngines.isEmpty()) {
+            textToSpeechInitializing.set(false)
+            textToSpeechFailed.set(true)
+            return
+        }
+        val requestedEngine = when {
+            rhVoiceProvisioned -> RHVOICE_ENGINE_PACKAGE
+            ESPEAK_ENGINE_PACKAGE in installedEngines -> ESPEAK_ENGINE_PACKAGE
+            !rhVoiceInstalled -> installedEngines.first()
+            else -> {
+                textToSpeechInitializing.set(false)
+                textToSpeechFailed.set(true)
+                return
+            }
+        }
+        selectedTextToSpeechEngine = null
+        val listener = TextToSpeech.OnInitListener { status ->
+            textToSpeechInitializing.set(false)
+            val ready = status == TextToSpeech.SUCCESS
+            textToSpeechReady.set(ready)
+            textToSpeechFailed.set(!ready)
+            if (ready) selectedTextToSpeechEngine = requestedEngine
+            val audioAttributesStatus = if (ready) {
+                textToSpeech?.setAudioAttributes(TTS_AUDIO_ATTRIBUTES) ?: TextToSpeech.ERROR
+            } else {
+                TextToSpeech.ERROR
+            }
+            val speechRateStatus = if (ready) {
+                textToSpeech?.setSpeechRate(TTS_SPEECH_RATE) ?: TextToSpeech.ERROR
+            } else {
+                TextToSpeech.ERROR
+            }
+            PinpadTraceLog.device(
+                "text-to-speech initialized ready=$ready status=$status " +
+                    "engine=${selectedTextToSpeechEngine ?: "system-default"} " +
+                    "requiredEngineInstalled=$rhVoiceInstalled bundleProvisioned=$rhVoiceProvisioned " +
+                    "mediaAudioAttributesStatus=$audioAttributesStatus speechRate=$TTS_SPEECH_RATE " +
+                    "speechRateStatus=$speechRateStatus",
+            )
+            if (ready) {
+                textToSpeech?.let(::requestMissingSpeechVoices)
+            }
+        }
+        textToSpeech = runCatching {
+            TextToSpeech(applicationContext, listener, requestedEngine)
+        }.onFailure {
+            textToSpeechInitializing.set(false)
+            textToSpeechFailed.set(true)
+            Log.w(TAG, "Unable to initialize text-to-speech", it)
+        }.getOrNull()
+    }
+
+    private fun installedTextToSpeechEngines(): Set<String> {
+        return applicationContext.packageManager.queryIntentServices(
+            Intent(TextToSpeech.Engine.INTENT_ACTION_TTS_SERVICE),
+            0,
+        )
+            .asSequence()
+            .mapNotNull { it.serviceInfo?.packageName }
+            .toSet()
+    }
+
+    private fun firstMissingTextToSpeechRequirement(): Pair<String, String>? =
+        REQUIRED_TEXT_TO_SPEECH_APPLICATIONS.firstOrNull { (_, packageName) ->
+            !isPackageInstalled(packageName)
+        }
+
+    private fun isPackageInstalled(packageName: String): Boolean =
+        runCatching { applicationContext.packageManager.getPackageInfo(packageName, 0) }.isSuccess
+
+    private fun requestTextToSpeechApplication(requirement: Pair<String, String>) {
+        val (capability, packageName) = requirement
+        if (!applicationRequirementsRequested.add(capability)) return
+        PinpadTraceLog.device(
+            "required text-to-speech package is missing capability=$capability package=$packageName",
+        )
+        ApplicationRequirementClient.request(applicationContext, capability) { accepted, error ->
+            PinpadTraceLog.device(
+                "text-to-speech application requirement capability=$capability accepted=$accepted " +
+                    "error=${error ?: "none"}",
+            )
+            textToSpeechHandler.removeCallbacks(textToSpeechRequirementRetry)
+            if (!accepted) applicationRequirementsRequested.remove(capability)
+            textToSpeechHandler.postDelayed(
+                textToSpeechRequirementRetry,
+                if (accepted) TTS_APPLICATION_INSTALL_RECHECK_MS else TTS_APPLICATION_RETRY_MS,
+            )
+        }
+    }
+
+    private fun registerApplicationRequirementReceiver() {
+        val filter = IntentFilter(ApplicationRequirementClient.ACTION_APPLICATION_REQUIREMENT_READY)
+        ContextCompat.registerReceiver(
+            applicationContext,
+            applicationRequirementReceiver,
+            filter,
+            ContextCompat.RECEIVER_EXPORTED,
+        )
+    }
+
+    private fun requestMissingSpeechVoices(engine: TextToSpeech) {
+        if (selectedTextToSpeechEngine != RHVOICE_ENGINE_PACKAGE) return
+        val installedVoices = runCatching { engine.voices }.getOrNull().orEmpty()
+        val mateoReady = installedVoices.any {
+            it.name.equals(RHVOICE_SPANISH_VOICE, ignoreCase = true)
+        }
+        val englishReady = installedVoices.any {
+            it.locale.language.equals(Locale.ENGLISH.language, ignoreCase = true) &&
+                !it.isNetworkConnectionRequired
+        }
+        val missingLocales = buildList {
+            if (!mateoReady) add(RHVOICE_SPANISH_PROVISIONING_LOCALE)
+            if (!englishReady) add(RHVOICE_ENGLISH_PROVISIONING_LOCALE)
+        }
+        PinpadTraceLog.device(
+            "text-to-speech offline voices mateoReady=$mateoReady englishReady=$englishReady " +
+                "installed=${installedVoices.map { it.name }.sorted()}",
+        )
+        if (missingLocales.isEmpty()) return
+
+        missingLocales.forEach { requestSpeechVoiceProvisioning(engine, it) }
+        textToSpeechHandler.removeCallbacks(speechVoiceReadinessCheck)
+        textToSpeechHandler.postDelayed(
+            speechVoiceReadinessCheck,
+            TTS_VOICE_READINESS_RECHECK_MS,
+        )
+    }
+
+    private fun requestSpeechVoiceProvisioning(engine: TextToSpeech, locale: Locale) {
+        if (selectedTextToSpeechEngine != RHVOICE_ENGINE_PACKAGE) return
+        val language = runCatching { locale.isO3Language }.getOrDefault(locale.language)
+        val country = runCatching { locale.isO3Country }.getOrDefault(locale.country)
+        val requestKey = "$language-$country"
+        if (!speechProvisioningRequested.add(requestKey)) return
+
+        val params = Bundle().apply {
+            putString(TTS_PARAM_LANGUAGE, language)
+            putString(TTS_PARAM_COUNTRY, country)
+            putString(TTS_PARAM_VARIANT, locale.variant)
+            putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, 0f)
+        }
+        val result = engine.speak(
+            VOICE_PROVISIONING_TEXT,
+            TextToSpeech.QUEUE_ADD,
+            params,
+            "TTS-PROVISION-$requestKey",
+        )
+        if (result != TextToSpeech.SUCCESS) {
+            speechProvisioningRequested.remove(requestKey)
+        } else {
+            textToSpeechHandler.postDelayed(
+                { speechProvisioningRequested.remove(requestKey) },
+                TTS_VOICE_PROVISIONING_RETRY_MS,
+            )
+        }
+        PinpadTraceLog.device(
+            "text-to-speech voice provisioning language=${locale.toLanguageTag()} result=$result",
+        )
+    }
+
+    private fun speechLocales(languageTag: String): List<Locale>? {
+        return when (languageTag.trim().lowercase(Locale.US)) {
+            "es", "es-mx", "es-419", "es-la" -> listOf(
+                Locale.forLanguageTag("es-419"),
+                Locale.forLanguageTag("es-MX"),
+                Locale.forLanguageTag("es-US"),
+                Locale.forLanguageTag("es"),
+            )
+            "en", "en-us" -> listOf(Locale.US, Locale.ENGLISH)
+            else -> null
+        }
+    }
+
+    private fun isSpanishSpeechLanguage(languageTag: String): Boolean =
+        languageTag.trim().lowercase(Locale.US) in SPANISH_SPEECH_LANGUAGE_TAGS
 
     fun loadEmvTerminalConfiguration(payload: String): PinpadContactEmvController.EmvCommandResult {
         return contactEmv.loadTerminalConfiguration(payload)
@@ -2270,6 +2609,39 @@ class PinpadDeviceCommands(
         private const val CPU_ATR_BUFFER_BYTES = 64
         private const val CPU_APDU_MIN_HEX_CHARS = 8
         private const val CPU_APDU_MAX_HEX_CHARS = 524
+        private const val MAX_SPEECH_CHARACTERS = 1_000
+        private const val RHVOICE_ENGINE_PACKAGE = "com.github.olga_yakovleva.rhvoice.android"
+        private const val RHVOICE_SPANISH_LANGUAGE_PACKAGE =
+            "com.github.olga_yakovleva.rhvoice.android.language.spanish"
+        private const val RHVOICE_MATEO_VOICE_PACKAGE =
+            "com.github.olga_yakovleva.rhvoice.android.voice.mateo"
+        private const val ESPEAK_ENGINE_PACKAGE = "com.reecedunn.espeak"
+        private const val RHVOICE_SPANISH_VOICE = "Mateo"
+        private const val VOICE_PROVISIONING_TEXT = "."
+        private const val TTS_APPLICATION_RETRY_MS = 30_000L
+        private const val TTS_APPLICATION_INSTALL_RECHECK_MS = 300_000L
+        private const val TTS_VOICE_READINESS_RECHECK_MS = 15_000L
+        private const val TTS_VOICE_PROVISIONING_RETRY_MS = 60_000L
+        private const val TTS_PARAM_LANGUAGE = "language"
+        private const val TTS_PARAM_COUNTRY = "country"
+        private const val TTS_PARAM_VARIANT = "variant"
+        private const val TTS_MAX_OUTPUT_VOLUME = 1f
+        private const val TTS_SPEECH_RATE = 0.85f
+        private val TTS_AUDIO_ATTRIBUTES = AudioAttributes.Builder()
+            .setUsage(AudioAttributes.USAGE_MEDIA)
+            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+            .build()
+        private val RHVOICE_SPANISH_PROVISIONING_LOCALE = Locale.forLanguageTag("es-MX")
+        private val RHVOICE_ENGLISH_PROVISIONING_LOCALE = Locale.US
+        private val SPANISH_SPEECH_LANGUAGE_TAGS = setOf("es", "es-mx", "es-419", "es-la")
+        private val REQUIRED_TEXT_TO_SPEECH_APPLICATIONS = listOf(
+            ApplicationRequirementClient.CAPABILITY_ANDROID_TTS to RHVOICE_ENGINE_PACKAGE,
+            ApplicationRequirementClient.CAPABILITY_ANDROID_TTS_SPANISH_LANGUAGE to
+                RHVOICE_SPANISH_LANGUAGE_PACKAGE,
+            ApplicationRequirementClient.CAPABILITY_ANDROID_TTS_MATEO_VOICE to RHVOICE_MATEO_VOICE_PACKAGE,
+        )
+        private val REQUIRED_TEXT_TO_SPEECH_CAPABILITIES =
+            REQUIRED_TEXT_TO_SPEECH_APPLICATIONS.mapTo(mutableSetOf()) { it.first }
         private const val FS_CHAR = '\u001C'
         private const val DEFAULT_MASTER_KEY_ALGORITHM = 'T'
         private const val MIN_ACCOUNT_DIGITS = 8

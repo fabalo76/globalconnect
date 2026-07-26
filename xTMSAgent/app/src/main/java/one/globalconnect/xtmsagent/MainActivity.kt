@@ -88,6 +88,11 @@ class MainActivity : AppCompatActivity() {
             "com.nexgo.xtms",
         )
 
+        private val PORTAL_MANAGED_ASSET_PATHS = setOf(
+            "cfg/brandlogo.png",
+            "cfg/globalconnectlogo.png",
+        )
+
         var vg_sIntrenalPath = ""
         var vg_sExtrenalPath = ""
         var vg_sXtmsParam = ""
@@ -276,6 +281,7 @@ class MainActivity : AppCompatActivity() {
             ReadCfg()
             // Apply bar visibility and window colors from updated TMS theme
             runOnUiThread {
+                LoadLogo()
                 UpdateBgClr()
                 ApplyDeviceBars()
             }
@@ -369,8 +375,16 @@ class MainActivity : AppCompatActivity() {
             addDataScheme("package")
         }, ContextCompat.RECEIVER_EXPORTED)
 
-        if (bInit) ReadCfg()   // ensures ConfigMenu is always present, then calls LoadBtn()
-        else LoadBtn()         // before Init: sPathLaunch blank, just refresh grid
+        if (bInit) {
+            ReadCfg()   // ensures ConfigMenu is always present, then calls LoadBtn()
+            // ConfigMenuActivity pauses this Activity while manual updates run, so its
+            // launcher-update broadcast is intentionally missed by the unregistered receiver.
+            LoadLogo()
+            UpdateBgClr()
+            ApplyDeviceBars()
+        } else {
+            LoadBtn()   // before Init: sPathLaunch blank, just refresh grid
+        }
         //getAllApps()
 
         // If the terminal is blocked and BlockedActivity is not already on screen
@@ -576,8 +590,12 @@ class MainActivity : AppCompatActivity() {
             }
         } else {
             Logd(Exception("$path is file"))
-            val instream = context.assets.open(path)
             val outFile = File(vg_sIntrenalPath, path)
+            if (path in PORTAL_MANAGED_ASSET_PATHS && outFile.exists()) {
+                Logd(Exception("$path preserved"))
+                return
+            }
+            val instream = context.assets.open(path)
             val outstream = FileOutputStream(outFile)
             val buffer = ByteArray(1024)
             var read: Int
@@ -603,8 +621,12 @@ class MainActivity : AppCompatActivity() {
             }
         } else {
             var chk = false
-            val instream = context.assets.open(path)
             val outFile = File(vg_sIntrenalPath, path)
+            if (path in PORTAL_MANAGED_ASSET_PATHS && outFile.exists()) {
+                Logd(Exception("$path preserved"))
+                return true
+            }
+            val instream = context.assets.open(path)
             val outstream = FileInputStream(outFile)
             if (instream.available() == outstream.available())
                 chk = true
@@ -995,8 +1017,13 @@ class MainActivity : AppCompatActivity() {
             ?: AppCompatResources.getDrawable(this, R.drawable.logo_color)
         findViewById<ImageView>(R.id.imgBrandLogo).setImageDrawable(brandDrawable)
 
-        val trailerLogoFile = File("$vg_sIntrenalPath/cfg/uiclogo.png")
+        val trailerLogoFile = File("$vg_sIntrenalPath/cfg/globalconnectlogo.png")
         val trailerDrawable = Drawable.createFromPath(trailerLogoFile.absolutePath)
+            ?: runCatching {
+                assets.open("cfg/globalconnectlogo.png").use {
+                    Drawable.createFromStream(it, "cfg/globalconnectlogo.png")
+                }
+            }.getOrNull()
         findViewById<ImageView>(R.id.imgTrailerLogo).setImageDrawable(trailerDrawable)
     }
 

@@ -10,12 +10,19 @@ import android.os.Looper
 import android.os.Message
 import android.os.Messenger
 import android.util.Log
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import one.globalconnect.xtmsagent.mqtt.TmsMqttManager
+import one.globalconnect.xtmsagent.requirements.ApplicationRequirementManager
 import org.json.JSONObject
 import java.security.MessageDigest
 
 class ApplicationLicensingService : Service() {
     private var messenger: Messenger? = null
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     override fun onCreate() {
         super.onCreate()
@@ -26,6 +33,7 @@ class ApplicationLicensingService : Service() {
     override fun onBind(intent: Intent?): IBinder? = messenger?.binder
 
     override fun onDestroy() {
+        serviceScope.cancel()
         ApplicationLicenseBroker.failAll("LICENSE_SERVICE_STOPPED")
         messenger = null
         Log.i(TAG, "Application licensing service destroyed")
@@ -44,6 +52,10 @@ class ApplicationLicensingService : Service() {
         }
 
         private fun handleMessageSafely(message: Message) {
+            if (message.what == MSG_REQUEST_APPLICATION_REQUIREMENT) {
+                handleApplicationRequirement(message)
+                return
+            }
             if (message.what == MSG_ENTER_KIOSK || message.what == MSG_EXIT_KIOSK) {
                 val packageName = message.data.getString(KEY_PACKAGE_NAME).orEmpty()
                 if (callerOwnsPackage(message.sendingUid, packageName) && isRegisteredPackage(packageName)) {
@@ -95,6 +107,36 @@ class ApplicationLicensingService : Service() {
                 ApplicationLicenseBroker.fail(requestId, "TMS_NOT_CONNECTED")
             }
         }
+
+        private fun handleApplicationRequirement(message: Message) {
+            val replyTo = message.replyTo ?: return
+            val requestId = message.data.getString(KEY_REQUEST_ID).orEmpty()
+            val packageName = message.data.getString(KEY_PACKAGE_NAME).orEmpty()
+            val capability = message.data.getString(KEY_CAPABILITY).orEmpty()
+            if (requestId.isBlank() || requestId.length > MAX_REQUEST_ID_LENGTH ||
+                packageName.isBlank() || packageName.length > MAX_PACKAGE_NAME_LENGTH ||
+                capability !in SUPPORTED_APPLICATION_REQUIREMENT_CAPABILITIES ||
+                !callerOwnsPackage(message.sendingUid, packageName) ||
+                !isRegisteredPackage(packageName)
+            ) {
+                sendRequirement(replyTo, requestId, error(requestId, "APPLICATION_REQUIREMENT_REJECTED"))
+                return
+            }
+
+            serviceScope.launch {
+                val response = runCatching {
+                    ApplicationRequirementManager.request(
+                        requestId,
+                        capability,
+                        packageName,
+                    )
+                }.getOrElse { exception ->
+                    Log.e(TAG, "Application requirement request failed requestId=$requestId", exception)
+                    error(requestId, "APPLICATION_REQUIREMENT_REQUEST_FAILED")
+                }
+                sendRequirement(replyTo, requestId, response)
+            }
+        }
     }
 
     private fun callerOwnsPackage(uid: Int, packageName: String): Boolean =
@@ -125,6 +167,17 @@ class ApplicationLicensingService : Service() {
         }
     }
 
+    private fun sendRequirement(replyTo: Messenger, requestId: String, responseJson: String) {
+        runCatching {
+            replyTo.send(Message.obtain(null, MSG_APPLICATION_REQUIREMENT_RESPONSE).apply {
+                data = Bundle().apply {
+                    putString(KEY_REQUEST_ID, requestId)
+                    putString(KEY_RESPONSE_JSON, responseJson)
+                }
+            })
+        }
+    }
+
     private fun error(requestId: String, code: String) = JSONObject()
         .put("requestId", requestId).put("success", false).put("errorCode", code).toString()
 
@@ -134,6 +187,8 @@ class ApplicationLicensingService : Service() {
         const val MSG_LICENSE_RESPONSE = 2
         const val MSG_ENTER_KIOSK = 3
         const val MSG_EXIT_KIOSK = 4
+        const val MSG_REQUEST_APPLICATION_REQUIREMENT = 5
+        const val MSG_APPLICATION_REQUIREMENT_RESPONSE = 6
         const val KEY_REQUEST_ID = "requestId"
         const val KEY_APPLICATION_CODE = "applicationCode"
         const val KEY_PACKAGE_NAME = "packageName"
@@ -142,6 +197,12 @@ class ApplicationLicensingService : Service() {
         const val KEY_PUBLIC_KEY = "publicKeySpkiBase64"
         const val KEY_APK_SIGNER_SHA256 = "apkSignerSha256"
         const val KEY_RESPONSE_JSON = "responseJson"
+        const val KEY_CAPABILITY = "capability"
+        private val SUPPORTED_APPLICATION_REQUIREMENT_CAPABILITIES = setOf(
+            "android.tts",
+            "android.tts.language.es",
+            "android.tts.voice.es.mateo",
+        )
         private const val PREFS = "registered_application_licenses"
         private const val TAG = "AppLicensingService"
         private const val MAX_REQUEST_ID_LENGTH = 128

@@ -112,6 +112,7 @@ android {
             buildConfigField("String", "BUILD_TYPE", "\"release\"")
             isMinifyEnabled = false
             signingConfig = signingConfigs.findByName("production")
+                ?: signingConfigs.getByName("debugKeystore")
         }
     }
     compileOptions {

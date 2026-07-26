@@ -3,52 +3,62 @@ package one.globalconnect.pinpad.transport
 import android.util.Log
 import com.nexgo.oaf.apiv3.DeviceEngine
 import com.nexgo.oaf.apiv3.SdkResult
-import com.nexgo.oaf.apiv3.device.usbserial.OnUsbSerialReadListener
-import com.nexgo.oaf.apiv3.device.usbserial.UsbSerial
-import com.nexgo.oaf.apiv3.device.usbserial.UsbSerialCfgEntity
+import com.nexgo.oaf.apiv3.device.serialport.SerialCfgEntity
+import com.nexgo.oaf.apiv3.device.serialport.SerialPortDriver
 import com.nexgo.oaf.apiv3.platform.Platform
 import one.globalconnect.pinpad.logging.PinpadTraceLog
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 
 class NexgoUsbCdcTransport(
     deviceEngine: DeviceEngine,
-    private val vid: Int,
-    private val pid: Int,
+    private val portNo: Int,
     private val baudRate: Int,
     private val dataBits: Int,
     private val stopBits: Int,
     private val parity: String,
 ) : PINPADTransport {
-    private val usbSerial: UsbSerial = deviceEngine.usbSerial
+    private val driver: SerialPortDriver = deviceEngine.getSerialPortDriver(portNo)
     private val platform: Platform = deviceEngine.platform
+    private val running = AtomicBoolean(false)
     private var listener: PINPADTransport.Listener? = null
+    private var executor: ExecutorService? = null
 
     override fun start(listener: PINPADTransport.Listener) {
         this.listener = listener
-        if (!isUsbCdcEnabled()) {
-            throw IllegalStateException("USB CDC is disabled in Nexgo platform settings")
-        }
-        val config = UsbSerialCfgEntity().apply {
-            setVid(this@NexgoUsbCdcTransport.vid)
-            setPid(this@NexgoUsbCdcTransport.pid)
+        enableUsbCdc()
+        runCatching { driver.disconnect() }
+        val config = SerialCfgEntity().apply {
             setBaudRate(this@NexgoUsbCdcTransport.baudRate)
             setDataBits(this@NexgoUsbCdcTransport.dataBits)
-            setParity(this@NexgoUsbCdcTransport.parity.toUsbParity())
-            setStopBits(if (this@NexgoUsbCdcTransport.stopBits == 2) UsbSerial.STOPBITS_2 else UsbSerial.STOPBITS_1)
+            setParity(this@NexgoUsbCdcTransport.parity.lowercase().firstOrNull() ?: 'n')
+            setStopBits(this@NexgoUsbCdcTransport.stopBits)
         }
-        PinpadTraceLog.transport("USB_CDC opening vid=$vid pid=$pid baud=$baudRate dataBits=$dataBits parity=$parity stopBits=$stopBits")
-        val result = usbSerial.open(
-            config,
-            OnUsbSerialReadListener { data ->
-                if (data.isNotEmpty()) {
-                    PinpadTraceLog.serialRx(SOURCE, data)
-                    listener.onBytesReceived(data)
-                }
-            },
+        PinpadTraceLog.transport(
+            "USB_CDC opening Nexgo serial port=$portNo baud=$baudRate " +
+                "dataBits=$dataBits parity=$parity stopBits=$stopBits",
         )
+        val result = driver.connect(config)
         if (result != SdkResult.Success) {
-            throw IllegalStateException("USB CDC open failed: $result")
+            throw IllegalStateException("USB CDC serial port $portNo connect failed: $result")
         }
-        usbSerial.clrBuffer()
+        driver.clrBuffer()
+        running.set(true)
+        executor = Executors.newSingleThreadExecutor()
+        executor?.execute(::readLoop)
+    }
+
+    private fun enableUsbCdc() {
+        if (isUsbCdcEnabled()) return
+
+        PinpadTraceLog.transport("USB_CDC enabling through Nexgo platform")
+        val result = platform.enableUsbCdc()
+        Log.i(TAG, "USB CDC enable result=$result")
+        PinpadTraceLog.transport("USB_CDC enable result=$result")
+        if (result != SdkResult.Success) {
+            throw IllegalStateException("USB CDC enable failed: $result")
+        }
     }
 
     override fun send(bytes: ByteArray) {
@@ -57,22 +67,34 @@ class NexgoUsbCdcTransport(
             return
         }
         PinpadTraceLog.serialTx(SOURCE, bytes)
-        val result = usbSerial.write(bytes, bytes.size)
+        val result = driver.send(bytes, bytes.size)
         if (result != SdkResult.Success) {
             listener?.onTransportError(IllegalStateException("USB CDC write failed: $result"))
         }
     }
 
     override fun stop() {
-        usbSerial.close()
+        running.set(false)
+        executor?.shutdownNow()
+        executor = null
+        runCatching { driver.disconnect() }
         listener = null
     }
 
-    private fun String.toUsbParity(): Int {
-        return when (uppercase()) {
-            "O" -> UsbSerial.PARITY_ODD
-            "E" -> UsbSerial.PARITY_EVEN
-            else -> UsbSerial.PARITY_NONE
+    private fun readLoop() {
+        val buffer = ByteArray(MAX_READ)
+        while (running.get()) {
+            val read = runCatching { driver.recv(buffer, buffer.size, READ_TIMEOUT_MS) }
+                .onFailure { listener?.onTransportError(it) }
+                .getOrDefault(0)
+            if (read > 0) {
+                val bytes = buffer.copyOf(read)
+                PinpadTraceLog.serialRx(SOURCE, bytes)
+                listener?.onBytesReceived(bytes)
+            } else if (read != 0 && read != SdkResult.SerialPort_Timeout_Receiving_Data) {
+                Log.w(TAG, "USB CDC recv returned $read")
+                PinpadTraceLog.transport("USB_CDC recv returned $read")
+            }
         }
     }
 
@@ -86,5 +108,7 @@ class NexgoUsbCdcTransport(
     companion object {
         private const val TAG = "NexgoUsbCdcTransport"
         private const val SOURCE = "USB_CDC"
+        private const val MAX_READ = 2048
+        private const val READ_TIMEOUT_MS = 250L
     }
 }

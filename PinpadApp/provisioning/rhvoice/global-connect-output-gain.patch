@@ -1,0 +1,8 @@
+diff --git a/src/android/RHVoice-core/src/main/java/com/github/olga_yakovleva/rhvoice/android/RHVoiceService.java b/src/android/RHVoice-core/src/main/java/com/github/olga_yakovleva/rhvoice/android/RHVoiceService.java
+index 01c842a..251b20e 100644
+--- a/src/android/RHVoice-core/src/main/java/com/github/olga_yakovleva/rhvoice/android/RHVoiceService.java
++++ b/src/android/RHVoice-core/src/main/java/com/github/olga_yakovleva/rhvoice/android/RHVoiceService.java
+@@ -63,0 +64 @@ public final class RHVoiceService extends TextToSpeechService implements Lifecyc
++    private static final double GLOBAL_CONNECT_OUTPUT_GAIN = 1.25;
+@@ -660,0 +662 @@ public final class RHVoiceService extends TextToSpeechService implements Lifecyc
++            params.setVolume(GLOBAL_CONNECT_OUTPUT_GAIN);

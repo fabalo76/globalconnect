@@ -10,7 +10,7 @@ Global Connect ONE is the active cloud target.
 
 | Concern | Global Connect ONE contract |
 | --- | --- |
-| MQTT broker | AWS IoT Core endpoint from `/uicconnectone/{env}/iot/endpoint` |
+| MQTT broker | AWS IoT Core endpoint from the active environment configuration |
 | Protocol | MQTT 3.1.1 over TLS 1.2+, port `8883` |
 | Client ID | Device serial number, same value used in topic `{serial}` |
 | Authentication | AWS IoT device certificate and private key |
@@ -25,6 +25,8 @@ The older `tms/terminal/{TermID}/...`, broker-password, TCP/FTP, `easy`, `paramr
 AWS IoT provisioning is device-scoped. A terminal can register its Thing/certificate and exchange MQTT on `tms/device/{serial}/...` as long as it is registered as a Global Connect ONE device with IoT enabled; it does not need to be assigned to a lane. Lane context is only used when resolving payment parameters, downloads that depend on merchant/branch/lane configuration, and operator workflow.
 
 The exported application licensing service is a generic broker for offline application licenses. It verifies the caller UID, package, and installed APK signer, then relays registration over the authenticated device MQTT connection. Licensed applications generate and retain their own Android Keystore private keys; xTMSAgent never receives application private keys.
+
+Licensed applications can also request an allow-listed managed capability through the same UID-verified service. For `android.tts`, xTMSAgent sends the terminal model, Android SDK, and ABI list to the authenticated AWS device endpoint. AWS resolves the bank catalog's model-compatible RHVoice version and dispatches a normal `ApplicationDownload` task. After the APK is installed, xTMSAgent sends an explicit completion signal to the requesting package so it can verify and initialize the newly available Android service.
 
 ---
 
@@ -82,7 +84,7 @@ The launcher publishes:
 | `tms/device/{serial}/task/ack` | Task receipt, completion, or failure |
 | `$aws/rules/tms_transaction_ingest_{env}/tms/device/{serial}/transaction` | Transaction or transaction batch report |
 
-For full payload details see [MQTT_INTEGRATION.md](MQTT_INTEGRATION.md) and the platform contract in `D:\Source\repos_2022\UIC_Connect_One\docs\API_DESIGN.md`.
+For full payload details see [MQTT_INTEGRATION.md](MQTT_INTEGRATION.md) and the platform repository contract under `docs/API_DESIGN.md`.
 
 ---
 
@@ -93,7 +95,7 @@ Remote control is aligned with the Global Connect ONE AWS design:
 - Global Connect ONE sends `remote_start` on `tms/device/{serial}/cmd` with `provider = "kinesis-webrtc"`.
 - The payload contains the Kinesis signaling channel ARN/name, `MASTER` WSS endpoint, ICE servers, and short-lived STS credentials.
 - xTMSAgent starts a foreground `mediaProjection` service, signs the Kinesis WSS URL with SigV4, and connects as the WebRTC `MASTER`.
-- The portal connects as `VIEWER`; screen video flows through WebRTC and pointer/key events return on the `uic-control` data channel.
+- The portal connects as `VIEWER`; screen video flows through WebRTC and pointer/key events return on the `globalconnect-control` data channel.
 - No EC2, ECS, ALB, NAT Gateway, or custom relay is required by the Android client.
 
 Key classes:

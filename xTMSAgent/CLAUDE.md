@@ -51,7 +51,7 @@ xTMSAgent is an Android launcher application for NEXGO SmartPOS devices. It serv
 
 ### Application Structure
 
-**MainActivity.kt** (app/src/main/java/com/uic/home/MainActivity.kt)
+**MainActivity.kt** (app/src/main/java/one/globalconnect/xtmsagent/MainActivity.kt)
 - Entry point and primary activity
 - Launcher functionality with app grid management
 - Permission handling (storage, install packages)
@@ -59,12 +59,12 @@ xTMSAgent is an Android launcher application for NEXGO SmartPOS devices. It serv
 - Password protection system for settings
 - Uses companion object for shared state and logging
 
-**TMS_FUNC.kt** (app/src/main/java/com/uic/home/TMS_FUNC.kt)
+**TMS_FUNC.kt** (app/src/main/java/one/globalconnect/xtmsagent/TMS_FUNC.kt)
 - Configuration management (Launcher_Config.JSON)
 - Theme configuration (background, foreground, font colors/sizes)
 - Server connection parameters (MQTT/HTTPS settings)
 
-**GridAdapter & ItemTouchHelperCallback** (app/src/main/java/com/uic/home/btn_move/)
+**GridAdapter & ItemTouchHelperCallback** (app/src/main/java/one/globalconnect/xtmsagent/btn_move/)
 - RecyclerView adapter for draggable app grid
 - Implements drag-and-drop for app reorganization
 - Persists app layout to XML configuration
@@ -82,7 +82,7 @@ xTMSAgent is an Android launcher application for NEXGO SmartPOS devices. It serv
     "system_pwd_protection": false
   },
   "tms_cfg": {
-    "server_addr": "tms.uiclatam.com",
+    "server_addr": "api.dev.globalconnect.one",
     "tcp_port": 5050,
     "tcp_ssl": false,
     "ftp_port": 990,

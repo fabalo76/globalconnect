@@ -11,6 +11,7 @@ import one.globalconnect.xtmsagent.diagnostics.NexgoDiagnosticsManager
 import one.globalconnect.xtmsagent.mqtt.TmsMqttService
 import one.globalconnect.xtmsagent.mqtt.persistence.TmsCredentialStore
 import one.globalconnect.xtmsagent.nexgo.NexgoDeviceOwnerProvisioner
+import one.globalconnect.xtmsagent.policy.FactoryTmsManager
 
 private const val TAG = "XtmsAgentApplication"
 
@@ -46,6 +47,7 @@ class XtmsAgentApplication : Application() {
                 if (result.success) {
                     Log.i(TAG, "Nexgo $message")
                     TmsDeviceAdminReceiver.applyKioskRestrictions(this@XtmsAgentApplication)
+                    FactoryTmsManager.reconcile(this@XtmsAgentApplication)
                 } else {
                     Log.w(TAG, "Nexgo $message")
                 }

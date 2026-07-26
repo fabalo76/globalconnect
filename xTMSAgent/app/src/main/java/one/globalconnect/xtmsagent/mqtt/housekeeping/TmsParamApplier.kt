@@ -35,10 +35,10 @@ private const val TAG = "TmsParamApplier"
 object TmsParamApplier {
 
     /** Broadcast sent TO the payment app to trigger parameter apply. */
-    const val ACTION_PARAM_APPLY   = "com.uic.tms.PARAM_APPLY"
+    const val ACTION_PARAM_APPLY   = "one.globalconnect.tms.PARAM_APPLY"
 
     /** Broadcast expected FROM the payment app confirming parameters were applied. */
-    const val ACTION_PARAM_APPLIED = "com.uic.tms.PARAM_APPLIED"
+    const val ACTION_PARAM_APPLIED = "one.globalconnect.tms.PARAM_APPLIED"
 
     const val EXTRA_TASK_ID         = "taskId"
     const val EXTRA_PARAM_FILE_PATH = "paramFilePath"

@@ -1,0 +1,7 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/PinpadMediaManager.Core/PinpadMediaManager.Core.csproj" />
+    <Project Path="src/PinpadMediaManager/PinpadMediaManager.csproj" />
+    <Project Path="tests/PinpadMediaManager.Tests/PinpadMediaManager.Tests.csproj" />
+  </Folder>
+</Solution>

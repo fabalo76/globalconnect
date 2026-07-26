@@ -203,7 +203,9 @@ object LauncherConfigManager {
                     return
                 }
 
-                applyConfig(context, json)
+                if (!applyConfig(context, json)) {
+                    return
+                }
 
                 // ACK the server so it clears LauncherConfigNotifyPending.
                 // Only sent when responding to a server-pushed notification (sendAck=true).
@@ -283,7 +285,6 @@ object LauncherConfigManager {
                 ?: response.optJSONObject("Configuration")
                 ?: response
             applyConfig(context, config)
-            true
         } catch (e: Exception) {
             if (DeviceApi.isRecoverableHostFailure(e)) throw e
             Log.e(TAG, "AWS LauncherConfig download failed: ${e.message}", e)
@@ -295,7 +296,7 @@ object LauncherConfigManager {
 
     // ── Private helpers ───────────────────────────────────────────────────────
 
-    private fun applyConfig(context: Context, json: JSONObject) {
+    private fun applyConfig(context: Context, json: JSONObject): Boolean {
         val configId         = readConfigId(json)
         val generatedAt      = json.optStringAny("generatedAt", "GeneratedAt")
         val blockUnknown     = json.optBooleanAny(default = false, "blockUnknownApps", "BlockUnknownApps")
@@ -355,7 +356,12 @@ object LauncherConfigManager {
         // leaving it absent lets checkAndDownloadIfMissing retry on the next reconnect.
         if (MainActivity.sPathLaunch.isBlank()) {
             Log.w(TAG, "sPathLaunch not set yet — will retry on next MQTT connect")
-            return
+            return false
+        }
+
+        if (!LauncherImageManager.apply(File(MainActivity.vg_sIntrenalPath, "cfg"), json)) {
+            Log.w(TAG, "LauncherConfig image download failed — configuration will be retried")
+            return false
         }
 
         // Replace the in-memory app list and persist it.
@@ -382,6 +388,7 @@ object LauncherConfigManager {
 
         // Fire any HouseKeeping request that was deferred while waiting for this config.
         TmsMqttManager.triggerDeferredHouseKeepingIfPending()
+        return true
     }
 
     private fun restoreThemeFromPrefs(context: Context) {

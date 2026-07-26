@@ -291,6 +291,11 @@ object PinpadDisplayController {
         }
     }
 
+    fun showMedia(path: String, video: Boolean) {
+        clearContactlessLeds()
+        updateState(PinpadDisplayState.Media(path, video))
+    }
+
     fun showBrandSensory(brand: SensoryBrand) {
         clearContactlessLeds()
         updateState(PinpadDisplayState.BrandSensory(brand))
@@ -359,6 +364,7 @@ sealed interface PinpadDisplayState {
     data object ThankYou : PinpadDisplayState
     data class Jpeg(val path: String) : PinpadDisplayState
     data class JpegSequence(val paths: List<String>) : PinpadDisplayState
+    data class Media(val path: String, val video: Boolean) : PinpadDisplayState
     data class BrandSensory(val brand: SensoryBrand) : PinpadDisplayState
 }
 

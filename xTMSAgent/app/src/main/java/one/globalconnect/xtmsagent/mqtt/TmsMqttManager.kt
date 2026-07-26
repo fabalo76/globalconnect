@@ -144,13 +144,13 @@ object TmsMqttManager {
                 return
             }
 
-            handleUicTask(taskId, taskType, json.optJSONObject("payload") ?: json.optJSONObject("Payload"))
+            handleGlobalConnectTask(taskId, taskType, json.optJSONObject("payload") ?: json.optJSONObject("Payload"))
         } catch (e: Exception) {
             Log.e(TAG, "Failed to parse task message: ${e.message}", e)
         }
     }
 
-    private fun handleUicTask(taskId: String, taskType: String, payload: org.json.JSONObject?) {
+    private fun handleGlobalConnectTask(taskId: String, taskType: String, payload: org.json.JSONObject?) {
         Log.i(TAG, "Global Connect task received: id=$taskId type=$taskType")
         try {
             when (taskType.lowercase()) {

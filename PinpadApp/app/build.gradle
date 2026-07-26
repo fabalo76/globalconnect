@@ -12,11 +12,11 @@ android {
         applicationId = "one.globalconnect.pinpad"
         minSdk = 26
         targetSdk = 36
-        versionCode = 126
-        versionName = "0.3.113"
+        versionCode = 130
+        versionName = "0.3.117"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
-        buildConfigField "String", "SERIAL_TRANSPORT", "\"AUTO\""
+        buildConfigField "String", "SERIAL_TRANSPORT", "\"SERIAL\""
         buildConfigField "int", "SERIAL_RS232_PORT", "0"
         buildConfigField "int", "SERIAL_USB_VID", "0x6352"
         buildConfigField "int", "SERIAL_USB_PID", "0x294A"

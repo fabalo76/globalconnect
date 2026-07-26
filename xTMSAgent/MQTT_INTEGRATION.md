@@ -1,6 +1,6 @@
 # MQTT Integration - Global Connect ONE
 
-This document is the client-side integration guide for xTMSAgent and any standalone C++ terminal agent that connects to Global Connect ONE. The authoritative server contract lives in `D:\Source\repos_2022\UIC_Connect_One\docs\API_DESIGN.md`, section "MQTT TOPICS".
+This document is the client-side integration guide for xTMSAgent and any standalone C++ terminal agent that connects to Global Connect ONE. The authoritative server contract is documented in the platform repository under `docs/API_DESIGN.md`, section "MQTT TOPICS".
 
 Global Connect ONE uses AWS IoT Core for device connectivity:
 
@@ -167,7 +167,7 @@ Publish to `tms/device/{serial}/status` after connect, when requested by `Refres
   },
   "installedApps": [
     {
-      "packageName": "com.uic.payment",
+      "packageName": "one.globalconnect.payment",
       "versionName": "2.1.0",
       "versionCode": 210
     }
@@ -381,8 +381,8 @@ Global Connect ONE sends remote-control commands to `tms/device/{serial}/cmd`.
   "provider": "kinesis-webrtc",
   "sessionId": "ff000000-0000-4000-8000-000000000001",
   "region": "us-east-1",
-  "channelName": "uic-remote-dev-01",
-  "channelArn": "arn:aws:kinesisvideo:us-east-1:123456789012:channel/uic-remote-dev-01/1234567890",
+  "channelName": "globalconnect-remote-dev-01",
+  "channelArn": "arn:aws:kinesisvideo:us-east-1:123456789012:channel/globalconnect-remote-dev-01/1234567890",
   "role": "master",
   "clientId": "device-TM001234",
   "viewerClientId": "viewer-ff000000000040008000000000000001",
@@ -408,7 +408,7 @@ Client behavior:
 - Validate `provider == "kinesis-webrtc"`.
 - Treat STS credentials as memory-only session credentials.
 - Connect as Kinesis WebRTC `MASTER`.
-- Open/accept the `uic-control` data channel for pointer/key events.
+- Open/accept the `globalconnect-control` data channel for pointer/key events.
 - Stop when `remote_stop` arrives, when `expiresAt` passes, or when the session fails.
 
 Android classes:

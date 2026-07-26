@@ -170,7 +170,7 @@ object TmsTaskProcessor {
 
         task.trl?.let {
             File(staging, "trl.png").takeIf { it.exists() }?.let { src ->
-                val dest = File("${MainActivity.vg_sIntrenalPath}/cfg/uiclogo.png")
+                val dest = File("${MainActivity.vg_sIntrenalPath}/cfg/globalconnectlogo.png")
                 dest.parentFile?.mkdirs()
                 src.copyTo(dest, overwrite = true)
                 Log.i(TAG, "Task ${task.id}: trailer logo applied → ${dest.absolutePath}")

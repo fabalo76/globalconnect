@@ -6,8 +6,9 @@ import kotlin.test.assertTrue
 
 class DeviceModelConfigTest {
     @Test
-    fun ct20pUsesRs232PortOne() {
+    fun ct20pUsesDedicatedUsbCdcSerialPort() {
         assertEquals(1, DeviceModelConfig.getSerialPort("CT20P"))
+        assertEquals(0, DeviceModelConfig.getUsbCdcSerialPort("CT20P"))
         assertEquals(DisplaySpec(widthPx = 480, heightPx = 800), DeviceModelConfig.getDeviceSpec("CT20P").display)
     }
 
@@ -22,6 +23,14 @@ class DeviceModelConfigTest {
     fun unknownModelFallsBackToPortZero() {
         assertEquals(0, DeviceModelConfig.getSerialPort("UNKNOWN"))
         assertTrue(DeviceModelConfig.supportsUsbCdc("UNKNOWN"))
+    }
+
+    @Test
+    fun modelsWithoutDedicatedUsbCdcPortUseTheirDefaultPort() {
+        assertEquals(
+            DeviceModelConfig.getSerialPort("N82"),
+            DeviceModelConfig.getUsbCdcSerialPort("N82"),
+        )
     }
 
     @Test

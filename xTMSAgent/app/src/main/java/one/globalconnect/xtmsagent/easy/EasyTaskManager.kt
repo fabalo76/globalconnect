@@ -564,7 +564,7 @@ object EasyTaskManager {
         val nameWithoutExt = fileName.removeSuffix(".apk")
         return try {
             val pm = context.packageManager
-            // Check direct package name match first (e.g. "com.uic.app.apk" → "com.uic.app")
+            // Check direct package name match first (e.g. "one.globalconnect.app.apk" → "one.globalconnect.app")
             pm.getPackageInfo(nameWithoutExt, 0)
             nameWithoutExt
         } catch (e: Exception) {

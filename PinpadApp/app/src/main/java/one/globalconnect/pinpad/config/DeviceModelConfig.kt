@@ -5,6 +5,7 @@ data class DeviceModelSpec(
     val usbCdcSupported: Boolean,
     val rs232SerialSupported: Boolean,
     val defaultSerialPort: Int,
+    val usbCdcSerialPort: Int? = null,
     val alternateSerialPort: Int? = null,
     val display: DisplaySpec? = null,
     val notes: String = "",
@@ -69,8 +70,9 @@ object DeviceModelConfig {
             usbCdcSupported = true,
             rs232SerialSupported = true,
             defaultSerialPort = 1,
+            usbCdcSerialPort = 0,
             display = DisplaySpec(widthPx = 480, heightPx = 800),
-            notes = "Fixed RS232 serial port",
+            notes = "RS232 uses port 1; built-in USB CDC uses port 0",
         ),
     ).associateBy { it.modelName.normalizedModelName() }
 
@@ -93,6 +95,11 @@ object DeviceModelConfig {
         } else {
             spec.defaultSerialPort
         }
+    }
+
+    fun getUsbCdcSerialPort(modelName: String?): Int {
+        val spec = getDeviceSpec(modelName)
+        return spec.usbCdcSerialPort ?: spec.defaultSerialPort
     }
 
     fun supportsUsbCdc(modelName: String?): Boolean = getDeviceSpec(modelName).usbCdcSupported

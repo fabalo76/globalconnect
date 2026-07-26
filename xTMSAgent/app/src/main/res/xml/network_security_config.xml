@@ -1,49 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!--
-    Instructs Android's network stack to:
-      1. Globally disable cleartext (HTTP) traffic.
-      2. Trust the TMS private CA (TMSSSLCA.pem) for TLS connections to all
-         TMS server hostnames, in addition to the system CA store.
-
-    The MQTT client uses a custom SSLContext (TmsTrustManager.kt) that also
-    pins to TMSSSLCA.pem; this config is the belt-and-suspenders safety net
-    required for Android 7+ and also enforces cleartext-off app-wide.
--->
 <network-security-config>
-
-    <!-- Global baseline: no cleartext traffic anywhere in the app -->
     <base-config cleartextTrafficPermitted="false">
         <trust-anchors>
             <certificates src="system" />
         </trust-anchors>
     </base-config>
-
-    <!-- Dev laptop: cleartext permitted for HTTP web app (port 8888);
-         TMS CA trusted so wss://tmsdevlap.uiclatam.com:5071 works. -->
-    <domain-config cleartextTrafficPermitted="true">
-        <domain includeSubdomains="true">tmsdevlap.uiclatam.com</domain>
-        <trust-anchors>
-            <certificates src="system" />
-            <certificates src="@raw/tmssslca" />
-        </trust-anchors>
-    </domain-config>
-
-    <!-- Dev server: TMS CA trusted for wss://tmsdev.uiclatam.com:5071 -->
-    <domain-config cleartextTrafficPermitted="false">
-        <domain includeSubdomains="true">tmsdev.uiclatam.com</domain>
-        <trust-anchors>
-            <certificates src="system" />
-            <certificates src="@raw/tmssslca" />
-        </trust-anchors>
-    </domain-config>
-
-    <!-- Production server: TMS CA trusted for wss://tms.uiclatam.com:5071 -->
-    <domain-config cleartextTrafficPermitted="false">
-        <domain includeSubdomains="true">tms.uiclatam.com</domain>
-        <trust-anchors>
-            <certificates src="system" />
-            <certificates src="@raw/tmssslca" />
-        </trust-anchors>
-    </domain-config>
-
 </network-security-config>

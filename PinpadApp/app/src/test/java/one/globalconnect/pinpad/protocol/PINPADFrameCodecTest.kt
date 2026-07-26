@@ -4,6 +4,7 @@ import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import kotlin.test.assertTrue
 
 class PINPADFrameCodecTest {
     private val codec = PINPADFrameCodec()
@@ -18,6 +19,16 @@ class PINPADFrameCodecTest {
         assertIs<PINPADFrameCodec.DecodeResult.Valid>(decoded)
         assertEquals("06", decoded.frame.commandId)
         assertEquals(PINPADFrameType.Administration, decoded.frame.frameType)
+    }
+
+    @Test
+    fun decodesThreeCharacterMediaCommand() {
+        val frame = PINPADFrame(PINPADFrameType.Transaction, "M10")
+
+        val decoded = assertIs<PINPADFrameCodec.DecodeResult.Valid>(codec.decode(codec.encode(frame)))
+
+        assertEquals("M10", decoded.frame.commandId)
+        assertTrue(decoded.frame.payload.isEmpty())
     }
 
     @Test

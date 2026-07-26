@@ -12,6 +12,7 @@ import one.globalconnect.xtmsagent.mqtt.TmsTaskStatus
 import one.globalconnect.xtmsagent.net.DeviceApi
 import one.globalconnect.xtmsagent.nexgo.NexgoSystemAsset
 import one.globalconnect.xtmsagent.nexgo.NexgoSystemAssetInstaller
+import one.globalconnect.xtmsagent.requirements.ApplicationRequirementNotifier
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -85,7 +86,7 @@ object AwsDeviceDownloadManager {
                 )
             }
 
-            applyDownloadedFiles(context, taskId, taskType, downloaded)
+            applyDownloadedFiles(context, taskId, taskType, downloaded, payload)
             taskDirectory(context, taskId).deleteRecursively()
             TmsTaskStatus.taskOverride.value = null
             Result(success = true, status = "applied")
@@ -135,7 +136,13 @@ object AwsDeviceDownloadManager {
         }
     }
 
-    private suspend fun applyDownloadedFiles(context: Context, taskId: String, taskType: String, downloaded: List<File>) {
+    private suspend fun applyDownloadedFiles(
+        context: Context,
+        taskId: String,
+        taskType: String,
+        downloaded: List<File>,
+        payload: JSONObject? = null,
+    ) {
         ensureNotCancelled(context, taskId)
         val isFirmware = taskType.equals("FirmwareDownload", ignoreCase = true)
             || taskType.equals("UpdateFirmware", ignoreCase = true)
@@ -150,6 +157,7 @@ object AwsDeviceDownloadManager {
                 ?: throw IllegalStateException("Application download did not include an APK file")
             installApk(context, apk)
             MainActivity.writeLog("AWS app download installed: ${apk.name}")
+            ApplicationRequirementNotifier.notifyInstalled(context, payload)
         }
     }
 

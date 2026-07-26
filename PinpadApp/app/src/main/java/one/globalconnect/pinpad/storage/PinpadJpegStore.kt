@@ -87,11 +87,7 @@ class PinpadJpegStore private constructor(rootDir: File) {
         val fileName = packetName ?: download?.fileName ?: return 'B'
         if (fileName.length > MAX_NAME_LENGTH) return 'C'
         val sizeOffset = secondFs + 1
-        if (sizeOffset + SIZE_FIELD_LENGTH > rest.length) return '5'
-        val size = rest.substring(sizeOffset, sizeOffset + SIZE_FIELD_LENGTH).toIntOrNull() ?: return '5'
-        if (size !in 0..MAX_JPEG_DOWNLOAD_CHARS) return '5'
-        val data = rest.substring(sizeOffset + SIZE_FIELD_LENGTH)
-        if (data.length != size) return '5'
+        val data = parseDownloadPacketData(rest, sizeOffset) ?: return '5'
         if (seqNo == 0) {
             if (force == '0' && imageFile(fileName).isFile) return '4'
             download = PendingDownload(fileName, StringBuilder(data), seqNo + 1)
@@ -112,6 +108,16 @@ class PinpadJpegStore private constructor(rootDir: File) {
         } else {
             '0'
         }
+    }
+
+    private fun parseDownloadPacketData(rest: String, sizeOffset: Int): String? {
+        DOWNLOAD_SIZE_FIELD_WIDTHS.forEach { width ->
+            if (sizeOffset + width > rest.length) return@forEach
+            val size = rest.substring(sizeOffset, sizeOffset + width).toIntOrNull() ?: return@forEach
+            val data = rest.substring(sizeOffset + width)
+            if (size in 0..MAX_JPEG_DOWNLOAD_CHARS && data.length == size) return data
+        }
+        return null
     }
 
     fun startUpload(fileName: String): JpegUploadPacket {
@@ -291,10 +297,11 @@ class PinpadJpegStore private constructor(rootDir: File) {
         private const val SELECTED_SEPARATOR = "|"
         private const val MAX_NAME_LENGTH = 15
         private const val SIZE_FIELD_LENGTH = 3
-        private const val MAX_JPEG_DOWNLOAD_CHARS = 523
+        private const val MAX_JPEG_DOWNLOAD_CHARS = 8_192
         private const val MAX_JPEG_UPLOAD_CHARS = 524
         private const val MAX_BOOT_DOWNLOAD_CHARS = 525
         private const val BOOT_LOGO_NAME = "_boot_logo"
         private const val FS = '\u001C'
+        private val DOWNLOAD_SIZE_FIELD_WIDTHS = intArrayOf(4, SIZE_FIELD_LENGTH)
     }
 }

@@ -8,6 +8,7 @@
             android:exported="true">
             <intent-filter>
                 <action android:name="one.globalconnect.xtmsagent.DEBUG_CLEAR_DEVICE_OWNER" />
+                <action android:name="one.globalconnect.xtmsagent.DEBUG_SET_FACTORY_TMS_ENABLED" />
             </intent-filter>
         </receiver>
 

@@ -30,7 +30,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.roundToInt
 
 private const val WEBRTC_TAG = "KinesisWebRtcClient"
-private const val DATA_CHANNEL_LABEL = "uic-control"
+private const val DATA_CHANNEL_LABEL = "globalconnect-control"
 private const val VIDEO_TRACK_ID = "XTMSAGENT_SCREEN"
 private const val VIDEO_STREAM_ID = "XTMSAGENT_REMOTE_SCREEN"
 

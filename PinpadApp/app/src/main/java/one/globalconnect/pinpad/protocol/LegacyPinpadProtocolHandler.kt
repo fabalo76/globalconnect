@@ -57,6 +57,9 @@ class LegacyPinpadProtocolHandler(
         sessionController.cancelActiveOperation()
     }
 
+    override fun consumeCompletedSerialPortChange(): SerialPortChange? =
+        sessionController.consumeCompletedSerialPortChange()
+
     override fun onKeypadKey(key: PinpadKeypadKey) {
         sessionController.onKeypadKey(key)
     }

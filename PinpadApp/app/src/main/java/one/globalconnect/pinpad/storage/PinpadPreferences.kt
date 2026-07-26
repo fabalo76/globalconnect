@@ -41,7 +41,9 @@ class PinpadPreferences(context: Context) {
     fun serialSettings(modelName: String? = null): SerialSettings {
         val modelDefaultPort = DeviceModelConfig.getSerialPort(modelName)
         return SerialSettings(
-            transportMode = prefs.getString(KEY_TRANSPORT_MODE, null) ?: DEFAULT_TRANSPORT_MODE,
+            transportMode = normalizeTransportMode(
+                prefs.getString(KEY_TRANSPORT_MODE, null) ?: DEFAULT_TRANSPORT_MODE,
+            ),
             rs232Port = if (prefs.contains(KEY_RS232_PORT)) {
                 prefs.getInt(KEY_RS232_PORT, modelDefaultPort)
             } else {
@@ -58,7 +60,7 @@ class PinpadPreferences(context: Context) {
 
     fun setSerialSettings(settings: SerialSettings) {
         prefs.edit()
-            .putString(KEY_TRANSPORT_MODE, settings.transportMode)
+            .putString(KEY_TRANSPORT_MODE, normalizeTransportMode(settings.transportMode))
             .putInt(KEY_RS232_PORT, settings.rs232Port)
             .putInt(KEY_USB_VID, settings.usbVid)
             .putInt(KEY_USB_PID, settings.usbPid)
@@ -190,7 +192,7 @@ class PinpadPreferences(context: Context) {
         private const val MIFARE_KEY_PAIR_LENGTH = MIFARE_KEY_LENGTH * 2
         private val MIFARE_KEY_SLOT_RANGE = 0..255
 
-        private const val DEFAULT_TRANSPORT_MODE = "AUTO"
+        private const val DEFAULT_TRANSPORT_MODE = "SERIAL"
         private const val DEFAULT_USB_VID = 0x6352
         private const val DEFAULT_USB_PID = 0x294A
         private const val DEFAULT_BAUD_RATE = 9600
@@ -219,6 +221,14 @@ class PinpadPreferences(context: Context) {
         private fun masterKeyKcvKey(keyId: Char): String {
             return "$KEY_MASTER_KEY_KCV_PREFIX${keyId.uppercaseChar()}"
         }
+    }
+}
+
+internal fun normalizeTransportMode(value: String?): String {
+    return when (value?.trim()?.uppercase()) {
+        "RS232" -> "RS232"
+        "SERIAL", "USB_CDC", "AUTO" -> "SERIAL"
+        else -> "SERIAL"
     }
 }
 

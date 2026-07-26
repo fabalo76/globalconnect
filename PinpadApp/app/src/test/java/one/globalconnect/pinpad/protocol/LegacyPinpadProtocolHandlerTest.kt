@@ -7,6 +7,7 @@ import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class LegacyPinpadProtocolHandlerTest {
@@ -131,6 +132,45 @@ class LegacyPinpadProtocolHandlerTest {
 
             val finalResponses = handler.onBytesReceived(byteArrayOf(PINPADControl.ACK))
             assertTrue(finalResponses.isEmpty())
+        } finally {
+            handler.shutdown()
+        }
+    }
+
+    @Test
+    fun serialPortChangeIsExposedOnlyAfterHostAckAndFinalEot() {
+        val handler = testHandler()
+        try {
+            val responses = handler.onBytesReceived(
+                codec.encode(PINPADFrame(PINPADFrameType.Administration, "13", "81".toByteArray())),
+            )
+            val response = assertIs<PINPADFrameCodec.DecodeResult.Valid>(codec.decode(responses[1]))
+            assertEquals("0", response.frame.payloadAscii)
+            assertNull(handler.consumeCompletedSerialPortChange())
+
+            val finalResponses = handler.onBytesReceived(byteArrayOf(PINPADControl.ACK))
+
+            assertEquals(PINPADControl.EOT, finalResponses.single().single())
+            assertEquals(
+                SerialPortChange(baudRate = 115_200, dataBits = 8, stopBits = 1, parity = "N"),
+                handler.consumeCompletedSerialPortChange(),
+            )
+        } finally {
+            handler.shutdown()
+        }
+    }
+
+    @Test
+    fun pipelinedFrameCancelsPendingSerialPortChange() {
+        val handler = testHandler()
+        try {
+            handler.onBytesReceived(
+                codec.encode(PINPADFrame(PINPADFrameType.Administration, "13", "81".toByteArray())),
+            )
+
+            handler.onBytesReceived(byteArrayOf(PINPADControl.ACK) + serialNumberRequest())
+
+            assertNull(handler.consumeCompletedSerialPortChange())
         } finally {
             handler.shutdown()
         }

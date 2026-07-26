@@ -13,6 +13,7 @@ import one.globalconnect.pinpad.model.PinpadTransactionDisplay
 import one.globalconnect.pinpad.ui.PinpadDisplayController
 import one.globalconnect.pinpad.ui.TextEntryEchoMode
 import java.nio.charset.StandardCharsets
+import java.util.Base64
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
@@ -26,6 +27,8 @@ class PINPADSessionController(
 ) {
     @Volatile private var pendingFinalEot = false
     @Volatile private var communicationTestAwaitingEcho = false
+    @Volatile private var pendingSerialPortChange: SerialPortChange? = null
+    @Volatile private var completedSerialPortChange: SerialPortChange? = null
     @Volatile private var fallbackMsrOutputFormat = '0'
     @Volatile private var dataEntryPromptReady = false
     @Volatile private var dataEntryPromptText = ""
@@ -53,6 +56,7 @@ class PINPADSessionController(
                 PinpadTraceLog.protocol("inbound partial frame timeout; responding EOT")
                 pendingFinalEot = false
                 communicationTestAwaitingEcho = false
+                pendingSerialPortChange = null
                 listOf(byteArrayOf(PINPADControl.EOT))
             }
         }
@@ -63,6 +67,7 @@ class PINPADSessionController(
     fun abortPendingResponse() {
         pendingFinalEot = false
         communicationTestAwaitingEcho = false
+        pendingSerialPortChange = null
         PinpadTraceLog.protocol("pending response aborted")
     }
 
@@ -71,6 +76,13 @@ class PINPADSessionController(
             PinpadTraceLog.protocol("pending final EOT suppressed: $reason")
         }
         pendingFinalEot = false
+        pendingSerialPortChange = null
+    }
+
+    fun consumeCompletedSerialPortChange(): SerialPortChange? {
+        val change = completedSerialPortChange
+        completedSerialPortChange = null
+        return change
     }
 
     fun cancelActiveOperation() {
@@ -109,6 +121,10 @@ class PINPADSessionController(
     }
 
     private fun onFrame(frame: PINPADFrame): List<ByteArray> {
+        if (pendingSerialPortChange != null) {
+            PinpadTraceLog.protocol("pending serial-port change canceled by new inbound frame")
+            pendingSerialPortChange = null
+        }
         PinpadTraceLog.command(
             frame.commandId,
             "received frameType=${frame.frameType.name} payloadLen=${frame.payload.size}",
@@ -219,11 +235,17 @@ class PINPADSessionController(
             "13" -> {
                 val baudCode = request.payloadAscii.firstOrNull()
                 val mode = request.payloadAscii.getOrNull(1)
-                val status = commandDevice?.acknowledgeBaudRateChange(baudCode, mode)
-                    ?: if (baudCode in '1'..'8') '0' else '1'
+                val change = if (request.payloadAscii.length in 1..2) {
+                    SerialPortChange.fromCommand(baudCode, mode)
+                } else {
+                    null
+                }
+                val status = if (change == null) '1' else '0'
+                pendingSerialPortChange = change
                 PinpadTraceLog.command(
                     "13",
-                    "adjust baud code=${baudCode ?: "<missing>"} mode=${mode ?: "<default>"} status=$status",
+                    "adjust baud code=${baudCode ?: "<missing>"} mode=${mode ?: "<default>"} " +
+                        "baud=${change?.baudRate ?: "<invalid>"} status=$status",
                 )
                 responses += responseFrame("13", status.toString())
                 pendingFinalEot = true
@@ -893,6 +915,94 @@ class PINPADSessionController(
                 responses += responseFrame(PINPADFrameType.Transaction, "JA", status.toString())
                 pendingFinalEot = true
             }
+            "M10" -> {
+                PinpadTraceLog.command("M10", "initialize media file table")
+                val status = if (commandDevice?.initializeMediaTable() == true) "0" else "1"
+                responses += responseFrame(PINPADFrameType.Transaction, "M10", status)
+                pendingFinalEot = true
+            }
+            "M11" -> {
+                val entries = commandDevice?.mediaTable().orEmpty()
+                val payload = buildString {
+                    append('0')
+                    entries.forEach { entry ->
+                        append(FS_CHAR)
+                        append(entry.type.protocolCode)
+                        append("%010d".format(entry.sizeBytes))
+                        append(entry.name)
+                    }
+                }
+                PinpadTraceLog.command("M11", "query media file table count=${entries.size}")
+                responses += responseFrame(PINPADFrameType.Transaction, "M11", payload)
+                pendingFinalEot = true
+            }
+            "M12" -> {
+                val status = commandDevice?.downloadMediaPacket(request.payloadAscii) ?: '6'
+                PinpadTraceLog.command("M12", "download media packet status=$status payloadChars=${request.payloadAscii.length}")
+                responses += responseFrame(PINPADFrameType.Transaction, "M12", status.toString())
+                pendingFinalEot = true
+            }
+            "M13" -> {
+                val control = request.payloadAscii.firstOrNull()
+                val packet = when (control) {
+                    '0' -> commandDevice?.startMediaUpload(request.payloadAscii.drop(1).trimStart(FS_CHAR))
+                    '1' -> commandDevice?.nextMediaUploadPacket()
+                    else -> null
+                }
+                PinpadTraceLog.command("M13", "upload media control=${control ?: "<missing>"} type=${packet?.type}")
+                responses += responseFrame(PINPADFrameType.Transaction, "M13", packet?.payload() ?: "5000000000")
+                pendingFinalEot = true
+            }
+            "M14" -> {
+                val status = commandDevice?.playMedia(request.payloadAscii) ?: '2'
+                PinpadTraceLog.command("M14", "play media status=$status name=${request.payloadAscii}")
+                responses += responseFrame(PINPADFrameType.Transaction, "M14", status.toString())
+                pendingFinalEot = true
+            }
+            "M15" -> {
+                val status = commandDevice?.setMediaVolume(request.payloadAscii) ?: '2'
+                PinpadTraceLog.command("M15", "set media volume status=$status value=${request.payloadAscii}")
+                responses += responseFrame(PINPADFrameType.Transaction, "M15", status.toString())
+                pendingFinalEot = true
+            }
+            "M16" -> {
+                val names = request.payloadAscii
+                    .split(FS_CHAR)
+                    .map(String::trim)
+                    .filter(String::isNotEmpty)
+                val statuses = if (names.isEmpty()) {
+                    listOf('1')
+                } else {
+                    commandDevice?.deleteMedia(names) ?: List(names.size) { '3' }
+                }
+                PinpadTraceLog.command("M16", "delete media names=${names.size} statuses=$statuses")
+                responses += responseFrame(
+                    PINPADFrameType.Transaction,
+                    "M16",
+                    statuses.joinToString(FS_CHAR.toString()),
+                )
+                pendingFinalEot = true
+            }
+            "M17" -> {
+                val fields = request.payloadAscii.split(FS_CHAR, limit = 2)
+                val language = fields.firstOrNull().orEmpty()
+                val text = fields.getOrNull(1)?.let { encoded ->
+                    runCatching {
+                        Base64.getDecoder().decode(encoded).toString(StandardCharsets.UTF_8)
+                    }.getOrNull()
+                }
+                val status = if (language.isBlank() || text.isNullOrBlank()) {
+                    '1'
+                } else {
+                    commandDevice?.speakText(language, text) ?: '2'
+                }
+                PinpadTraceLog.command(
+                    "M17",
+                    "text-to-speech language=$language chars=${text?.length ?: 0} status=$status",
+                )
+                responses += responseFrame(PINPADFrameType.Transaction, "M17", status.toString())
+                pendingFinalEot = true
+            }
             "T01" -> {
                 PinpadTraceLog.command("T01", "load EMV terminal configuration")
                 val result = commandDevice?.loadEmvTerminalConfiguration(request.payloadAscii)
@@ -1354,12 +1464,15 @@ class PINPADSessionController(
     private fun onControl(control: Byte): List<ByteArray> {
         if (control == PINPADControl.ACK && pendingFinalEot) {
             pendingFinalEot = false
+            completedSerialPortChange = pendingSerialPortChange
+            pendingSerialPortChange = null
             PinpadTraceLog.protocol("final EOT released after ACK")
             return listOf(byteArrayOf(PINPADControl.EOT))
         }
         if (control == PINPADControl.EOT) {
             pendingFinalEot = false
             communicationTestAwaitingEcho = false
+            pendingSerialPortChange = null
         }
         return emptyList()
     }
@@ -2312,6 +2425,14 @@ class PINPADSessionController(
             "J8",
             "J9",
             "JA",
+            "M10",
+            "M11",
+            "M12",
+            "M13",
+            "M14",
+            "M15",
+            "M16",
+            "M17",
             "T01",
             "T03",
             "T05",

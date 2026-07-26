@@ -65,4 +65,20 @@ class PinpadJpegStoreTest {
             dir.deleteRecursively()
         }
     }
+
+    @Test
+    fun acceptsNew8192CharacterDownloadPacket() {
+        val dir = createTempDirectory("pinpad-jpeg-8192").toFile()
+        try {
+            val store = PinpadJpegStore(dir, Unit)
+            val fs = '\u001C'
+            val data = Base64.getEncoder().encodeToString(ByteArray(6_144) { (it % 251).toByte() })
+
+            assertEquals(8_192, data.length)
+            assertEquals('F', store.downloadPacket("10001${fs}LARGE${fs}8192$data"))
+            assertEquals(listOf(PinpadJpegStore.JpegEntry("LARGE", selected = false)), store.table())
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
 }

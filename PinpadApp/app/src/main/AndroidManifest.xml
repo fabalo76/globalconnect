@@ -7,8 +7,15 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
 
     <queries>
+        <package android:name="com.reecedunn.espeak" />
+        <package android:name="com.github.olga_yakovleva.rhvoice.android" />
+        <package android:name="com.github.olga_yakovleva.rhvoice.android.language.spanish" />
+        <package android:name="com.github.olga_yakovleva.rhvoice.android.voice.mateo" />
         <intent>
             <action android:name="one.globalconnect.xtmsagent.APPLICATION_LICENSE_SERVICE" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.TTS_SERVICE" />
         </intent>
     </queries>
 

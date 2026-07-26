@@ -31,6 +31,7 @@
     <string name="setup_title">Serial Setup</string>
     <string name="setup_hint">Configure the serial port. Save restarts the communication service with the selected settings.</string>
     <string name="setup_transport">Port</string>
+    <string name="setup_usb_serial">USB Serial</string>
     <string name="setup_rs232_port">RS232 Port No.</string>
     <string name="setup_baud_rate">Speed</string>
     <string name="setup_data_bits">Data Bits</string>

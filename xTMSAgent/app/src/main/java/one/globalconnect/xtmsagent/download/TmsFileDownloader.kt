@@ -26,7 +26,7 @@ private const val READ_TIMEOUT_MS    = 120_000
  *     "fst":"P",
  *     "fsn":"Android TMS 2.0",   // FileSetName (szVersion from HK response)
  *     "fsv":"20240115143000",    // FileSet VersionDateTime YYYYMMDDHHMMSS
- *     "fn":"com.uic.app.apk",   // FileName
+ *     "fn":"one.globalconnect.app.apk",   // FileName
  *     "fv":"2.0.1" }            // File VersionNo
  */
 object TmsFileDownloader {

@@ -1,6 +1,7 @@
 package one.globalconnect.xtmsagent
 
 import android.app.AlertDialog
+import android.app.admin.DevicePolicyManager
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -33,6 +34,8 @@ import one.globalconnect.xtmsagent.launcher.ACTION_LAUNCHER_CONFIG_UPDATED
 import one.globalconnect.xtmsagent.launcher.LauncherConfigManager
 import one.globalconnect.xtmsagent.mqtt.TmsMqttManager
 import one.globalconnect.xtmsagent.mqtt.TmsMqttService
+import one.globalconnect.xtmsagent.policy.FactoryTmsManager
+import one.globalconnect.xtmsagent.policy.FactoryTmsState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -177,6 +180,13 @@ class ConfigMenuActivity : AppCompatActivity() {
                 onClickAction   = Runnable {
                     startActivity(Intent(this, DiagnosticsActivity::class.java))
                 }
+            ),
+            GridAdapter.ButtonItem(
+                text            = getString(R.string.config_factory_tms),
+                packageName     = "cfg_factory_tms",
+                backgroundColor = "#5D4037".toColorInt(),
+                iconDrawable    = ContextCompat.getDrawable(this, R.drawable.ic_tms_server),
+                onClickAction   = Runnable { showFactoryTmsDialog() }
             )
         )
 
@@ -413,6 +423,109 @@ class ConfigMenuActivity : AppCompatActivity() {
                 .setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f)
         }
         dlg.show()
+    }
+
+    private fun showFactoryTmsDialog() {
+        lifecycleScope.launch {
+            val status = withContext(Dispatchers.IO) {
+                FactoryTmsManager.status(this@ConfigMenuActivity)
+            }
+            val message = when (status.state) {
+                FactoryTmsState.ENABLED -> getString(R.string.factory_tms_status_enabled)
+                FactoryTmsState.DISABLED -> getString(R.string.factory_tms_status_disabled)
+                FactoryTmsState.NOT_INSTALLED -> getString(R.string.factory_tms_status_missing)
+                FactoryTmsState.DEVICE_OWNER_REQUIRED ->
+                    getString(R.string.factory_tms_status_owner_required)
+                FactoryTmsState.ERROR ->
+                    getString(R.string.factory_tms_status_error, status.code)
+            }
+
+            val builder = AlertDialog.Builder(this@ConfigMenuActivity)
+                .setTitle(R.string.factory_tms_title)
+                .setMessage(message)
+                .setNegativeButton(R.string.cancel, null)
+
+            when (status.state) {
+                FactoryTmsState.ENABLED -> builder.setPositiveButton(
+                    R.string.factory_tms_disable,
+                ) { _, _ ->
+                    requestPassword { confirmFactoryTmsDisable() }
+                }
+                FactoryTmsState.DISABLED -> builder.setPositiveButton(
+                    R.string.factory_tms_enable,
+                ) { _, _ ->
+                    requestPassword { applyFactoryTmsEnabled(true) }
+                }
+                else -> Unit
+            }
+            builder.show()
+        }
+    }
+
+    private fun confirmFactoryTmsDisable() {
+        AlertDialog.Builder(this)
+            .setTitle(R.string.factory_tms_disable)
+            .setMessage(R.string.factory_tms_disable_warning)
+            .setPositiveButton(R.string.factory_tms_disable_confirm) { _, _ ->
+                applyFactoryTmsEnabled(false)
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
+    private fun applyFactoryTmsEnabled(enabled: Boolean) {
+        lifecycleScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                FactoryTmsManager.setEnabled(this@ConfigMenuActivity, enabled)
+            }
+            val message = if (result.success) {
+                MainActivity.writeLog(
+                    "Factory Nexgo TMS ${if (enabled) "enabled" else "disabled"} " +
+                        "changed=${result.changed}",
+                )
+                if (enabled) {
+                    getString(R.string.factory_tms_updated_enabled)
+                } else {
+                    getString(R.string.factory_tms_updated_disabled)
+                }
+            } else {
+                MainActivity.writeLog(
+                    "Factory Nexgo TMS policy failed state=${result.status.state} " +
+                        "code=${result.code}",
+                )
+                getString(R.string.factory_tms_update_failed, result.code)
+            }
+            if (result.success && !enabled) {
+                showFactoryTmsRestartDialog(message)
+            } else {
+                showMsg(message)
+            }
+        }
+    }
+
+    private fun showFactoryTmsRestartDialog(message: String) {
+        AlertDialog.Builder(this)
+            .setTitle(R.string.factory_tms_title)
+            .setMessage(message)
+            .setPositiveButton(R.string.factory_tms_restart_now) { _, _ ->
+                try {
+                    val devicePolicyManager =
+                        getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+                    devicePolicyManager.reboot(TmsDeviceAdminReceiver.componentName(this))
+                } catch (exception: Exception) {
+                    MainActivity.writeLog(
+                        "Factory Nexgo TMS restart failed: ${exception.javaClass.simpleName}",
+                    )
+                    showMsg(
+                        getString(
+                            R.string.factory_tms_restart_failed,
+                            exception.javaClass.simpleName,
+                        ),
+                    )
+                }
+            }
+            .setNegativeButton(R.string.factory_tms_restart_later, null)
+            .show()
     }
 
     // ── Update action ─────────────────────────────────────────────────────────

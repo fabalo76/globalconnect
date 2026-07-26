@@ -21,8 +21,14 @@ class PinpadSettingsPasswordStore(context: Context) {
         if (hasCurrentDefaults) return
 
         val hasLegacyDefaults =
-            storedPassword1 == LEGACY_DEFAULT_PASSWORD_1_HASH &&
-                storedPassword2 == LEGACY_DEFAULT_PASSWORD_2_HASH
+            (
+                storedPassword1 == PREVIOUS_DEFAULT_PASSWORD_1_HASH &&
+                    storedPassword2 == DEFAULT_PASSWORD_2_HASH
+                ) ||
+                (
+                    storedPassword1 == LEGACY_DEFAULT_PASSWORD_1_HASH &&
+                        storedPassword2 == LEGACY_DEFAULT_PASSWORD_2_HASH
+                    )
         val hasCustomPasswords = storedPassword1 != null && storedPassword2 != null && !hasLegacyDefaults
         if (hasCustomPasswords) return
 
@@ -43,9 +49,11 @@ class PinpadSettingsPasswordStore(context: Context) {
         private const val KEY_PASSWORD_1_HASH = "password_1_hash"
         private const val KEY_PASSWORD_2_HASH = "password_2_hash"
         private const val DEFAULT_PASSWORD_1_HASH =
-            "C5EDC4E6D5173223A29CE46B7AECFC1B81EFA9338A3372238D6D3601420B84B0"
+            "C04D115972EADBAF9F396674DDDB2BC38ABB63A0BBA07C2823837B7A68BCD992"
         private const val DEFAULT_PASSWORD_2_HASH =
             "BF2CA90A2CDAF8A85FFB61412B672F4D1308A07D42788EED8B61FEC0DC54F188"
+        private const val PREVIOUS_DEFAULT_PASSWORD_1_HASH =
+            "C5EDC4E6D5173223A29CE46B7AECFC1B81EFA9338A3372238D6D3601420B84B0"
         private const val LEGACY_DEFAULT_PASSWORD_1_HASH =
             "0B067AD0654363FE6495780629B1E21B31E6419E0197DAB245532BCABB7AD06C"
         private const val LEGACY_DEFAULT_PASSWORD_2_HASH =

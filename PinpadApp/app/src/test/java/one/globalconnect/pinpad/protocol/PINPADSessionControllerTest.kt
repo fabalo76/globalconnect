@@ -5,6 +5,7 @@ import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class PINPADSessionControllerTest {
@@ -216,6 +217,24 @@ class PINPADSessionControllerTest {
         assertEquals(PINPADFrameType.Transaction, q7Response.frame.frameType)
         assertEquals("Q7", q7Response.frame.commandId)
         assertEquals("2", q7Response.frame.payloadAscii)
+    }
+
+    @Test
+    fun textToSpeechRejectsMalformedBase64Payload() {
+        val responses = controller.onInbound(
+            PINPADInbound.Frame(
+                PINPADFrame(
+                    PINPADFrameType.Transaction,
+                    "M17",
+                    "es-MX\u001Cnot-base64!".toByteArray(),
+                ),
+            ),
+        )
+
+        assertEquals(PINPADControl.ACK, responses[0].single())
+        val response = assertIs<PINPADFrameCodec.DecodeResult.Valid>(codec.decode(responses[1]))
+        assertEquals("M17", response.frame.commandId)
+        assertEquals("1", response.frame.payloadAscii)
     }
 
     @Test
@@ -484,6 +503,14 @@ class PINPADSessionControllerTest {
             CommandCase(PINPADFrameType.Transaction, "J8", "0"),
             CommandCase(PINPADFrameType.Transaction, "J9", "idle_logo"),
             CommandCase(PINPADFrameType.Transaction, "JA", "0"),
+            CommandCase(PINPADFrameType.Transaction, "M10"),
+            CommandCase(PINPADFrameType.Transaction, "M11"),
+            CommandCase(PINPADFrameType.Transaction, "M12", "0"),
+            CommandCase(PINPADFrameType.Transaction, "M13", "0\u001Cwelcome.mp3"),
+            CommandCase(PINPADFrameType.Transaction, "M14", "welcome.mp3"),
+            CommandCase(PINPADFrameType.Transaction, "M15", "50"),
+            CommandCase(PINPADFrameType.Transaction, "M16", "welcome.mp3"),
+            CommandCase(PINPADFrameType.Transaction, "M17", "es-MX\u001CSG9sYQ=="),
             CommandCase(PINPADFrameType.Transaction, "T01", "1"),
             CommandCase(PINPADFrameType.Transaction, "T03", "1"),
             CommandCase(PINPADFrameType.Transaction, "T05", "1"),
@@ -566,15 +593,47 @@ class PINPADSessionControllerTest {
     }
 
     @Test
-    fun baudRateChangeReturnsStatus() {
+    fun baudRateChangeCompletesOnlyAfterFinalEotIsReleased() {
         val responses = controller.onInbound(
-            PINPADInbound.Frame(PINPADFrame(PINPADFrameType.Administration, "13", "4".toByteArray())),
+            PINPADInbound.Frame(PINPADFrame(PINPADFrameType.Administration, "13", "81".toByteArray())),
         )
 
         assertEquals(PINPADControl.ACK, responses[0].single())
         val response = assertIs<PINPADFrameCodec.DecodeResult.Valid>(codec.decode(responses[1]))
         assertEquals("13", response.frame.commandId)
         assertEquals("0", response.frame.payloadAscii)
+        assertNull(controller.consumeCompletedSerialPortChange())
+
+        val finalResponses = controller.onInbound(PINPADInbound.Control(PINPADControl.ACK))
+
+        assertEquals(PINPADControl.EOT, finalResponses.single().single())
+        assertEquals(
+            SerialPortChange(baudRate = 115_200, dataBits = 8, stopBits = 1, parity = "N"),
+            controller.consumeCompletedSerialPortChange(),
+        )
+        assertNull(controller.consumeCompletedSerialPortChange())
+    }
+
+    @Test
+    fun baudRateChangeRejectsUnsupportedFlowControlMode() {
+        val responses = controller.onInbound(
+            PINPADInbound.Frame(PINPADFrame(PINPADFrameType.Administration, "13", "8A".toByteArray())),
+        )
+
+        val response = assertIs<PINPADFrameCodec.DecodeResult.Valid>(codec.decode(responses[1]))
+        assertEquals("1", response.frame.payloadAscii)
+        controller.onInbound(PINPADInbound.Control(PINPADControl.ACK))
+        assertNull(controller.consumeCompletedSerialPortChange())
+    }
+
+    @Test
+    fun baudRateChangeRejectsTrailingPayload() {
+        val responses = controller.onInbound(
+            PINPADInbound.Frame(PINPADFrame(PINPADFrameType.Administration, "13", "81X".toByteArray())),
+        )
+
+        val response = assertIs<PINPADFrameCodec.DecodeResult.Valid>(codec.decode(responses[1]))
+        assertEquals("1", response.frame.payloadAscii)
     }
 
     private open class FakeDeviceInfoProvider : PinpadDeviceInfoProvider {

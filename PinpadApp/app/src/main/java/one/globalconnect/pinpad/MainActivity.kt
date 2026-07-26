@@ -5,6 +5,7 @@ import android.content.Intent
 import android.graphics.BitmapFactory
 import android.media.AudioAttributes
 import android.media.AudioFormat
+import android.media.MediaPlayer
 import android.media.AudioTrack
 import android.net.ConnectivityManager
 import android.net.Network
@@ -18,6 +19,7 @@ import android.provider.Settings
 import android.util.Log
 import android.view.KeyEvent
 import android.widget.Toast
+import android.widget.VideoView
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.animation.core.RepeatMode
@@ -103,6 +105,7 @@ import com.mastercard.sonic.listeners.OnCompleteListener
 import com.mastercard.sonic.listeners.OnPrepareListener
 import com.mastercard.sonic.model.SonicMerchant
 import com.mastercard.sonic.widget.SonicView
+import com.nexgo.oaf.apiv3.SystemServiceHelper
 import one.globalconnect.pinpad.comms.PinpadSerialService
 import one.globalconnect.pinpad.config.DeviceModelConfig
 import one.globalconnect.pinpad.config.DeviceModelSpec
@@ -125,6 +128,7 @@ import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.atomic.AtomicBoolean
 
 private const val VISA_SENSORY_FALLBACK_MS = 5_000L
 private const val MASTERCARD_SENSORY_FALLBACK_MS = 12_000L
@@ -140,6 +144,7 @@ class MainActivity : ComponentActivity() {
     private var serialSettingsVersion by mutableStateOf(0)
     private var licenseAuthorized by mutableStateOf(false)
     private var licenseRegistering by mutableStateOf(false)
+    private var exitingToAndroidHome = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -149,6 +154,7 @@ class MainActivity : ComponentActivity() {
             this,
             (applicationContext as PinpadApplication).deviceInfoProvider.serialNumber(),
         )
+        PinpadTraceLog.device("application certificate valid=$licenseAuthorized")
         if (licenseAuthorized) {
             PinpadLicenseManager.setKioskMode(this, true)
             startService(Intent(this, PinpadSerialService::class.java))
@@ -191,9 +197,13 @@ class MainActivity : ComponentActivity() {
         if (licenseRegistering) return
         licenseRegistering = true
         val serial = (applicationContext as PinpadApplication).deviceInfoProvider.serialNumber()
+        PinpadTraceLog.device("application certificate provisioning requested serial=$serial")
         PinpadLicenseManager.requestLicense(this, serial) { success, error ->
             licenseRegistering = false
             licenseAuthorized = success
+            PinpadTraceLog.device(
+                "application certificate provisioning success=$success error=${error ?: "none"}",
+            )
             if (success) {
                 PinpadLicenseManager.setKioskMode(this, true)
                 startService(Intent(this, PinpadSerialService::class.java))
@@ -205,7 +215,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
-        if (hasFocus) {
+        if (hasFocus && !exitingToAndroidHome) {
             enterImmersiveFullscreen()
             applyNexgoSystemBarsLockedAsync(true)
         }
@@ -213,8 +223,10 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        enterImmersiveFullscreen()
-        applyNexgoSystemBarsLockedAsync(true)
+        if (!exitingToAndroidHome) {
+            enterImmersiveFullscreen()
+            applyNexgoSystemBarsLockedAsync(true)
+        }
     }
 
     @SuppressLint("RestrictedApi")
@@ -292,14 +304,19 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun exitToAndroidHome() {
+        if (exitingToAndroidHome) return
+        exitingToAndroidHome = true
+        settingsMenuVisible = false
+        serialSetupVisible = false
         PinpadLicenseManager.setKioskMode(this, false)
         val homeIntent = Intent(Intent.ACTION_MAIN).apply {
             addCategory(Intent.CATEGORY_HOME)
             flags = Intent.FLAG_ACTIVITY_NEW_TASK
         }
-        runWithNexgoSystemBarsUnlocked {
+        showAndroidSystemBars()
+        restoreNexgoNavigationControls {
             startActivity(homeIntent)
-            finish()
+            finishAndRemoveTask()
         }
     }
 
@@ -371,8 +388,50 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun runWithNexgoSystemBarsUnlocked(action: () -> Unit) {
+        showAndroidSystemBars()
         applyNexgoSystemBarsLockedAsync(false)
         Handler(Looper.getMainLooper()).postDelayed(action, SYSTEM_BAR_EXIT_DELAY_MS)
+    }
+
+    private fun showAndroidSystemBars() {
+        WindowCompat.setDecorFitsSystemWindows(window, true)
+        WindowInsetsControllerCompat(window, window.decorView).show(WindowInsetsCompat.Type.systemBars())
+    }
+
+    private fun restoreNexgoNavigationControls(action: () -> Unit) {
+        val completed = AtomicBoolean(false)
+        val mainHandler = Handler(Looper.getMainLooper())
+        fun complete() {
+            if (!completed.compareAndSet(false, true)) return
+            mainHandler.postDelayed(action, SYSTEM_BAR_EXIT_DELAY_MS)
+        }
+
+        mainHandler.postDelayed(::complete, NEXGO_NAVIGATION_RESTORE_TIMEOUT_MS)
+        Thread {
+            applyNexgoSystemBarsLocked(false)
+            runCatching {
+                val helper = SystemServiceHelper.getInstance()
+                helper.init(applicationContext)
+                helper.getSystemUIManager()?.apply {
+                    enableControlBar(true)
+                    enableMessageBar(true)
+                    enableHome(true)
+                    enableRecv(true)
+                }
+                (applicationContext as PinpadApplication).deviceEngine.platform.showNavigationBar()
+            }.onSuccess {
+                PinpadTraceLog.device("Nexgo Home and Recents controls restored")
+            }.onFailure {
+                Log.w(TAG, "Unable to restore Nexgo Home and Recents controls", it)
+                PinpadTraceLog.device("Nexgo navigation restore failed error=${it.message}")
+            }.also {
+                complete()
+            }
+        }.apply {
+            name = "PINPADNavigationRestore"
+            isDaemon = true
+            start()
+        }
     }
 
     private fun applyNexgoSystemBarsLockedAsync(locked: Boolean) {
@@ -408,6 +467,7 @@ class MainActivity : ComponentActivity() {
         private const val KEYPAD_LOG_TAG = "PinpadKeypad"
         private const val ENTER_ONE_SEQUENCE_WINDOW_MS = 4_000L
         private const val SYSTEM_BAR_EXIT_DELAY_MS = 250L
+        private const val NEXGO_NAVIGATION_RESTORE_TIMEOUT_MS = 1_500L
     }
 }
 
@@ -980,6 +1040,7 @@ private fun PinpadPromptContent(
         PinpadDisplayState.Idle -> PromptText(idleMessage)
         is PinpadDisplayState.Jpeg -> JpegPrompt(state.path)
         is PinpadDisplayState.JpegSequence -> JpegSequencePrompt(state.paths)
+        is PinpadDisplayState.Media -> MediaPrompt(state.path, state.video)
         is PinpadDisplayState.BrandSensory -> BrandSensoryPrompt(state.brand)
     }
 }
@@ -1402,6 +1463,75 @@ private fun JpegPrompt(path: String) {
     } else {
         PromptText(path.substringAfterLast('/').ifBlank { "JPEG" })
     }
+}
+
+@Composable
+private fun MediaPrompt(path: String, video: Boolean) {
+    if (video) {
+        VideoPrompt(path)
+    } else {
+        AudioPrompt(path)
+    }
+}
+
+@Composable
+private fun VideoPrompt(path: String) {
+    val context = LocalContext.current
+    val videoView = remember(path) { VideoView(context) }
+    DisposableEffect(videoView, path) {
+        videoView.setVideoPath(path)
+        videoView.setOnPreparedListener { player ->
+            player.isLooping = false
+            videoView.start()
+        }
+        videoView.setOnCompletionListener {
+            PinpadDisplayController.showIdle()
+        }
+        videoView.setOnErrorListener { _, what, extra ->
+            PinpadTraceLog.device("media video playback failed what=$what extra=$extra")
+            PinpadDisplayController.showIdle()
+            true
+        }
+        onDispose {
+            videoView.stopPlayback()
+            videoView.setOnPreparedListener(null)
+            videoView.setOnCompletionListener(null)
+            videoView.setOnErrorListener(null)
+        }
+    }
+    AndroidView(
+        factory = { videoView },
+        modifier = Modifier.fillMaxSize(),
+    )
+}
+
+@Composable
+private fun AudioPrompt(path: String) {
+    DisposableEffect(path) {
+        val player = MediaPlayer()
+        player.setOnPreparedListener { it.start() }
+        player.setOnCompletionListener {
+            PinpadDisplayController.showIdle()
+        }
+        player.setOnErrorListener { _, what, extra ->
+            PinpadTraceLog.device("media audio playback failed what=$what extra=$extra")
+            PinpadDisplayController.showIdle()
+            true
+        }
+        runCatching {
+            player.setDataSource(path)
+            player.prepareAsync()
+        }.onFailure {
+            PinpadTraceLog.device("media audio playback setup failed=${it.message}")
+            PinpadDisplayController.showIdle()
+        }
+        onDispose {
+            runCatching { player.stop() }
+            player.reset()
+            player.release()
+        }
+    }
+    PromptText(path.substringAfterLast('/').ifBlank { "MP3" })
 }
 
 @Composable
@@ -1972,6 +2102,7 @@ private fun PinpadStatusBar(
     val prefs = remember(context) { PinpadPreferences(context) }
     val modelName = remember(context) { (context.applicationContext as PinpadApplication).deviceInfoProvider.modelName() }
     val serialSettings = remember(serialSettingsVersion, modelName) { prefs.serialSettings(modelName) }
+    val usbSerialLabel = stringResource(R.string.setup_usb_serial)
     var dateTime by remember { mutableStateOf(formatDateTime()) }
 
     LaunchedEffect(Unit) {
@@ -2000,7 +2131,7 @@ private fun PinpadStatusBar(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                text = serialSettings.portDisplayText(),
+                text = serialSettings.portDisplayText(usbSerialLabel),
                 color = Color(0xFF8FD3FF),
                 fontSize = 16.sp,
                 fontWeight = FontWeight.SemiBold,
@@ -2011,11 +2142,10 @@ private fun PinpadStatusBar(
     }
 }
 
-private fun SerialSettings.portDisplayText(): String {
+private fun SerialSettings.portDisplayText(usbSerialLabel: String): String {
     return when (transportMode.uppercase()) {
         "RS232" -> "RS232:$rs232Port"
-        "USB_CDC" -> "USB"
-        else -> "AUTO"
+        else -> usbSerialLabel
     }
 }
 
@@ -2215,15 +2345,22 @@ private fun PinpadSetupScreen(
                 SetupCycleRow(
                     label = stringResource(R.string.setup_transport),
                     value = settings.transportMode,
+                    displayValue = if (settings.transportMode == "SERIAL") {
+                        stringResource(R.string.setup_usb_serial)
+                    } else {
+                        settings.transportMode
+                    },
                     values = TRANSPORT_MODES,
                     onChanged = { settings = settings.copy(transportMode = it) },
                 )
-                SetupCycleRow(
-                    label = stringResource(R.string.setup_rs232_port),
-                    value = settings.rs232Port.toString(),
-                    values = deviceSpec.serialPortOptions().map(Int::toString),
-                    onChanged = { settings = settings.copy(rs232Port = it.toInt()) },
-                )
+                if (settings.transportMode == "RS232") {
+                    SetupCycleRow(
+                        label = stringResource(R.string.setup_rs232_port),
+                        value = settings.rs232Port.toString(),
+                        values = deviceSpec.serialPortOptions().map(Int::toString),
+                        onChanged = { settings = settings.copy(rs232Port = it.toInt()) },
+                    )
+                }
                 SetupCycleRow(
                     label = stringResource(R.string.setup_baud_rate),
                     value = settings.baudRate.toString(),
@@ -2282,6 +2419,7 @@ private fun PinpadSetupScreen(
 private fun SetupCycleRow(
     label: String,
     value: String,
+    displayValue: String = value,
     values: List<String>,
     onChanged: (String) -> Unit,
 ) {
@@ -2307,7 +2445,7 @@ private fun SetupCycleRow(
         }
         Text(
             modifier = Modifier.weight(0.8f),
-            text = value,
+            text = displayValue,
             color = Color(0xFF8FD3FF),
             fontSize = 20.sp,
             textAlign = TextAlign.Center,
@@ -2332,7 +2470,7 @@ private fun List<String>.previousOf(value: String): String {
     return this[(index - 1 + size) % size]
 }
 
-private val TRANSPORT_MODES = listOf("AUTO", "RS232", "USB_CDC")
+private val TRANSPORT_MODES = listOf("SERIAL", "RS232")
 private val BAUD_RATES = listOf(9600, 19200, 38400, 57600, 115200, 230400)
 private val DATA_BITS = listOf(8, 7, 6, 5)
 private val STOP_BITS = listOf(1, 2)

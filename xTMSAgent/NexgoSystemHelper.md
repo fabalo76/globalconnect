@@ -158,7 +158,7 @@ for the full command table.
 
 ---
 
-## Action Items for UIC Home
+## Action Items for xTMSAgent
 
 ### Fix `ApplyDeviceBars()` NPE
 Use `init(context, listener)` and defer bar calls until `onInited`:
@@ -184,6 +184,24 @@ SystemServiceHelper.getInstance().getSystemManager()
     ?.setLauncher(packageName, true)
 ```
 
+### Manage the Factory Nexgo TMS
+
+The factory TMS package is `com.nexgo.xtms`. xTMSAgent manages it without
+uninstalling or clearing its data:
+
+1. As Device Owner, call `DevicePolicyManager.setApplicationHidden()` to
+   persist the administrator policy.
+2. Call `ISystemManager.setAppEnabled()` and `executeCmd("am force-stop …")`
+   so the N82 stops the persistent XTMS and MQTT services immediately.
+3. Reconcile the saved administrator preference after every xTMSAgent start.
+
+N82 validation showed that the hidden state survives reboot, prevents
+`XTMSService` and its Paho MQTT service from starting, and does not stop
+`com.xgd.possystemservice`. Re-enabling the package and starting
+`com.nexgo.xtms/.XTMSService` restores the factory service. Because XTMS is a
+firmware `PERSISTENT` app, the UI also offers a restart after disabling it in
+case a firmware revision does not terminate an already-running process.
+
 ### Promote to Device Owner via Root (if available)
 ```kotlin
 SystemServiceHelper.getInstance().getSystemManager()
@@ -200,8 +218,8 @@ SystemServiceHelper.getInstance().getSystemManager()
 - All interfaces extend `android.os.IInterface` (AIDL-generated).
 - The service is a **system-privileged** service — only apps with the right
   SELinux context or signature can bind. XTMS works because it ships as part
-  of the NEXGO firmware. UIC Home may need to be pre-installed as a system app
+  of the NEXGO firmware. xTMSAgent may need to be pre-installed as a system app
   (path 2 from the provisioning discussion) for full access.
-- `ISystemUIOperate` methods that currently NPE in UIC Home (`enableControlBar`,
+- `ISystemUIOperate` methods that currently NPE in xTMSAgent (`enableControlBar`,
   `showNavigationBar`) do so because the service connection hasn't completed by
   the time `onCreate` calls `ApplyDeviceBars()`.

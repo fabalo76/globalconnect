@@ -7,6 +7,14 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import one.globalconnect.pinpad.logging.PinpadTraceLog
 import one.globalconnect.pinpad.model.PinpadTransactionDisplay
+import one.globalconnect.pinpad.protocol.PinpadKeypadKey
+import one.globalconnect.pinpad.protocol.CameraFacing
+import one.globalconnect.pinpad.protocol.PhotoCaptureResult
+import one.globalconnect.pinpad.protocol.QrDisplayResult
+import one.globalconnect.pinpad.protocol.QrScanResult
+import one.globalconnect.pinpad.protocol.SignatureCaptureResult
+import one.globalconnect.pinpad.protocol.SignatureImageFormat
+import one.globalconnect.pinpad.protocol.SignatureOrientation
 
 object PinpadDisplayController {
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -55,12 +63,20 @@ object PinpadDisplayController {
     }
 
     fun showMessageThenIdle(text: String) {
+        showTemporaryMessage(text, PinpadDisplayState.Idle)
+    }
+
+    fun showMessageThenKeyInjectionMode(text: String) {
+        showTemporaryMessage(text, PinpadDisplayState.KeyInjectionMode)
+    }
+
+    private fun showTemporaryMessage(text: String, returnState: PinpadDisplayState) {
         clearContactlessLeds()
         val messageState = PinpadDisplayState.Message(text)
         updateState(messageState)
         mainHandler.postDelayed({
             if (state == messageState) {
-                state = PinpadDisplayState.Idle
+                updateState(returnState)
             }
         }, THANK_YOU_MS)
     }
@@ -175,6 +191,256 @@ object PinpadDisplayController {
         clearContactlessLeds()
         updateState(PinpadDisplayState.EnterPin(promptLines = promptLines.filter { it.isNotBlank() }))
     }
+
+    fun showKeyLoadAuthentication(
+        commandId: String,
+        password1Digits: Int,
+        password2Digits: Int,
+        activePassword: Int,
+        useOnScreenKeypad: Boolean,
+        message: KeyLoadAuthenticationMessage?,
+        onKey: (PinpadKeypadKey) -> Unit,
+    ) {
+        clearContactlessLeds()
+        updateState(
+            PinpadDisplayState.KeyLoadAuthentication(
+                commandId = commandId,
+                password1Digits = password1Digits,
+                password2Digits = password2Digits,
+                activePassword = activePassword,
+                useOnScreenKeypad = useOnScreenKeypad,
+                message = message,
+                onKey = onKey,
+            ),
+        )
+    }
+
+    fun showKeyInjectionMode() {
+        clearContactlessLeds()
+        updateState(PinpadDisplayState.KeyInjectionMode)
+    }
+
+    fun showSignatureCapture(
+        timeoutSeconds: Int,
+        orientation: SignatureOrientation,
+        imageFormat: SignatureImageFormat,
+        onResult: (SignatureCaptureResult) -> Unit,
+    ): Boolean {
+        val show = {
+            if (state.isVisualOperation()) {
+                false
+            } else {
+                clearContactlessLeds()
+                val captureState = PinpadDisplayState.SignatureCapture(
+                    timeoutSeconds = timeoutSeconds,
+                    orientation = orientation,
+                    imageFormat = imageFormat,
+                    onResult = onResult,
+                )
+                updateState(captureState)
+                mainHandler.postDelayed({
+                    if (state === captureState) {
+                        PinpadTraceLog.device("signature capture timed out")
+                        state = PinpadDisplayState.Idle
+                        captureState.onResult(SignatureCaptureResult.Timeout)
+                    }
+                }, timeoutSeconds * 1_000L)
+                true
+            }
+        }
+        return if (Looper.myLooper() == Looper.getMainLooper()) {
+            show()
+        } else {
+            if (state.isVisualOperation()) {
+                false
+            } else {
+                mainHandler.post { show() }
+                true
+            }
+        }
+    }
+
+    fun completeSignatureCapture(result: SignatureCaptureResult): Boolean {
+        val complete = {
+            val captureState = state as? PinpadDisplayState.SignatureCapture
+            if (captureState == null) {
+                false
+            } else {
+                PinpadTraceLog.device("signature capture completed result=${result::class.simpleName}")
+                state = PinpadDisplayState.Idle
+                captureState.onResult(result)
+                true
+            }
+        }
+        return if (Looper.myLooper() == Looper.getMainLooper()) {
+            complete()
+        } else {
+            val active = state is PinpadDisplayState.SignatureCapture
+            if (active) mainHandler.post { complete() }
+            active
+        }
+    }
+
+    fun dismissSignatureCapture(): Boolean {
+        val dismiss = {
+            if (state is PinpadDisplayState.SignatureCapture) {
+                PinpadTraceLog.device("signature capture dismissed")
+                state = PinpadDisplayState.Idle
+                true
+            } else {
+                false
+            }
+        }
+        return if (Looper.myLooper() == Looper.getMainLooper()) {
+            dismiss()
+        } else {
+            val active = state is PinpadDisplayState.SignatureCapture
+            if (active) mainHandler.post { dismiss() }
+            active
+        }
+    }
+
+    fun showPhotoCapture(
+        timeoutSeconds: Int,
+        facing: CameraFacing,
+        jpegQuality: Int,
+        onResult: (PhotoCaptureResult) -> Unit,
+    ): Boolean = showTimedVisualOperation(
+        timeoutSeconds = timeoutSeconds,
+        createState = {
+            PinpadDisplayState.PhotoCapture(timeoutSeconds, facing, jpegQuality, onResult)
+        },
+        timeoutResult = { state ->
+            (state as PinpadDisplayState.PhotoCapture).onResult(PhotoCaptureResult.Timeout)
+        },
+        description = "photo capture",
+    )
+
+    fun completePhotoCapture(result: PhotoCaptureResult): Boolean =
+        completeVisualOperation<PinpadDisplayState.PhotoCapture>("photo capture", result) {
+            it.onResult(result)
+        }
+
+    fun showQrDisplay(
+        timeoutSeconds: Int,
+        value: String,
+        onResult: (QrDisplayResult) -> Unit,
+    ): Boolean = showTimedVisualOperation(
+        timeoutSeconds = timeoutSeconds,
+        createState = { PinpadDisplayState.QrDisplay(timeoutSeconds, value, onResult) },
+        timeoutResult = { state ->
+            (state as PinpadDisplayState.QrDisplay).onResult(QrDisplayResult.Timeout)
+        },
+        description = "QR display",
+    )
+
+    fun completeQrDisplay(result: QrDisplayResult): Boolean =
+        completeVisualOperation<PinpadDisplayState.QrDisplay>("QR display", result) {
+            it.onResult(result)
+        }
+
+    fun showQrScan(
+        timeoutSeconds: Int,
+        facing: CameraFacing,
+        onResult: (QrScanResult) -> Unit,
+    ): Boolean = showTimedVisualOperation(
+        timeoutSeconds = timeoutSeconds,
+        createState = { PinpadDisplayState.QrScan(timeoutSeconds, facing, onResult) },
+        timeoutResult = { state ->
+            (state as PinpadDisplayState.QrScan).onResult(QrScanResult.Timeout)
+        },
+        description = "QR scan",
+    )
+
+    fun completeQrScan(result: QrScanResult): Boolean =
+        completeVisualOperation<PinpadDisplayState.QrScan>("QR scan", result) {
+            it.onResult(result)
+        }
+
+    fun dismissVisualOperation(): Boolean {
+        val dismiss = {
+            if (state.isVisualOperation()) {
+                PinpadTraceLog.device("visual operation dismissed state=${state::class.simpleName}")
+                state = PinpadDisplayState.Idle
+                true
+            } else {
+                false
+            }
+        }
+        return if (Looper.myLooper() == Looper.getMainLooper()) {
+            dismiss()
+        } else {
+            val active = state.isVisualOperation()
+            if (active) mainHandler.post { dismiss() }
+            active
+        }
+    }
+
+    private fun showTimedVisualOperation(
+        timeoutSeconds: Int,
+        createState: () -> PinpadDisplayState,
+        timeoutResult: (PinpadDisplayState) -> Unit,
+        description: String,
+    ): Boolean {
+        val show = {
+            if (state.isVisualOperation()) {
+                false
+            } else {
+                clearContactlessLeds()
+                val operationState = createState()
+                updateState(operationState)
+                mainHandler.postDelayed({
+                    if (state === operationState) {
+                        PinpadTraceLog.device("$description timed out")
+                        state = PinpadDisplayState.Idle
+                        timeoutResult(operationState)
+                    }
+                }, timeoutSeconds * 1_000L)
+                true
+            }
+        }
+        return if (Looper.myLooper() == Looper.getMainLooper()) {
+            show()
+        } else {
+            if (state.isVisualOperation()) {
+                false
+            } else {
+                mainHandler.post { show() }
+                true
+            }
+        }
+    }
+
+    private inline fun <reified T : PinpadDisplayState> completeVisualOperation(
+        description: String,
+        result: Any,
+        crossinline notify: (T) -> Unit,
+    ): Boolean {
+        val complete = {
+            val operationState = state as? T
+            if (operationState == null) {
+                false
+            } else {
+                PinpadTraceLog.device("$description completed result=${result::class.simpleName}")
+                state = PinpadDisplayState.Idle
+                notify(operationState)
+                true
+            }
+        }
+        return if (Looper.myLooper() == Looper.getMainLooper()) {
+            complete()
+        } else {
+            val active = state is T
+            if (active) mainHandler.post { complete() }
+            active
+        }
+    }
+
+    private fun PinpadDisplayState.isVisualOperation(): Boolean =
+        this is PinpadDisplayState.SignatureCapture ||
+            this is PinpadDisplayState.PhotoCapture ||
+            this is PinpadDisplayState.QrDisplay ||
+            this is PinpadDisplayState.QrScan
 
     fun updatePinDigits(count: Int) {
         val next = count.coerceAtLeast(0)
@@ -354,6 +620,38 @@ sealed interface PinpadDisplayState {
         val digits: Int = 0,
         val promptLines: List<String> = emptyList(),
     ) : PinpadDisplayState
+    data class KeyLoadAuthentication(
+        val commandId: String,
+        val password1Digits: Int,
+        val password2Digits: Int,
+        val activePassword: Int,
+        val useOnScreenKeypad: Boolean,
+        val message: KeyLoadAuthenticationMessage?,
+        val onKey: (PinpadKeypadKey) -> Unit,
+    ) : PinpadDisplayState
+    data object KeyInjectionMode : PinpadDisplayState
+    data class SignatureCapture(
+        val timeoutSeconds: Int,
+        val orientation: SignatureOrientation,
+        val imageFormat: SignatureImageFormat,
+        val onResult: (SignatureCaptureResult) -> Unit,
+    ) : PinpadDisplayState
+    data class PhotoCapture(
+        val timeoutSeconds: Int,
+        val facing: CameraFacing,
+        val jpegQuality: Int,
+        val onResult: (PhotoCaptureResult) -> Unit,
+    ) : PinpadDisplayState
+    data class QrDisplay(
+        val timeoutSeconds: Int,
+        val value: String,
+        val onResult: (QrDisplayResult) -> Unit,
+    ) : PinpadDisplayState
+    data class QrScan(
+        val timeoutSeconds: Int,
+        val facing: CameraFacing,
+        val onResult: (QrScanResult) -> Unit,
+    ) : PinpadDisplayState
     data object Processing : PinpadDisplayState
     data object BadRead : PinpadDisplayState
     data object Declined : PinpadDisplayState
@@ -377,6 +675,11 @@ enum class TextEntryEchoMode {
     Masked,
     Plain,
     Hidden,
+}
+
+sealed interface KeyLoadAuthenticationMessage {
+    data class InvalidPassword(val attemptsRemaining: Int) : KeyLoadAuthenticationMessage
+    data class Cooldown(val secondsRemaining: Long) : KeyLoadAuthenticationMessage
 }
 
 enum class ContactlessLedState(

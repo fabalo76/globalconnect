@@ -49,7 +49,7 @@ object NexgoSystemServiceInitializer {
 
 object NexgoDeviceOwnerProvisioner {
     private const val CT20P_DEVICE_OWNER_COMMAND = 702_108_171
-    private const val N82_DEVICE_OWNER_COMMAND = 802_108_171
+    private const val COMMAND_BASE_80_DEVICE_OWNER_COMMAND = 802_108_171
     private const val OWNER_VERIFICATION_ATTEMPTS = 20
     private const val OWNER_VERIFICATION_DELAY_MILLIS = 100L
     private val provisioningMutex = Mutex()
@@ -123,7 +123,7 @@ object NexgoDeviceOwnerProvisioner {
 
     internal fun deviceOwnerCommand(modelKey: String): Int? = when (modelKey) {
         "CT20P" -> CT20P_DEVICE_OWNER_COMMAND
-        "N82" -> N82_DEVICE_OWNER_COMMAND
+        "N6S", "N82" -> COMMAND_BASE_80_DEVICE_OWNER_COMMAND
         else -> null
     }
 

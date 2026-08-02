@@ -9,6 +9,10 @@ interface PinpadProtocolHandler {
 
     fun onKeypadKey(key: PinpadKeypadKey) = Unit
 
+    fun beginClearKeyInjectionMode() = Unit
+
+    fun endClearKeyInjectionMode(reason: String) = Unit
+
     fun shutdown() = Unit
 }
 

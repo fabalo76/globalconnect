@@ -37,6 +37,19 @@ Licensed applications can also request an allow-listed managed capability throug
 
 ---
 
+## Default Android Config Credentials
+
+On a fresh installation, the password-protected **Android Config** option uses both of these values:
+
+| Field | Default value |
+| --- | --- |
+| Password 1 | `22687075` |
+| Password 2 | `27071287` |
+
+Both passwords must be entered. Values already stored on the terminal, changed locally, or supplied by a TMS configuration override these defaults.
+
+---
+
 ## Architecture Overview
 
 ```
@@ -60,6 +73,16 @@ Key runtime pieces:
 - `params/ParamManager.kt` requests and applies effective configuration.
 - `mqtt/downloads/AwsDeviceDownloadManager.kt` handles signed download tasks.
 - `transactions/TransactionReportManager.kt` publishes payment-app transaction reports to Basic Ingest.
+
+When xTMSAgent is Device Owner, application tasks use Android `PackageInstaller`
+sessions as the primary silent installer. Session state is persisted so an
+xTMSAgent self-update can acknowledge the task after `MY_PACKAGE_REPLACED`
+starts the new process. The NEXGO SDK remains a compatibility fallback when
+Device Owner is unavailable or Android rejects the session. While a NEXGO
+callback is pending, xTMSAgent also polls PackageManager; a lost callback is
+accepted when Android confirms the requested or a newer version. Installer
+selection, status codes, retries, and failures are written to the local
+diagnostic log.
 
 ---
 
@@ -95,6 +118,7 @@ Remote control is aligned with the Global Connect ONE AWS design:
 - Global Connect ONE sends `remote_start` on `tms/device/{serial}/cmd` with `provider = "kinesis-webrtc"`.
 - The payload contains the Kinesis signaling channel ARN/name, `MASTER` WSS endpoint, ICE servers, and short-lived STS credentials.
 - xTMSAgent starts a foreground `mediaProjection` service, signs the Kinesis WSS URL with SigV4, and connects as the WebRTC `MASTER`.
+- The transparent MediaProjection permission activity runs in an isolated task. When permission handling finishes, Android returns to the application that was visible before remote control started instead of revealing the xTMSAgent launcher.
 - The portal connects as `VIEWER`; screen video flows through WebRTC and pointer/key events return on the `globalconnect-control` data channel.
 - No EC2, ECS, ALB, NAT Gateway, or custom relay is required by the Android client.
 
@@ -104,6 +128,11 @@ Key classes:
 - `remote/KinesisSignalingClient.kt` handles Kinesis SDP/ICE signaling.
 - `remote/KinesisWebRtcRemoteClient.kt` owns screen capture, peer connection, and control data channel.
 - `remote/RemoteInputHandler.kt` injects touch/key events through the accessibility service.
+
+The Kinesis signaling WebSocket sends a 20-second keepalive. Short signaling
+interruptions reconnect with bounded exponential backoff without immediately
+destroying the active WebRTC peer; an exhausted recovery still closes the
+session normally.
 
 ---
 
@@ -155,9 +184,40 @@ release receiver. To remove xTMSAgent from a development device:
 Release builds do not declare `testOnly` and remain protected while they are the
 device owner.
 
+### Recovering or updating a production device owner
+
+A device-owner application does not need to be removed before it is updated.
+Install or push the replacement APK over the existing package. The replacement
+must use the same application ID and signing certificate as the installed APK,
+and normally must have a higher version code.
+
+- If Global Connect ONE IoT is connected, push the new xTMSAgent version from
+  the application catalog. As Device Owner, xTMSAgent uses Android
+  `PackageInstaller` to replace the running package and resumes the task
+  acknowledgment from the replacement process.
+- If ADB was already enabled and authorized, `adb install -r <apk>` still works
+  when MTP file transfer is disabled. ADB and MTP are separate USB functions.
+- From xTMSAgent 2.1.2.48 onward, **Config > USB Config** can enable or disable
+  MTP/PTP after the Android Config passwords are entered. Debug builds allow
+  file transfer by default; release builds disable it by default.
+- If neither IoT updating nor authorized ADB is available, use Android's factory
+  reset flow. The analyzed Nexgo CT20P and N82 firmware use the factory-reset
+  password `334455`. N82 reads `ro.xgd.custom.pwd`; a customer-specific firmware
+  may override that property.
+
+Factory reset erases xTMSAgent, its Device Owner state, certificates, and local
+configuration. Use it only when an in-place, same-signer update is unavailable.
+
 ### Production signing
 
-Release APKs are never signed with the Android debug key. Configure the production key outside the repository through user-level Gradle properties (`%USERPROFILE%/.gradle/gradle.properties`) or environment variables:
+Release APKs are pre-signed with the Android debug key when no production
+keystore is configured because the Nexgo signing portal does not accept an
+unsigned APK. The APK returned by Nexgo must be signed with the same Nexgo
+production certificate for every update of an installed production package.
+
+If a production keystore is available locally, configure it outside the
+repository through user-level Gradle properties
+(`%USERPROFILE%/.gradle/gradle.properties`) or environment variables:
 
 ```properties
 XTMS_RELEASE_STORE_FILE=C:/secure/path/xtms-release.jks
@@ -172,7 +232,9 @@ Then build the required client flavor, for example:
 .\gradlew.bat assembleGlobalconnectRelease
 ```
 
-When these four values are absent, Gradle produces an explicitly `unsigned` release APK. Keep the same production key for every upgrade of a deployed application ID.
+When these four values are absent, Gradle produces a release APK pre-signed
+with the debug key for submission to the Nexgo signing portal. Keep the same
+final production key for every upgrade of a deployed application ID.
 
 **compileSdk:** 36  
 **minSdk:** 29

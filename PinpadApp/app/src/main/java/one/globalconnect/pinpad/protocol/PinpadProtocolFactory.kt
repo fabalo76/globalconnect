@@ -2,6 +2,7 @@ package one.globalconnect.pinpad.protocol
 
 import one.globalconnect.pinpad.PinpadApplication
 import one.globalconnect.pinpad.device.PinpadDeviceCommands
+import one.globalconnect.pinpad.security.PinpadKeyLoadAuthorizer
 
 object PinpadProtocolFactory {
     fun create(app: PinpadApplication, asyncResponseSender: (ByteArray) -> Unit = {}): PinpadProtocolHandler {
@@ -9,6 +10,7 @@ object PinpadProtocolFactory {
         val sessionController = PINPADSessionController(
             deviceInfoProvider = app.deviceInfoProvider,
             commandDevice = PinpadDeviceCommands(app, app.deviceEngine),
+            keyLoadAuthorizer = PinpadKeyLoadAuthorizer(app, app.deviceInfoProvider.modelName()),
             asyncResponseSender = { response -> handler.sendAsyncResponse(response) },
         )
         handler = LegacyPinpadProtocolHandler(

@@ -12,7 +12,9 @@ import one.globalconnect.pinpad.model.PinpadCommandResponse
 import one.globalconnect.pinpad.model.PinpadTransactionDisplay
 import one.globalconnect.pinpad.ui.PinpadDisplayController
 import one.globalconnect.pinpad.ui.TextEntryEchoMode
+import one.globalconnect.pinpad.security.KeyLoadAuthorizer
 import java.nio.charset.StandardCharsets
+import java.util.ArrayDeque
 import java.util.Base64
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledFuture
@@ -21,6 +23,7 @@ import java.util.concurrent.TimeUnit
 class PINPADSessionController(
     private val deviceInfoProvider: PinpadDeviceInfoProvider,
     private val commandDevice: PinpadDeviceCommands? = null,
+    private val keyLoadAuthorizer: KeyLoadAuthorizer? = null,
     private val codec: PINPADFrameCodec = PINPADFrameCodec(),
     private val asyncResponseSender: (ByteArray) -> Unit = {},
     private val includeFrameAckInResponses: Boolean = true,
@@ -40,6 +43,11 @@ class PINPADSessionController(
     }
     private var activeDataEntry: ActiveDataEntry? = null
     private var dataEntryTimeout: ScheduledFuture<*>? = null
+    private val packetTransferLock = Any()
+    private val pendingPacketFrames = ArrayDeque<ByteArray>()
+    @Volatile private var visualOperationInProgress = false
+    @Volatile private var packetTransferAwaitingAck = false
+    @Volatile private var packetTransferResponseCommand: String? = null
 
     fun onInbound(inbound: PINPADInbound): List<ByteArray> {
         val responses = when (inbound) {
@@ -68,6 +76,9 @@ class PINPADSessionController(
         pendingFinalEot = false
         communicationTestAwaitingEcho = false
         pendingSerialPortChange = null
+        clearPacketTransfer()
+        visualOperationInProgress = false
+        PinpadDisplayController.dismissVisualOperation()
         PinpadTraceLog.protocol("pending response aborted")
     }
 
@@ -87,17 +98,39 @@ class PINPADSessionController(
 
     fun cancelActiveOperation() {
         PinpadTraceLog.command("CANCEL", "physical cancel key")
+        if (keyLoadAuthorizer?.cancel() == true) return
+        if (PinpadDisplayController.completeSignatureCapture(SignatureCaptureResult.Cancelled)) return
+        if (PinpadDisplayController.completePhotoCapture(PhotoCaptureResult.Cancelled)) return
+        if (PinpadDisplayController.completeQrDisplay(QrDisplayResult.Cancelled)) return
+        if (PinpadDisplayController.completeQrScan(QrScanResult.Cancelled)) return
         transactionDisplayContext = null
         if (cancelActiveDataEntry(showCancelMessage = cancelMessageDisplayEnabled)) return
         val canceled = commandDevice?.cancelUserOperation(showCancelMessage = cancelMessageDisplayEnabled) == true
         if (!canceled) {
-            PinpadTraceLog.command("CANCEL", "ignored; no active operation")
+            // A Z2/Z3 display message is passive: there is no device operation for
+            // cancelUserOperation() to cancel. In that state the physical Cancel key
+            // acts as the legacy return-to-idle action and restores the configured
+            // idle prompt. Active entry, key injection, camera, signature, card and
+            // PIN operations have already been handled by the guards above.
+            PinpadTraceLog.command("CANCEL", "no active operation; restoring idle prompt")
+            PinpadDisplayController.showIdle()
         }
         pendingFinalEot = false
         communicationTestAwaitingEcho = false
     }
 
+    fun beginClearKeyInjectionMode() {
+        if (keyLoadAuthorizer?.beginClearKeyInjectionMode() != true) {
+            PinpadTraceLog.device("clear-key injection mode authorization request ignored")
+        }
+    }
+
+    fun endClearKeyInjectionMode(reason: String) {
+        keyLoadAuthorizer?.endClearKeyInjectionMode(reason)
+    }
+
     fun onKeypadKey(key: PinpadKeypadKey) {
+        if (keyLoadAuthorizer?.onKeypadKey(key) == true) return
         val entry = synchronized(dataEntryLock) { activeDataEntry }
         if (entry == null) {
             commandDevice?.handleKeypadKey(key)
@@ -111,6 +144,10 @@ class PINPADSessionController(
     }
 
     fun shutdown() {
+        keyLoadAuthorizer?.endClearKeyInjectionMode("service_shutdown")
+        visualOperationInProgress = false
+        clearPacketTransfer()
+        PinpadDisplayController.dismissVisualOperation()
         commandDevice?.shutdown()
         synchronized(dataEntryLock) {
             dataEntryTimeout?.cancel(false)
@@ -129,9 +166,28 @@ class PINPADSessionController(
             frame.commandId,
             "received frameType=${frame.frameType.name} payloadLen=${frame.payload.size}",
         )
+        val clearKeyInjectionModeActive =
+            keyLoadAuthorizer?.isClearKeyInjectionModeActive() == true
+        if (clearKeyInjectionModeActive && frame.commandId !in CLEAR_KEY_INJECTION_ALLOWED_COMMANDS) {
+            PinpadTraceLog.command(
+                frame.commandId,
+                "dropped while clear-key injection mode is active; responding EOT",
+            )
+            return listOf(byteArrayOf(PINPADControl.EOT))
+        }
+        if (!clearKeyInjectionModeActive && frame.commandId == CLEAR_KEY_COMMAND_ID) {
+            PinpadTraceLog.command(
+                frame.commandId,
+                "clear-key injection mode is not authorized; dropping command and responding EOT",
+            )
+            return listOf(byteArrayOf(PINPADControl.EOT))
+        }
         if (!frame.isSupportedCommand()) {
             PinpadTraceLog.command(frame.commandId, "unsupported message id frameType=${frame.frameType.name}; ignoring")
             return emptyList()
+        }
+        if (clearKeyInjectionModeActive) {
+            keyLoadAuthorizer?.recordClearKeyInjectionActivity()
         }
 
         if (communicationTestAwaitingEcho) {
@@ -160,22 +216,7 @@ class PINPADSessionController(
                     return newFrameResponseList(byteArrayOf(PINPADControl.EOT))
                 }
                 responses.sendAckBeforeSlowProcessing("02")
-                val result = if (keyId != null && commandDevice != null) {
-                    commandDevice.loadMasterKey(keyId, keyPayload)
-                } else {
-                    PinpadDeviceCommands.KeyLoadResult.Error('A')
-                }
-                when (result) {
-                    PinpadDeviceCommands.KeyLoadResult.Success -> {
-                        PinpadTraceLog.command("02", "load key result=SUCCESS response=echo")
-                        responses += codec.encode(frame)
-                    }
-                    is PinpadDeviceCommands.KeyLoadResult.Error -> {
-                        PinpadTraceLog.command("02", "load key result=ERROR code=${result.code}")
-                        responses += responseFrame("02", "?${result.code}")
-                    }
-                }
-                pendingFinalEot = true
+                responses += executeClearKeyLoad(frame, keyId, keyPayload)
             }
             "04" -> {
                 val keyId = request.payloadAscii.firstOrNull()
@@ -277,21 +318,14 @@ class PINPADSessionController(
                     return newFrameResponseList(byteArrayOf(PINPADControl.EOT))
                 }
                 responses.sendAckBeforeSlowProcessing("20")
-                val result = commandDevice?.loadSecretMasterKey(request.payloadAscii)
-                    ?: PinpadDeviceCommands.KeyLoadResult.Error('A')
-                when (result) {
-                    PinpadDeviceCommands.KeyLoadResult.Success -> {
-                        PinpadTraceLog.command("20", "load secret master key result=SUCCESS response=echo")
-                        responses += codec.encode(frame)
-                        responses += byteArrayOf(PINPADControl.EOT)
-                        pendingFinalEot = false
+                if (keyLoadAuthorizer?.requiresAuthorization("20") == true) {
+                    val started = keyLoadAuthorizer.requestAuthorization("20") { authorized ->
+                        completeSecretKeyLoad(frame, authorized, masterKey = true)
                     }
-                    is PinpadDeviceCommands.KeyLoadResult.Error -> {
-                        PinpadTraceLog.command("20", "load secret master key result=ERROR code=${result.code}")
-                        responses += byteArrayOf(PINPADControl.EOT)
-                        pendingFinalEot = false
-                    }
+                    if (!started) asyncResponseSender(byteArrayOf(PINPADControl.EOT))
+                    return responses
                 }
+                responses += executeSecretKeyLoad(frame, masterKey = true)
             }
             "21" -> {
                 val keyId = request.payloadAscii.firstOrNull()
@@ -304,21 +338,14 @@ class PINPADSessionController(
                     return newFrameResponseList(byteArrayOf(PINPADControl.EOT))
                 }
                 responses.sendAckBeforeSlowProcessing("21")
-                val result = commandDevice?.loadSecretSessionKey(request.payloadAscii)
-                    ?: PinpadDeviceCommands.KeyLoadResult.Error('A')
-                when (result) {
-                    PinpadDeviceCommands.KeyLoadResult.Success -> {
-                        PinpadTraceLog.command("21", "load secret session key result=SUCCESS response=echo")
-                        responses += codec.encode(frame)
-                        responses += byteArrayOf(PINPADControl.EOT)
-                        pendingFinalEot = false
+                if (keyLoadAuthorizer?.requiresAuthorization("21") == true) {
+                    val started = keyLoadAuthorizer.requestAuthorization("21") { authorized ->
+                        completeSecretKeyLoad(frame, authorized, masterKey = false)
                     }
-                    is PinpadDeviceCommands.KeyLoadResult.Error -> {
-                        PinpadTraceLog.command("21", "load secret session key result=ERROR code=${result.code}")
-                        responses += byteArrayOf(PINPADControl.EOT)
-                        pendingFinalEot = false
-                    }
+                    if (!started) asyncResponseSender(byteArrayOf(PINPADControl.EOT))
+                    return responses
                 }
+                responses += executeSecretKeyLoad(frame, masterKey = false)
             }
             "22",
             "23",
@@ -1003,6 +1030,110 @@ class PINPADSessionController(
                 responses += responseFrame(PINPADFrameType.Transaction, "M17", status.toString())
                 pendingFinalEot = true
             }
+            SignatureCaptureProtocol.REQUEST_COMMAND -> {
+                val signatureRequest = SignatureCaptureProtocol.parseRequest(request.payloadAscii)
+                PinpadTraceLog.command(
+                    SignatureCaptureProtocol.REQUEST_COMMAND,
+                    "capture request timeout=${signatureRequest?.timeoutSeconds} " +
+                        "orientation=${signatureRequest?.orientation} format=${signatureRequest?.imageFormat}",
+                )
+                responses.sendAckBeforeSlowProcessing(SignatureCaptureProtocol.REQUEST_COMMAND)
+                pendingFinalEot = false
+                if (signatureRequest == null || visualOperationInProgress || packetTransferAwaitingAck) {
+                    sendSignatureCaptureResult(SignatureCaptureResult.Error)
+                } else {
+                    visualOperationInProgress = true
+                    val started = PinpadDisplayController.showSignatureCapture(
+                        timeoutSeconds = signatureRequest.timeoutSeconds,
+                        orientation = signatureRequest.orientation,
+                        imageFormat = signatureRequest.imageFormat,
+                    ) { result ->
+                        visualOperationInProgress = false
+                        sendSignatureCaptureResult(result)
+                    }
+                    if (!started) {
+                        visualOperationInProgress = false
+                        sendSignatureCaptureResult(SignatureCaptureResult.Error)
+                    }
+                }
+            }
+            CameraQrProtocol.PHOTO_REQUEST_COMMAND -> {
+                val photoRequest = CameraQrProtocol.parsePhotoRequest(request.payloadAscii)
+                PinpadTraceLog.command(
+                    CameraQrProtocol.PHOTO_REQUEST_COMMAND,
+                    "capture request timeout=${photoRequest?.timeoutSeconds} " +
+                        "facing=${photoRequest?.facing} quality=${photoRequest?.jpegQuality}",
+                )
+                responses.sendAckBeforeSlowProcessing(CameraQrProtocol.PHOTO_REQUEST_COMMAND)
+                pendingFinalEot = false
+                if (photoRequest == null || visualOperationInProgress || packetTransferAwaitingAck) {
+                    sendPhotoCaptureResult(PhotoCaptureResult.Error)
+                } else {
+                    visualOperationInProgress = true
+                    val started = PinpadDisplayController.showPhotoCapture(
+                        timeoutSeconds = photoRequest.timeoutSeconds,
+                        facing = photoRequest.facing,
+                        jpegQuality = photoRequest.jpegQuality,
+                    ) { result ->
+                        visualOperationInProgress = false
+                        sendPhotoCaptureResult(result)
+                    }
+                    if (!started) {
+                        visualOperationInProgress = false
+                        sendPhotoCaptureResult(PhotoCaptureResult.Error)
+                    }
+                }
+            }
+            CameraQrProtocol.QR_DISPLAY_REQUEST_COMMAND -> {
+                val qrRequest = CameraQrProtocol.parseQrDisplayRequest(request.payloadAscii)
+                PinpadTraceLog.command(
+                    CameraQrProtocol.QR_DISPLAY_REQUEST_COMMAND,
+                    "display request timeout=${qrRequest?.timeoutSeconds} chars=${qrRequest?.value?.length ?: 0}",
+                )
+                responses.sendAckBeforeSlowProcessing(CameraQrProtocol.QR_DISPLAY_REQUEST_COMMAND)
+                pendingFinalEot = false
+                if (qrRequest == null || visualOperationInProgress || packetTransferAwaitingAck) {
+                    sendQrDisplayResult(QrDisplayResult.Error)
+                } else {
+                    visualOperationInProgress = true
+                    val started = PinpadDisplayController.showQrDisplay(
+                        timeoutSeconds = qrRequest.timeoutSeconds,
+                        value = qrRequest.value,
+                    ) { result ->
+                        visualOperationInProgress = false
+                        sendQrDisplayResult(result)
+                    }
+                    if (!started) {
+                        visualOperationInProgress = false
+                        sendQrDisplayResult(QrDisplayResult.Error)
+                    }
+                }
+            }
+            CameraQrProtocol.QR_SCAN_REQUEST_COMMAND -> {
+                val qrRequest = CameraQrProtocol.parseQrScanRequest(request.payloadAscii)
+                PinpadTraceLog.command(
+                    CameraQrProtocol.QR_SCAN_REQUEST_COMMAND,
+                    "scan request timeout=${qrRequest?.timeoutSeconds} facing=${qrRequest?.facing}",
+                )
+                responses.sendAckBeforeSlowProcessing(CameraQrProtocol.QR_SCAN_REQUEST_COMMAND)
+                pendingFinalEot = false
+                if (qrRequest == null || visualOperationInProgress || packetTransferAwaitingAck) {
+                    sendQrScanResult(QrScanResult.Error)
+                } else {
+                    visualOperationInProgress = true
+                    val started = PinpadDisplayController.showQrScan(
+                        timeoutSeconds = qrRequest.timeoutSeconds,
+                        facing = qrRequest.facing,
+                    ) { result ->
+                        visualOperationInProgress = false
+                        sendQrScanResult(result)
+                    }
+                    if (!started) {
+                        visualOperationInProgress = false
+                        sendQrScanResult(QrScanResult.Error)
+                    }
+                }
+            }
             "T01" -> {
                 PinpadTraceLog.command("T01", "load EMV terminal configuration")
                 val result = commandDevice?.loadEmvTerminalConfiguration(request.payloadAscii)
@@ -1369,6 +1500,29 @@ class PINPADSessionController(
                     pendingFinalEot = false
                 }
             }
+            "T90" -> {
+                PinpadTraceLog.command("T90", "apply A10 demo EMV configuration file")
+                val fields = request.payloadAscii.split(FS_CHAR, limit = 3)
+                val type = fields.getOrNull(0)?.singleOrNull()
+                val fileName = fields.getOrNull(1)?.decodeBase64Utf8OrNull()
+                val contents = fields.getOrNull(2)?.decodeBase64Utf8OrNull()
+                val result = if (
+                    type != null &&
+                    !fileName.isNullOrBlank() &&
+                    contents != null &&
+                    contents.toByteArray(StandardCharsets.UTF_8).size in 1..MAX_A10_DEMO_CONFIG_BYTES
+                ) {
+                    commandDevice?.applyA10DemoEmvConfiguration(type, fileName, contents)
+                } else {
+                    PinpadContactEmvController.EmvCommandResult.failure('2')
+                }
+                responses += responseFrame(
+                    PINPADFrameType.Transaction,
+                    "T91",
+                    emvSetupPayload(result) + FS_CHAR + fileName.orEmpty(),
+                )
+                pendingFinalEot = true
+            }
             else -> {
                 PinpadTraceLog.command(request.commandId, "unsupported message id; ignoring")
                 responses.clear()
@@ -1377,6 +1531,59 @@ class PINPADSessionController(
         applyFinalEotPolicy(request, responses)
         PinpadTraceLog.command(request.commandId, "responses=${responses.responseSummary()}")
         return responses
+    }
+
+    private fun executeClearKeyLoad(
+        frame: PINPADFrame,
+        keyId: Char?,
+        keyPayload: String,
+    ): ByteArray {
+        val result = if (keyId != null && commandDevice != null) {
+            commandDevice.loadMasterKey(keyId, keyPayload)
+        } else {
+            PinpadDeviceCommands.KeyLoadResult.Error('A')
+        }
+        return when (result) {
+            PinpadDeviceCommands.KeyLoadResult.Success -> {
+                PinpadTraceLog.command("02", "load key result=SUCCESS response=echo")
+                codec.encode(frame)
+            }
+            is PinpadDeviceCommands.KeyLoadResult.Error -> {
+                PinpadTraceLog.command("02", "load key result=ERROR code=${result.code}")
+                responseFrame("02", "?${result.code}")
+            }
+        }
+    }
+
+    private fun executeSecretKeyLoad(frame: PINPADFrame, masterKey: Boolean): List<ByteArray> {
+        val commandId = if (masterKey) "20" else "21"
+        val result = if (masterKey) {
+            commandDevice?.loadSecretMasterKey(frame.payloadAscii)
+        } else {
+            commandDevice?.loadSecretSessionKey(frame.payloadAscii)
+        } ?: PinpadDeviceCommands.KeyLoadResult.Error('A')
+
+        pendingFinalEot = false
+        return when (result) {
+            PinpadDeviceCommands.KeyLoadResult.Success -> {
+                PinpadTraceLog.command(commandId, "load secret key result=SUCCESS response=echo")
+                listOf(codec.encode(frame), byteArrayOf(PINPADControl.EOT))
+            }
+            is PinpadDeviceCommands.KeyLoadResult.Error -> {
+                PinpadTraceLog.command(commandId, "load secret key result=ERROR code=${result.code}")
+                listOf(byteArrayOf(PINPADControl.EOT))
+            }
+        }
+    }
+
+    private fun completeSecretKeyLoad(frame: PINPADFrame, authorized: Boolean, masterKey: Boolean) {
+        val commandId = if (masterKey) "20" else "21"
+        if (!authorized) {
+            PinpadTraceLog.command(commandId, "load secret key authorization rejected")
+            asyncResponseSender(byteArrayOf(PINPADControl.EOT))
+            return
+        }
+        executeSecretKeyLoad(frame, masterKey).forEach(asyncResponseSender)
     }
 
     private fun onCommunicationTestEcho(frame: PINPADFrame): List<ByteArray> {
@@ -1462,6 +1669,28 @@ class PINPADSessionController(
     }
 
     private fun onControl(control: Byte): List<ByteArray> {
+        if (control == PINPADControl.ACK && packetTransferAwaitingAck) {
+            val responseCommand = packetTransferResponseCommand.orEmpty()
+            val next = synchronized(packetTransferLock) {
+                if (pendingPacketFrames.isEmpty()) {
+                    packetTransferAwaitingAck = false
+                    packetTransferResponseCommand = null
+                    null
+                } else {
+                    pendingPacketFrames.removeFirst()
+                }
+            }
+            return if (next == null) {
+                PinpadTraceLog.command(responseCommand, "all packets acknowledged; sending EOT")
+                listOf(byteArrayOf(PINPADControl.EOT))
+            } else {
+                PinpadTraceLog.command(
+                    responseCommand,
+                    "sending next packet remaining=${synchronized(packetTransferLock) { pendingPacketFrames.size }}",
+                )
+                listOf(next)
+            }
+        }
         if (control == PINPADControl.ACK && pendingFinalEot) {
             pendingFinalEot = false
             completedSerialPortChange = pendingSerialPortChange
@@ -1473,8 +1702,88 @@ class PINPADSessionController(
             pendingFinalEot = false
             communicationTestAwaitingEcho = false
             pendingSerialPortChange = null
+            visualOperationInProgress = false
+            clearPacketTransfer()
+            PinpadDisplayController.dismissVisualOperation()
         }
         return emptyList()
+    }
+
+    private fun sendSignatureCaptureResult(result: SignatureCaptureResult) {
+        val payloads = runCatching { SignatureCaptureProtocol.responsePayloads(result) }
+            .getOrElse { error ->
+                PinpadTraceLog.command(
+                    SignatureCaptureProtocol.RESPONSE_COMMAND,
+                    "packet creation failed=${error.message}",
+                )
+                SignatureCaptureProtocol.responsePayloads(SignatureCaptureResult.Error)
+            }
+        PinpadTraceLog.command(
+            SignatureCaptureProtocol.RESPONSE_COMMAND,
+            "capture result=${result::class.simpleName} packets=${payloads.size}",
+        )
+        sendPacketTransfer(SignatureCaptureProtocol.RESPONSE_COMMAND, payloads)
+    }
+
+    private fun sendPhotoCaptureResult(result: PhotoCaptureResult) {
+        val payloads = runCatching { CameraQrProtocol.photoResponsePayloads(result) }
+            .getOrElse { error ->
+                PinpadTraceLog.command(
+                    CameraQrProtocol.PHOTO_RESPONSE_COMMAND,
+                    "packet creation failed=${error.message}",
+                )
+                CameraQrProtocol.photoResponsePayloads(PhotoCaptureResult.Error)
+            }
+        PinpadTraceLog.command(
+            CameraQrProtocol.PHOTO_RESPONSE_COMMAND,
+            "capture result=${result::class.simpleName} packets=${payloads.size}",
+        )
+        sendPacketTransfer(CameraQrProtocol.PHOTO_RESPONSE_COMMAND, payloads)
+    }
+
+    private fun sendQrDisplayResult(result: QrDisplayResult) {
+        val payload = CameraQrProtocol.qrDisplayResponsePayload(result)
+        PinpadTraceLog.command(
+            CameraQrProtocol.QR_DISPLAY_RESPONSE_COMMAND,
+            "display result=${result::class.simpleName}",
+        )
+        sendAsyncSingleResponse(CameraQrProtocol.QR_DISPLAY_RESPONSE_COMMAND, payload)
+    }
+
+    private fun sendQrScanResult(result: QrScanResult) {
+        val payload = CameraQrProtocol.qrScanResponsePayload(result)
+        PinpadTraceLog.command(
+            CameraQrProtocol.QR_SCAN_RESPONSE_COMMAND,
+            "scan result=${result::class.simpleName} payloadChars=${payload.length}",
+        )
+        sendAsyncSingleResponse(CameraQrProtocol.QR_SCAN_RESPONSE_COMMAND, payload)
+    }
+
+    private fun sendPacketTransfer(responseCommand: String, payloads: List<String>) {
+        val frames = payloads.map { payload ->
+            responseFrame(PINPADFrameType.Transaction, responseCommand, payload)
+        }
+        val first = synchronized(packetTransferLock) {
+            pendingPacketFrames.clear()
+            pendingPacketFrames.addAll(frames)
+            packetTransferResponseCommand = responseCommand
+            packetTransferAwaitingAck = pendingPacketFrames.isNotEmpty()
+            if (pendingPacketFrames.isEmpty()) null else pendingPacketFrames.removeFirst()
+        }
+        first?.let(asyncResponseSender)
+    }
+
+    private fun sendAsyncSingleResponse(responseCommand: String, payload: String) {
+        pendingFinalEot = true
+        asyncResponseSender(responseFrame(PINPADFrameType.Transaction, responseCommand, payload))
+    }
+
+    private fun clearPacketTransfer() {
+        synchronized(packetTransferLock) {
+            pendingPacketFrames.clear()
+            packetTransferAwaitingAck = false
+            packetTransferResponseCommand = null
+        }
     }
 
     private fun responseFrame(commandId: String, payloadAscii: String): ByteArray {
@@ -2093,6 +2402,12 @@ class PINPADSessionController(
         return if (firstOrNull() == '0') drop(1) else this
     }
 
+    private fun String.decodeBase64Utf8OrNull(): String? {
+        return runCatching {
+            String(Base64.getDecoder().decode(this), StandardCharsets.UTF_8)
+        }.getOrNull()
+    }
+
     private fun paymentSchemeFromAidData(aidData: String): String {
         val aid = aidData.substringAfter(PINPADControl.FS.toInt().toChar(), "")
             .substringAfter(PINPADControl.FS.toInt().toChar(), "")
@@ -2253,10 +2568,12 @@ class PINPADSessionController(
     }
 
     private companion object {
+        private const val CLEAR_KEY_COMMAND_ID = "02"
         private const val A10_FIRMWARE_PREFIX = "A10"
         private const val DEFAULT_FIRMWARE_SUB_VERSION = "00"
         private const val MAX_FIRMWARE_VERSION_LENGTH = 48
         private const val T28_MAX_ONLINE_AUTH_BYTES = 256
+        private const val MAX_A10_DEMO_CONFIG_BYTES = 256 * 1024
         private const val FS_CHAR = '\u001C'
         private const val SUB_CHAR = '\u001A'
         private const val RS_BYTE: Byte = 0x1E
@@ -2273,6 +2590,7 @@ class PINPADSessionController(
         private val KEY_USAGE_REGEX = Regex("[A-Z][0-9A-Z]")
         private val KEY_MODE_VALUES = setOf('B', 'C', 'D', 'E', 'G', 'N', 'S', 'V', 'X')
         private val KEY_ALGORITHM_VALUES = setOf('A', 'D', 'E', 'H', 'R', 'S', 'T')
+        private val CLEAR_KEY_INJECTION_ALLOWED_COMMANDS = setOf("02", "04", "06", "08")
         private val ADMINISTRATION_NO_FINAL_EOT_COMMANDS = setOf("11", "14")
         private val CPU_CARD_COMMANDS = (0..15).map { "I0%X".format(it) }.toSet() +
             setOf("I11", "I12", "I14", "I15", "I16", "I17")
@@ -2433,6 +2751,10 @@ class PINPADSessionController(
             "M15",
             "M16",
             "M17",
+            "S1",
+            "PH1",
+            "QR1",
+            "QR3",
             "T01",
             "T03",
             "T05",
@@ -2479,6 +2801,7 @@ class PINPADSessionController(
             "T75",
             "T77",
             "T81",
+            "T90",
             "60",
             "62",
             "63",

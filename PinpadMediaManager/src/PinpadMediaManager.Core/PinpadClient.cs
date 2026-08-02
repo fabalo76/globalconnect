@@ -5,25 +5,38 @@ using PinpadMediaManager.Core.Transport;
 
 namespace PinpadMediaManager.Core;
 
-public sealed class PinpadClient(IPinpadTransport transport) : IDisposable
+public sealed partial class PinpadClient(IPinpadTransport transport) : IDisposable
 {
     private readonly SemaphoreSlim _operationGate = new(1, 1);
+    private IPinpadTransport _transport = transport;
 
     public event Action<string>? Trace;
 
-    public bool IsConnected => transport.IsOpen;
-    public string PortName => transport.PortName;
-    public int BaudRate => transport.BaudRate;
+    public bool IsConnected => _transport.IsOpen;
+    public bool IsTcpConnection => _transport is TcpPinpadTransport;
+    public string PortName => _transport.PortName;
+    public int BaudRate => _transport.BaudRate;
 
     public void Connect(string portName, int baudRate)
     {
-        transport.Open(portName, baudRate);
+        if (_transport is TcpPinpadTransport)
+        {
+            ReplaceTransport(new SerialPinpadTransport());
+        }
+        _transport.Open(portName, baudRate);
         Log($"Connected to {portName} at {baudRate:N0} bps.");
+    }
+
+    public void ConnectTcp(string host, int port)
+    {
+        ReplaceTransport(new TcpPinpadTransport());
+        _transport.Open(host, port);
+        Log($"Connected to TCP pinpad {host}:{port}.");
     }
 
     public void Disconnect()
     {
-        transport.Close();
+        _transport.Close();
         Log("Disconnected.");
     }
 
@@ -43,7 +56,7 @@ public sealed class PinpadClient(IPinpadTransport transport) : IDisposable
         };
 
         await ExecuteAsync(PinpadFrameType.Administration, "13", $"{code}1", cancellationToken);
-        transport.ChangeBaudRate(baudRate);
+        _transport.ChangeBaudRate(baudRate);
         Log($"Local and terminal baud changed to {baudRate:N0} bps.");
     }
 
@@ -200,9 +213,128 @@ public sealed class PinpadClient(IPinpadTransport transport) : IDisposable
             "0");
     }
 
+    public async Task<SignatureCaptureResult> CaptureSignatureAsync(
+        int timeoutSeconds,
+        SignatureOrientation orientation,
+        SignatureImageFormat imageFormat,
+        IProgress<TransferProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (timeoutSeconds is < 5 or > 300)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(timeoutSeconds),
+                "Signature timeout must be between 5 and 300 seconds.");
+        }
+
+        await _operationGate.WaitAsync(cancellationToken);
+        try
+        {
+            return await Task.Run(
+                () => CaptureSignature(timeoutSeconds, orientation, imageFormat, progress, cancellationToken),
+                cancellationToken);
+        }
+        finally
+        {
+            _operationGate.Release();
+        }
+    }
+
+    public async Task<PhotoCaptureResult> CapturePhotoAsync(
+        int timeoutSeconds,
+        CameraFacing facing,
+        int jpegQuality,
+        IProgress<TransferProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateVisualTimeout(timeoutSeconds);
+        if (jpegQuality is < 10 or > 100)
+        {
+            throw new ArgumentOutOfRangeException(nameof(jpegQuality), "JPEG quality must be between 10 and 100.");
+        }
+
+        await _operationGate.WaitAsync(cancellationToken);
+        try
+        {
+            return await Task.Run(
+                () => CapturePhoto(timeoutSeconds, facing, jpegQuality, progress, cancellationToken),
+                cancellationToken);
+        }
+        finally
+        {
+            _operationGate.Release();
+        }
+    }
+
+    public async Task<QrOperationStatus> ShowQrCodeAsync(
+        string value,
+        int timeoutSeconds,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(value);
+        ValidateVisualTimeout(timeoutSeconds);
+        var valueBytes = Encoding.UTF8.GetBytes(value);
+        if (valueBytes.Length > 2_048)
+        {
+            throw new ArgumentOutOfRangeException(nameof(value), "QR content cannot exceed 2,048 UTF-8 bytes.");
+        }
+
+        await _operationGate.WaitAsync(cancellationToken);
+        try
+        {
+            return await Task.Run(
+                () =>
+                {
+                    var payload =
+                        $"{timeoutSeconds:D3}{PinpadControl.Fs}{Convert.ToBase64String(valueBytes)}";
+                    var response = ExecuteInteractiveRequest(
+                        "QR1",
+                        "QR2",
+                        payload,
+                        timeoutSeconds,
+                        cancellationToken);
+                    return ParseQrStatus(response.PayloadAscii);
+                },
+                cancellationToken);
+        }
+        finally
+        {
+            _operationGate.Release();
+        }
+    }
+
+    public async Task<QrScanResult> ScanQrCodeAsync(
+        int timeoutSeconds,
+        CameraFacing facing,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateVisualTimeout(timeoutSeconds);
+        await _operationGate.WaitAsync(cancellationToken);
+        try
+        {
+            return await Task.Run(
+                () =>
+                {
+                    var facingCode = facing == CameraFacing.Front ? 'F' : 'B';
+                    var response = ExecuteInteractiveRequest(
+                        "QR3",
+                        "QR4",
+                        $"{timeoutSeconds:D3}{PinpadControl.Fs}{facingCode}",
+                        timeoutSeconds,
+                        cancellationToken);
+                    return ParseQrScanResult(response.PayloadAscii);
+                },
+                cancellationToken);
+        }
+        finally
+        {
+            _operationGate.Release();
+        }
+    }
+
     public void Dispose()
     {
-        transport.Dispose();
+        _transport.Dispose();
         _operationGate.Dispose();
     }
 
@@ -223,6 +355,385 @@ public sealed class PinpadClient(IPinpadTransport transport) : IDisposable
         }
 
         Log($"{operation} completed ({sourceBytes:N0} bytes, {packets.Count:N0} packets).");
+    }
+
+    private SignatureCaptureResult CaptureSignature(
+        int timeoutSeconds,
+        SignatureOrientation orientation,
+        SignatureImageFormat imageFormat,
+        IProgress<TransferProgress>? progress,
+        CancellationToken cancellationToken)
+    {
+        if (!_transport.IsOpen)
+        {
+            throw new InvalidOperationException("Connect to a pinpad first.");
+        }
+
+        var orientationCode = orientation == SignatureOrientation.Horizontal ? 'H' : 'V';
+        var formatCode = imageFormat == SignatureImageFormat.Png ? 'P' : 'J';
+        var payload = $"{timeoutSeconds:D3}{PinpadControl.Fs}{orientationCode}{PinpadControl.Fs}{formatCode}";
+        var request = PinpadFrame.Ascii(PinpadFrameType.Transaction, "S1", payload);
+        var encoded = PinpadFrameCodec.Encode(request);
+        _transport.DiscardInput();
+
+        try
+        {
+            for (var attempt = 1; attempt <= 3; attempt++)
+            {
+                WriteWithTrace(encoded);
+                var control = ReadControl(AcknowledgementTimeout(encoded.Length), cancellationToken);
+                if (control == PinpadControl.Ack)
+                {
+                    break;
+                }
+
+                if (control != PinpadControl.Nak || attempt == 3)
+                {
+                    throw new PinpadProtocolException(
+                        $"The terminal did not acknowledge S1; received 0x{control:X2}.");
+                }
+            }
+
+            using var base64 = new MemoryStream();
+            var expectedPacket = 1;
+            var expectedTotal = 0;
+            var responseTimeout = TimeSpan.FromSeconds(timeoutSeconds + 15);
+            while (true)
+            {
+                var response = ReadFrame(responseTimeout, cancellationToken);
+                responseTimeout = TimeSpan.FromSeconds(15);
+                if (!string.Equals(response.CommandId, "S2", StringComparison.Ordinal))
+                {
+                    throw new PinpadProtocolException(
+                        $"Expected signature response S2, received {response.CommandId}.");
+                }
+
+                var packet = ParseSignaturePacket(response.PayloadAscii);
+                if (packet.Status != SignatureCaptureStatus.Captured)
+                {
+                    WriteWithTrace([PinpadControl.Ack]);
+                    ReadExpectedEot("S2", cancellationToken);
+                    return new SignatureCaptureResult(packet.Status, imageFormat, []);
+                }
+
+                if (packet.Packet != expectedPacket)
+                {
+                    throw new PinpadProtocolException(
+                        $"The terminal returned signature packet {packet.Packet}, expected {expectedPacket}.");
+                }
+
+                if (expectedTotal == 0)
+                {
+                    expectedTotal = packet.TotalPackets;
+                }
+                else if (packet.TotalPackets != expectedTotal)
+                {
+                    throw new PinpadProtocolException(
+                        $"Signature packet total changed from {expectedTotal} to {packet.TotalPackets}.");
+                }
+
+                var data = Encoding.ASCII.GetBytes(packet.Base64Data);
+                base64.Write(data);
+                progress?.Report(new TransferProgress("Signature capture", packet.Packet, packet.TotalPackets));
+                WriteWithTrace([PinpadControl.Ack]);
+                if (packet.Packet >= packet.TotalPackets)
+                {
+                    ReadExpectedEot("S2", cancellationToken);
+                    break;
+                }
+
+                expectedPacket++;
+            }
+
+            try
+            {
+                var imageBytes = Convert.FromBase64String(Encoding.ASCII.GetString(base64.ToArray()));
+                Log($"Signature capture completed ({imageBytes.LongLength:N0} bytes, {expectedTotal:N0} packets).");
+                return new SignatureCaptureResult(SignatureCaptureStatus.Captured, imageFormat, imageBytes);
+            }
+            catch (FormatException error)
+            {
+                throw new PinpadProtocolException($"The terminal returned invalid signature Base64 data: {error.Message}");
+            }
+        }
+        catch
+        {
+            TryEndSignatureSession();
+            throw;
+        }
+    }
+
+    private PhotoCaptureResult CapturePhoto(
+        int timeoutSeconds,
+        CameraFacing facing,
+        int jpegQuality,
+        IProgress<TransferProgress>? progress,
+        CancellationToken cancellationToken)
+    {
+        if (!_transport.IsOpen)
+        {
+            throw new InvalidOperationException("Connect to a pinpad first.");
+        }
+
+        var facingCode = facing == CameraFacing.Front ? 'F' : 'B';
+        var payload =
+            $"{timeoutSeconds:D3}{PinpadControl.Fs}{facingCode}{PinpadControl.Fs}{jpegQuality:D2}";
+        var request = PinpadFrame.Ascii(PinpadFrameType.Transaction, "PH1", payload);
+        var encoded = PinpadFrameCodec.Encode(request);
+        _transport.DiscardInput();
+
+        try
+        {
+            WriteRequestAndReadAck(encoded, "PH1", cancellationToken);
+            using var base64 = new MemoryStream();
+            var expectedPacket = 1;
+            var expectedTotal = 0;
+            var responseTimeout = TimeSpan.FromSeconds(timeoutSeconds + 15);
+            while (true)
+            {
+                var response = ReadFrame(responseTimeout, cancellationToken);
+                responseTimeout = TimeSpan.FromSeconds(15);
+                if (!string.Equals(response.CommandId, "PH2", StringComparison.Ordinal))
+                {
+                    throw new PinpadProtocolException(
+                        $"Expected photo response PH2, received {response.CommandId}.");
+                }
+
+                var packet = ParsePhotoPacket(response.PayloadAscii);
+                if (packet.Status != PhotoCaptureStatus.Captured)
+                {
+                    WriteWithTrace([PinpadControl.Ack]);
+                    ReadExpectedEot("PH2", cancellationToken);
+                    return new PhotoCaptureResult(packet.Status, []);
+                }
+
+                if (packet.Packet != expectedPacket)
+                {
+                    throw new PinpadProtocolException(
+                        $"The terminal returned photo packet {packet.Packet}, expected {expectedPacket}.");
+                }
+                if (expectedTotal == 0)
+                {
+                    expectedTotal = packet.TotalPackets;
+                }
+                else if (packet.TotalPackets != expectedTotal)
+                {
+                    throw new PinpadProtocolException(
+                        $"Photo packet total changed from {expectedTotal} to {packet.TotalPackets}.");
+                }
+
+                var data = Encoding.ASCII.GetBytes(packet.Base64Data);
+                base64.Write(data);
+                progress?.Report(new TransferProgress("Photo capture", packet.Packet, packet.TotalPackets));
+                WriteWithTrace([PinpadControl.Ack]);
+                if (packet.Packet >= packet.TotalPackets)
+                {
+                    ReadExpectedEot("PH2", cancellationToken);
+                    break;
+                }
+                expectedPacket++;
+            }
+
+            try
+            {
+                var jpegBytes = Convert.FromBase64String(Encoding.ASCII.GetString(base64.ToArray()));
+                Log($"Photo capture completed ({jpegBytes.LongLength:N0} bytes, {expectedTotal:N0} packets).");
+                return new PhotoCaptureResult(PhotoCaptureStatus.Captured, jpegBytes);
+            }
+            catch (FormatException error)
+            {
+                throw new PinpadProtocolException($"The terminal returned invalid photo Base64 data: {error.Message}");
+            }
+        }
+        catch
+        {
+            TryEndSignatureSession();
+            throw;
+        }
+    }
+
+    private PinpadFrame ExecuteInteractiveRequest(
+        string requestCommand,
+        string responseCommand,
+        string payload,
+        int timeoutSeconds,
+        CancellationToken cancellationToken)
+    {
+        if (!_transport.IsOpen)
+        {
+            throw new InvalidOperationException("Connect to a pinpad first.");
+        }
+        var encoded = PinpadFrameCodec.Encode(
+            PinpadFrame.Ascii(PinpadFrameType.Transaction, requestCommand, payload));
+        _transport.DiscardInput();
+        try
+        {
+            WriteRequestAndReadAck(encoded, requestCommand, cancellationToken);
+            var response = ReadFrame(TimeSpan.FromSeconds(timeoutSeconds + 15), cancellationToken);
+            if (!string.Equals(response.CommandId, responseCommand, StringComparison.Ordinal))
+            {
+                throw new PinpadProtocolException(
+                    $"Expected response {responseCommand}, received {response.CommandId}.");
+            }
+            WriteWithTrace([PinpadControl.Ack]);
+            ReadExpectedEot(responseCommand, cancellationToken);
+            return response;
+        }
+        catch
+        {
+            TryEndSignatureSession();
+            throw;
+        }
+    }
+
+    private void WriteRequestAndReadAck(
+        byte[] encoded,
+        string command,
+        CancellationToken cancellationToken)
+    {
+        for (var attempt = 1; attempt <= 3; attempt++)
+        {
+            WriteWithTrace(encoded);
+            var control = ReadControl(AcknowledgementTimeout(encoded.Length), cancellationToken);
+            if (control == PinpadControl.Ack)
+            {
+                return;
+            }
+            if (control != PinpadControl.Nak || attempt == 3)
+            {
+                throw new PinpadProtocolException(
+                    $"The terminal did not acknowledge {command}; received 0x{control:X2}.");
+            }
+        }
+    }
+
+    private static PhotoPacket ParsePhotoPacket(string payload)
+    {
+        if (payload.Length < 9 || payload[0] is < '1' or > '4')
+        {
+            throw new PinpadProtocolException("The terminal returned an invalid PH2 photo header.");
+        }
+        if (!int.TryParse(payload.AsSpan(1, 4), out var packet) ||
+            !int.TryParse(payload.AsSpan(5, 4), out var totalPackets))
+        {
+            throw new PinpadProtocolException("The terminal returned invalid PH2 packet numbers.");
+        }
+
+        var status = (PhotoCaptureStatus)(payload[0] - '0');
+        if (status == PhotoCaptureStatus.Captured)
+        {
+            if (packet < 1 || totalPackets < 1 || packet > totalPackets || payload.Length == 9)
+            {
+                throw new PinpadProtocolException("The terminal returned invalid captured-photo packet metadata.");
+            }
+        }
+        else if (packet != 0 || totalPackets != 0)
+        {
+            throw new PinpadProtocolException("A non-captured PH2 result must use zero packet numbers.");
+        }
+        return new PhotoPacket(status, packet, totalPackets, payload[9..]);
+    }
+
+    private static QrOperationStatus ParseQrStatus(string payload)
+    {
+        if (payload.Length != 1 || payload[0] is < '1' or > '4')
+        {
+            throw new PinpadProtocolException("The terminal returned an invalid QR operation status.");
+        }
+        return (QrOperationStatus)(payload[0] - '0');
+    }
+
+    private static QrScanResult ParseQrScanResult(string payload)
+    {
+        if (string.IsNullOrEmpty(payload))
+        {
+            throw new PinpadProtocolException("The terminal returned an empty QR4 response.");
+        }
+        var status = ParseQrStatus(payload[..1]);
+        if (status != QrOperationStatus.Completed)
+        {
+            if (payload.Length != 1)
+            {
+                throw new PinpadProtocolException("A non-completed QR4 response cannot contain QR data.");
+            }
+            return new QrScanResult(status, null);
+        }
+        if (payload.Length < 3 || payload[1] != PinpadControl.Fs)
+        {
+            throw new PinpadProtocolException("The completed QR4 response has no QR data.");
+        }
+        try
+        {
+            var value = Encoding.UTF8.GetString(Convert.FromBase64String(payload[2..]));
+            return new QrScanResult(status, value);
+        }
+        catch (FormatException error)
+        {
+            throw new PinpadProtocolException($"The terminal returned invalid QR Base64 data: {error.Message}");
+        }
+    }
+
+    private static void ValidateVisualTimeout(int timeoutSeconds)
+    {
+        if (timeoutSeconds is < 5 or > 300)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(timeoutSeconds),
+                "Visual operation timeout must be between 5 and 300 seconds.");
+        }
+    }
+
+    private static SignaturePacket ParseSignaturePacket(string payload)
+    {
+        if (payload.Length < 9 || payload[0] is < '1' or > '4')
+        {
+            throw new PinpadProtocolException("The terminal returned an invalid S2 signature header.");
+        }
+
+        if (!int.TryParse(payload.AsSpan(1, 4), out var packet) ||
+            !int.TryParse(payload.AsSpan(5, 4), out var totalPackets))
+        {
+            throw new PinpadProtocolException("The terminal returned invalid S2 packet numbers.");
+        }
+
+        var status = (SignatureCaptureStatus)(payload[0] - '0');
+        if (status == SignatureCaptureStatus.Captured)
+        {
+            if (packet < 1 || totalPackets < 1 || packet > totalPackets || payload.Length == 9)
+            {
+                throw new PinpadProtocolException("The terminal returned invalid captured-signature packet metadata.");
+            }
+        }
+        else if (packet != 0 || totalPackets != 0)
+        {
+            throw new PinpadProtocolException("A non-captured S2 result must use zero packet numbers.");
+        }
+
+        return new SignaturePacket(status, packet, totalPackets, payload[9..]);
+    }
+
+    private void ReadExpectedEot(string command, CancellationToken cancellationToken)
+    {
+        var eot = ReadControl(TimeSpan.FromSeconds(5), cancellationToken);
+        if (eot != PinpadControl.Eot)
+        {
+            throw new PinpadProtocolException($"Expected EOT after {command}, received 0x{eot:X2}.");
+        }
+    }
+
+    private void TryEndSignatureSession()
+    {
+        try
+        {
+            if (_transport.IsOpen)
+            {
+                WriteWithTrace([PinpadControl.Eot]);
+            }
+        }
+        catch
+        {
+            // Preserve the original capture/transport failure.
+        }
     }
 
     private async Task<byte[]> ReceiveUploadPacketsAsync(
@@ -311,19 +822,18 @@ public sealed class PinpadClient(IPinpadTransport transport) : IDisposable
         bool expectResponse,
         CancellationToken cancellationToken)
     {
-        if (!transport.IsOpen)
+        if (!_transport.IsOpen)
         {
             throw new InvalidOperationException("Connect to a pinpad first.");
         }
 
-        transport.DiscardInput();
+        _transport.DiscardInput();
         var request = PinpadFrame.Ascii(type, command, payload);
         var encoded = PinpadFrameCodec.Encode(request);
-        Log($"> {command} {DescribePayload(payload)}");
 
         for (var attempt = 1; attempt <= 3; attempt++)
         {
-            transport.Write(encoded);
+            WriteWithTrace(encoded);
             var control = ReadControl(AcknowledgementTimeout(encoded.Length), cancellationToken);
             if (control == PinpadControl.Ack)
             {
@@ -339,7 +849,6 @@ public sealed class PinpadClient(IPinpadTransport transport) : IDisposable
 
         if (!expectResponse)
         {
-            Log($"< {command} ACK");
             return PinpadFrame.Ascii(type, command);
         }
 
@@ -350,7 +859,7 @@ public sealed class PinpadClient(IPinpadTransport transport) : IDisposable
                 $"Expected response {command}, received {response.CommandId}.");
         }
 
-        transport.Write([PinpadControl.Ack]);
+        WriteWithTrace([PinpadControl.Ack]);
         if (response.Type == PinpadFrameType.Administration)
         {
             byte eot;
@@ -371,26 +880,27 @@ public sealed class PinpadClient(IPinpadTransport transport) : IDisposable
             }
         }
 
-        Log($"< {response.CommandId} {DescribePayload(response.PayloadAscii)}");
         return response;
     }
 
     private TimeSpan AcknowledgementTimeout(int frameBytes)
     {
-        var baudRate = Math.Max(transport.BaudRate, 1);
+        var baudRate = Math.Max(_transport.BaudRate, 1);
         var transmissionSeconds = frameBytes * 10d / baudRate;
         return TimeSpan.FromSeconds(Math.Max(4d, transmissionSeconds + 2d));
     }
 
     private byte ReadControl(TimeSpan timeout, CancellationToken cancellationToken)
     {
-        var value = transport.ReadByte(timeout, cancellationToken);
-        return checked((byte)value);
+        var value = _transport.ReadByte(timeout, cancellationToken);
+        var control = checked((byte)value);
+        Log($"RX {PinpadProtocolText.FormatBytes([control])}");
+        return control;
     }
 
     private PinpadFrame ReadFrame(TimeSpan timeout, CancellationToken cancellationToken)
     {
-        var start = transport.ReadByte(timeout, cancellationToken);
+        var start = _transport.ReadByte(timeout, cancellationToken);
         while (start is not (PinpadControl.Stx or PinpadControl.Si))
         {
             if (start is PinpadControl.Nak or PinpadControl.Eot)
@@ -398,7 +908,7 @@ public sealed class PinpadClient(IPinpadTransport transport) : IDisposable
                 throw new PinpadProtocolException($"The terminal ended the response with 0x{start:X2}.");
             }
 
-            start = transport.ReadByte(timeout, cancellationToken);
+            start = _transport.ReadByte(timeout, cancellationToken);
         }
 
         var end = start == PinpadControl.Stx ? PinpadControl.Etx : PinpadControl.So;
@@ -406,11 +916,11 @@ public sealed class PinpadClient(IPinpadTransport transport) : IDisposable
         frame.WriteByte((byte)start);
         while (true)
         {
-            var value = transport.ReadByte(timeout, cancellationToken);
+            var value = _transport.ReadByte(timeout, cancellationToken);
             frame.WriteByte((byte)value);
             if (value == end)
             {
-                frame.WriteByte((byte)transport.ReadByte(timeout, cancellationToken));
+                frame.WriteByte((byte)_transport.ReadByte(timeout, cancellationToken));
                 break;
             }
 
@@ -420,7 +930,10 @@ public sealed class PinpadClient(IPinpadTransport transport) : IDisposable
             }
         }
 
-        return PinpadFrameCodec.Decode(frame.ToArray());
+        var encoded = frame.ToArray();
+        var decoded = PinpadFrameCodec.Decode(encoded);
+        Log($"RX {FormatTraceFrame(encoded, decoded)}");
+        return decoded;
     }
 
     private static void EnsureStatus(PinpadFrame response, string command, params string[] accepted)
@@ -432,6 +945,18 @@ public sealed class PinpadClient(IPinpadTransport transport) : IDisposable
                 $"{command} failed with terminal status '{status}'.");
         }
     }
+
+    private sealed record SignaturePacket(
+        SignatureCaptureStatus Status,
+        int Packet,
+        int TotalPackets,
+        string Base64Data);
+
+    private sealed record PhotoPacket(
+        PhotoCaptureStatus Status,
+        int Packet,
+        int TotalPackets,
+        string Base64Data);
 
     private static void EnsureAllStatuses(string payload, string command)
     {
@@ -484,6 +1009,45 @@ public sealed class PinpadClient(IPinpadTransport transport) : IDisposable
         var visible = payload.Replace(PinpadControl.Fs.ToString(), "<FS>");
         return visible.Length <= 120 ? visible : $"{visible[..120]}… ({payload.Length:N0} chars)";
     }
+
+    private void ReplaceTransport(IPinpadTransport replacement)
+    {
+        _transport.Close();
+        _transport.Dispose();
+        _transport = replacement;
+    }
+
+    private void WriteWithTrace(ReadOnlySpan<byte> data)
+    {
+        var formatted = PinpadProtocolText.FormatBytes(data);
+        if (data.Length >= 5 && data[0] is PinpadControl.Stx or PinpadControl.Si)
+        {
+            try
+            {
+                var frame = PinpadFrameCodec.Decode(data);
+                formatted = FormatTraceFrame(data, frame);
+            }
+            catch (PinpadProtocolException)
+            {
+                // Preserve normal trace output for partial or intentionally non-frame writes.
+            }
+        }
+        Log($"TX {formatted}");
+        _transport.Write(data);
+    }
+
+    private static string FormatTraceFrame(ReadOnlySpan<byte> encoded, PinpadFrame frame)
+    {
+        if (!SensitiveTraceCommands.Contains(frame.CommandId)) return PinpadProtocolText.FormatBytes(encoded);
+        var start = frame.Type == PinpadFrameType.Transaction ? "<STX>" : "<SI>";
+        var end = frame.Type == PinpadFrameType.Transaction ? "<ETX>" : "<SO>";
+        return $"{start}{frame.CommandId}<REDACTED:{frame.Payload.Length} bytes>{end}<LRC:{encoded[^1]:X2}>";
+    }
+
+    private static readonly HashSet<string> SensitiveTraceCommands = new(StringComparer.Ordinal)
+    {
+        "02", "20", "21", "70", "71", "78", "90", "94", "Z60", "Z62",
+    };
 
     private void Log(string message) => Trace?.Invoke($"{DateTime.Now:HH:mm:ss.fff}  {message}");
 }

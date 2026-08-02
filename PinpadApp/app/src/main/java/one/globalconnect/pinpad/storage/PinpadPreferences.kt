@@ -1,6 +1,7 @@
 package one.globalconnect.pinpad.storage
 
 import android.content.Context
+import one.globalconnect.pinpad.BuildConfig
 import one.globalconnect.pinpad.config.DeviceModelConfig
 
 class PinpadPreferences(context: Context) {
@@ -42,7 +43,7 @@ class PinpadPreferences(context: Context) {
         val modelDefaultPort = DeviceModelConfig.getSerialPort(modelName)
         return SerialSettings(
             transportMode = normalizeTransportMode(
-                prefs.getString(KEY_TRANSPORT_MODE, null) ?: DEFAULT_TRANSPORT_MODE,
+                prefs.getString(KEY_TRANSPORT_MODE, null) ?: BuildConfig.SERIAL_TRANSPORT,
             ),
             rs232Port = if (prefs.contains(KEY_RS232_PORT)) {
                 prefs.getInt(KEY_RS232_PORT, modelDefaultPort)
@@ -51,6 +52,7 @@ class PinpadPreferences(context: Context) {
             },
             usbVid = prefs.getInt(KEY_USB_VID, DEFAULT_USB_VID),
             usbPid = prefs.getInt(KEY_USB_PID, DEFAULT_USB_PID),
+            tcpPort = prefs.getInt(KEY_TCP_PORT, DEFAULT_TCP_PORT).coerceIn(1, 65_535),
             baudRate = prefs.getInt(KEY_BAUD_RATE, DEFAULT_BAUD_RATE),
             dataBits = prefs.getInt(KEY_DATA_BITS, DEFAULT_DATA_BITS),
             stopBits = prefs.getInt(KEY_STOP_BITS, DEFAULT_STOP_BITS),
@@ -64,6 +66,7 @@ class PinpadPreferences(context: Context) {
             .putInt(KEY_RS232_PORT, settings.rs232Port)
             .putInt(KEY_USB_VID, settings.usbVid)
             .putInt(KEY_USB_PID, settings.usbPid)
+            .putInt(KEY_TCP_PORT, settings.tcpPort.coerceIn(1, 65_535))
             .putInt(KEY_BAUD_RATE, settings.baudRate)
             .putInt(KEY_DATA_BITS, settings.dataBits)
             .putInt(KEY_STOP_BITS, settings.stopBits)
@@ -169,6 +172,7 @@ class PinpadPreferences(context: Context) {
         private const val KEY_RS232_PORT = "rs232_port"
         private const val KEY_USB_VID = "usb_vid"
         private const val KEY_USB_PID = "usb_pid"
+        private const val KEY_TCP_PORT = "tcp_port"
         private const val KEY_BAUD_RATE = "baud_rate"
         private const val KEY_DATA_BITS = "data_bits"
         private const val KEY_STOP_BITS = "stop_bits"
@@ -192,9 +196,9 @@ class PinpadPreferences(context: Context) {
         private const val MIFARE_KEY_PAIR_LENGTH = MIFARE_KEY_LENGTH * 2
         private val MIFARE_KEY_SLOT_RANGE = 0..255
 
-        private const val DEFAULT_TRANSPORT_MODE = "SERIAL"
         private const val DEFAULT_USB_VID = 0x6352
         private const val DEFAULT_USB_PID = 0x294A
+        const val DEFAULT_TCP_PORT = 9100
         private const val DEFAULT_BAUD_RATE = 9600
         private const val DEFAULT_DATA_BITS = 8
         private const val DEFAULT_STOP_BITS = 1
@@ -227,6 +231,7 @@ class PinpadPreferences(context: Context) {
 internal fun normalizeTransportMode(value: String?): String {
     return when (value?.trim()?.uppercase()) {
         "RS232" -> "RS232"
+        "IP", "TCP", "TCP_IP" -> "IP"
         "SERIAL", "USB_CDC", "AUTO" -> "SERIAL"
         else -> "SERIAL"
     }
@@ -242,6 +247,7 @@ data class SerialSettings(
     val rs232Port: Int,
     val usbVid: Int,
     val usbPid: Int,
+    val tcpPort: Int,
     val baudRate: Int,
     val dataBits: Int,
     val stopBits: Int,

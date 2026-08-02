@@ -4,8 +4,12 @@ import android.app.admin.DeviceAdminReceiver
 import android.app.admin.DevicePolicyManager
 import android.content.ComponentName
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.os.UserManager
 import android.util.Log
+import one.globalconnect.xtmsagent.diagnostics.NexgoDiagnosticsManager
+import one.globalconnect.xtmsagent.policy.UsbFileTransferManager
 
 private const val TAG = "TmsDeviceAdmin"
 
@@ -60,13 +64,63 @@ class TmsDeviceAdminReceiver : DeviceAdminReceiver() {
                 Log.w(TAG, "Failed to apply DISALLOW_CONFIG_TETHERING: ${e.message}")
             }
 
-            // Prevent operators from switching USB connection to file transfer (MTP/PTP).
-            // The USB mode selector in the notification shade / Settings becomes unavailable.
+            // Development builds allow MTP/PTP by default. Production builds lock it by
+            // default, but an authenticated operator can change it from Config > USB Config.
+            val usbResult = UsbFileTransferManager.applyStoredPolicy(context)
+            if (!usbResult.success) {
+                Log.w(TAG, "Failed to apply USB file-transfer policy: ${usbResult.code}")
+            }
+
+            ensureDefaultHome(context, dpm, admin)
+        }
+
+        /**
+         * Makes xTMSAgent the persistent HOME application while it is device owner.
+         *
+         * Unlike the normal Android launcher chooser, this policy survives reboots and
+         * application updates and does not require an operator to confirm the selection.
+         */
+        private fun ensureDefaultHome(
+            context: Context,
+            dpm: DevicePolicyManager,
+            admin: ComponentName,
+        ) {
+            val homeFilter = IntentFilter(Intent.ACTION_MAIN).apply {
+                addCategory(Intent.CATEGORY_HOME)
+                addCategory(Intent.CATEGORY_DEFAULT)
+            }
+            val homeActivity = ComponentName(context, MainActivity::class.java)
+
             try {
-                dpm.addUserRestriction(admin, UserManager.DISALLOW_USB_FILE_TRANSFER)
-                Log.i(TAG, "DISALLOW_USB_FILE_TRANSFER applied — USB file transfer locked off")
+                dpm.addPersistentPreferredActivity(admin, homeFilter, homeActivity)
+                val resolvedHome = context.packageManager.resolveActivity(
+                    Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME),
+                    0,
+                )?.activityInfo
+                val resolvedComponent = resolvedHome?.let {
+                    ComponentName(it.packageName, it.name)
+                }
+                if (resolvedComponent == homeActivity) {
+                    Log.i(TAG, "xTMSAgent is the persistent default HOME application")
+                    NexgoDiagnosticsManager.record(context, "defaultHome success=true")
+                } else {
+                    Log.w(
+                        TAG,
+                        "Persistent HOME policy applied but Android resolves HOME to " +
+                            (resolvedComponent?.flattenToShortString() ?: "none"),
+                    )
+                    NexgoDiagnosticsManager.record(
+                        context,
+                        "defaultHome success=false resolved=" +
+                            (resolvedComponent?.flattenToShortString() ?: "none"),
+                    )
+                }
             } catch (e: Exception) {
-                Log.w(TAG, "Failed to apply DISALLOW_USB_FILE_TRANSFER: ${e.message}")
+                Log.e(TAG, "Failed to set xTMSAgent as persistent HOME: ${e.message}", e)
+                NexgoDiagnosticsManager.record(
+                    context,
+                    "defaultHome success=false error=${e.message}",
+                )
             }
         }
 

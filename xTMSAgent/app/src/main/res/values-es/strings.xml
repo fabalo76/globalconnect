@@ -61,7 +61,18 @@
     <string name="config_diagnostics">Diagnóstico</string>
     <string name="config_network">Móvil / SIM</string>
     <string name="config_factory_tms">TMS Nexgo de fábrica</string>
+    <string name="config_usb">Config. USB</string>
     <string name="config_back">Volver</string>
+    <string name="usb_config_title">Transferencia de archivos USB</string>
+    <string name="usb_config_status_enabled">Habilitada. Una computadora conectada puede seleccionar Transferencia de archivos (MTP/PTP).</string>
+    <string name="usb_config_status_disabled">Deshabilitada por xTMSAgent. La carga y las demás funciones USB configuradas permanecen disponibles.</string>
+    <string name="usb_config_owner_required">xTMSAgent debe ser el propietario del dispositivo para administrar la transferencia de archivos USB.</string>
+    <string name="usb_config_enable">Habilitar transferencia</string>
+    <string name="usb_config_disable">Deshabilitar transferencia</string>
+    <string name="usb_config_enable_warning">Habilitar la transferencia USB permite que una computadora conectada físicamente intercambie archivos con la terminal. ¿Desea continuar?</string>
+    <string name="usb_config_updated_enabled">La transferencia de archivos USB está habilitada. Reconecte el cable USB si la opción no aparece inmediatamente.</string>
+    <string name="usb_config_updated_disabled">La transferencia de archivos USB está deshabilitada.</string>
+    <string name="usb_config_update_failed">No se pudo cambiar la transferencia de archivos USB: %1$s</string>
     <string name="factory_tms_title">TMS Nexgo de fábrica</string>
     <string name="factory_tms_status_enabled">Habilitado. La aplicación de fábrica puede comunicarse con Nexgo TMS.</string>
     <string name="factory_tms_status_disabled">Deshabilitado por xTMSAgent. La aplicación y sus datos permanecen instalados.</string>
@@ -107,6 +118,13 @@
     <string name="app_update_installed">Actualización instalada: %1$s</string>
     <string name="app_update_download_failed">Error al descargar actualización: %1$s</string>
     <string name="app_update_install_failed">Error al instalar actualización: %1$s</string>
+    <string name="task_app_preparing">Preparando %1$s…</string>
+    <string name="task_download_preparing">Iniciando descarga: %1$s…</string>
+    <string name="task_download_progress">Descargando %1$s — %2$d%%</string>
+    <string name="task_app_installing">Instalando %1$s…</string>
+    <string name="task_app_installed">%1$s instalada</string>
+    <string name="task_app_failed">No se pudo instalar %1$s</string>
+    <string name="task_application">Aplicación</string>
     <string name="app_update_deferred">Actualización diferida (terminal ocupada): %1$s</string>
     <string name="accessibility_service_description">Permite que el control remoto de TMS envie eventos tactiles y de teclado durante una sesion de soporte remoto.</string>
 </resources>

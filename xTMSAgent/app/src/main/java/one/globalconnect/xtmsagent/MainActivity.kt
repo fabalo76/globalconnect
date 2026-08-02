@@ -1199,11 +1199,19 @@ class MainActivity : AppCompatActivity() {
 
     private fun taskStatusColor(msg: String): Int =
         when {
-            msg.startsWith("Downloading", ignoreCase = true) -> 0xFFE65100.toInt()
-            msg.startsWith("Installing",  ignoreCase = true) -> 0xFF1565C0.toInt()
-            msg.startsWith("Installed",   ignoreCase = true) -> 0xFF2E7D32.toInt()
-            msg.contains("failed",        ignoreCase = true) -> 0xFFB71C1C.toInt()
-            else                                             -> 0xFF424242.toInt()
+            msg.startsWith("Downloading", ignoreCase = true) ||
+                msg.startsWith("Starting download", ignoreCase = true) ||
+                msg.startsWith("Descargando", ignoreCase = true) ||
+                msg.startsWith("Iniciando descarga", ignoreCase = true) -> 0xFFE65100.toInt()
+            msg.startsWith("Installing", ignoreCase = true) ||
+                msg.startsWith("Preparing", ignoreCase = true) ||
+                msg.startsWith("Instalando", ignoreCase = true) ||
+                msg.startsWith("Preparando", ignoreCase = true) -> 0xFF1565C0.toInt()
+            msg.startsWith("Installed", ignoreCase = true) ||
+                msg.endsWith("instalada", ignoreCase = true) -> 0xFF2E7D32.toInt()
+            msg.contains("failed", ignoreCase = true) ||
+                msg.startsWith("No se pudo", ignoreCase = true) -> 0xFFB71C1C.toInt()
+            else -> 0xFF424242.toInt()
         }
 
     private fun connectionStatusColor(severity: TmsStatusSeverity): Int =
@@ -1238,14 +1246,30 @@ class MainActivity : AppCompatActivity() {
     }
 
     fun UpdateBgClr() {
-        val bgColor = stTheme.background_color.toColorInt()
+        val bgColor = safeThemeColor(stTheme.background_color, Color.WHITE, "background")
         findViewById<ConstraintLayout>(R.id.recyclerView_logo).setBackgroundColor(bgColor)
         findViewById<ConstraintLayout>(R.id.recyclerView_logo_t).setBackgroundColor(bgColor)
         viewPager?.setBackgroundColor(bgColor)
         @Suppress("DEPRECATION")
-        window.statusBarColor = stTheme.status_bar_color.toColorInt()
+        window.statusBarColor = safeThemeColor(stTheme.status_bar_color, Color.BLACK, "status bar")
         @Suppress("DEPRECATION")
-        window.navigationBarColor = stTheme.navigation_bar_color.toColorInt()
+        window.navigationBarColor = safeThemeColor(stTheme.navigation_bar_color, Color.BLACK, "navigation bar")
+    }
+
+    private fun safeThemeColor(value: String?, fallback: Int, fieldName: String): Int {
+        val candidate = value?.trim().orEmpty()
+        if (candidate.isEmpty() || candidate.equals("null", ignoreCase = true)) {
+            Log.w("MainActivity", "Missing $fieldName color; using fallback")
+            return fallback
+        }
+
+        return try {
+            val parseable = if (candidate.startsWith("#")) candidate else "#$candidate"
+            parseable.toColorInt()
+        } catch (e: IllegalArgumentException) {
+            Log.w("MainActivity", "Invalid $fieldName color; using fallback", e)
+            fallback
+        }
     }
 
     fun ApplyDeviceBars() {

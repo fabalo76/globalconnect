@@ -17,6 +17,7 @@ private const val KEY_IS_BLOCKED = "is_blocked"
 private const val KEY_BLOCK_MESSAGE = "block_message"
 private const val KEY_UNLOCK_CODE = "unlock_code"
 private const val KEY_SELF_UNLOCK_PENDING = "self_unlock_pending"
+private const val KEY_STATUS_REPORT_PENDING = "status_report_pending"
 
 private const val LEGACY_KEY_PASSWORD = "mqtt_password"
 private const val LEGACY_KEY_CERT_DER = "server_cert_der"
@@ -98,6 +99,13 @@ class TmsCredentialStore(context: Context) {
     }
 
     fun isSelfUnlockPending(): Boolean = prefs.getBoolean(KEY_SELF_UNLOCK_PENDING, false)
+
+    fun saveStatusReportPending(pending: Boolean) {
+        prefs.edit().putBoolean(KEY_STATUS_REPORT_PENDING, pending).commit()
+        Log.d(TAG, "Status report pending: $pending")
+    }
+
+    fun isStatusReportPending(): Boolean = prefs.getBoolean(KEY_STATUS_REPORT_PENDING, false)
 
     fun clearLegacyMqttCredentials() {
         prefs.edit()

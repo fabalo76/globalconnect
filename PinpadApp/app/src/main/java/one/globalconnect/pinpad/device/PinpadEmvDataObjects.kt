@@ -1,6 +1,7 @@
 package one.globalconnect.pinpad.device
 
 import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
 import java.util.Locale
 
 object PinpadEmvDataObjects {
@@ -102,6 +103,84 @@ object PinpadEmvDataObjects {
         return encodeDataObjects(splitSub(body))
     }
 
+    fun parseConfigurationText(payload: String): String? {
+        val rows = configurationRows(payload)
+        if (rows.isEmpty()) return null
+        return encodeDataObjects(rows)
+    }
+
+    fun parseApplicationConfigurationText(payload: String): ParsedApplicationConfiguration? {
+        val rows = configurationRows(payload).toMutableList()
+        if (rows.isEmpty()) return null
+        val leadingId = rows.firstOrNull()
+            ?.takeIf { !it.any(Char::isWhitespace) && it.isHexString() }
+            ?.uppercase(Locale.US)
+        if (leadingId != null) rows.removeAt(0)
+        val tlvHex = encodeDataObjects(rows) ?: return null
+        val configuredAid = findEncodedTlvValue(tlvHex, "9F06")?.toHex()
+        val aid = configuredAid ?: leadingId ?: return null
+        if (leadingId != null && configuredAid != null && !leadingId.equals(configuredAid, ignoreCase = true)) {
+            return null
+        }
+        return ParsedApplicationConfiguration(aid.uppercase(Locale.US), tlvHex)
+    }
+
+    fun parseDataFormatText(payload: String): Map<String, EmvDataFormatDefinition>? {
+        val rows = configurationRows(payload)
+        if (rows.isEmpty()) return null
+        val result = linkedMapOf<String, EmvDataFormatDefinition>()
+        for (row in rows) {
+            val parsed = parseFormatRule(row) ?: return null
+            result[parsed.tag] = parsed
+        }
+        return result
+    }
+
+    fun parseCapkText(payload: String): ParsedCapk? {
+        val values = configurationRows(payload)
+            .mapNotNull { row ->
+                val separator = row.indexOfFirst(Char::isWhitespace)
+                if (separator <= 0) return@mapNotNull null
+                row.substring(0, separator).uppercase(Locale.US) to row.substring(separator).trim()
+            }
+            .toMap()
+        val rid = values["RID"]?.uppercase(Locale.US)?.takeIf { it.length == 10 && it.isHexString() } ?: return null
+        val pki = values["PKI"]?.uppercase(Locale.US)?.padStart(2, '0')?.takeIf { it.length == 2 && it.isHexString() } ?: return null
+        val hashAlgorithm = values["HASHALGORITHM"]?.uppercase(Locale.US)?.padStart(2, '0')
+            ?.takeIf { it.length == 2 && it.isHexString() } ?: return null
+        val publicKeyAlgorithm = values["PKALGORITHM"]?.uppercase(Locale.US)?.padStart(2, '0')
+            ?.takeIf { it.length == 2 && it.isHexString() } ?: return null
+        val modulus = values["PKMODULUS"]?.replace(" ", "")?.uppercase(Locale.US)
+            ?.takeIf { it.length % 2 == 0 && it.isHexString() } ?: return null
+        val configuredLength = values["PKLEN"]?.toIntOrNull(16) ?: return null
+        if (configuredLength != modulus.length / 2) return null
+        val exponent = when (values["PKEXP"]?.trim()?.uppercase(Locale.US)) {
+            "1", "03" -> "03"
+            "2", "010001" -> "010001"
+            else -> return null
+        }
+        val suppliedHash = values["HASHVALUE"]?.uppercase(Locale.US)
+            ?.takeIf { it.length == 40 && it.isHexString() } ?: return null
+        val checksumBytes = (rid + pki + modulus + exponent).hexToBytesOrNull() ?: return null
+        val computedHash = MessageDigest.getInstance("SHA-1").digest(checksumBytes).toHex()
+        val tlv = buildString {
+            append(encodeTlv("9F06", rid) ?: return null)
+            append(encodeTlv("9F22", pki) ?: return null)
+            append(encodeTlv("DF05", DEFAULT_CAPK_EXPIRY_ASCII_HEX) ?: return null)
+            append(encodeTlv("DF06", hashAlgorithm) ?: return null)
+            append(encodeTlv("DF07", publicKeyAlgorithm) ?: return null)
+            append(encodeTlv("DF02", modulus) ?: return null)
+            append(encodeTlv("DF04", exponent) ?: return null)
+            append(encodeTlv("DF03", computedHash) ?: return null)
+        }
+        return ParsedCapk(
+            id = rid + pki,
+            tlvHex = tlv,
+            suppliedHash = suppliedHash,
+            computedHash = computedHash,
+        )
+    }
+
     fun parseDataFormatTable(payload: String): Map<String, String>? {
         return parseDataFormatDefinitions(payload)?.mapValues { (_, definition) -> definition.rule }
     }
@@ -135,8 +214,10 @@ object PinpadEmvDataObjects {
     }
 
     fun encodeTlv(tagHex: String, valueHex: String): String? {
-        if (!tagHex.isHexString() || !valueHex.isHexString() || valueHex.length % 2 != 0) return null
-        val value = valueHex.hexToBytesOrNull() ?: return null
+        if (!tagHex.isHexString()
+            || valueHex.length % 2 != 0
+            || valueHex.any { it.digitToIntOrNull(16) == null }) return null
+        val value = if (valueHex.isEmpty()) byteArrayOf() else valueHex.hexToBytesOrNull() ?: return null
         return tagHex.uppercase(Locale.US) + encodeLength(value.size).toHex() + value.toHex()
     }
 
@@ -244,9 +325,9 @@ object PinpadEmvDataObjects {
 
     private fun parseDataObject(row: String): DataObject? {
         val fields = if (row.contains(FS)) {
-            row.split(FS)
+            row.split(FS, limit = 3)
         } else {
-            row.trim().split(Regex("\\s+"), limit = 3)
+            DATA_OBJECT_ROW.matchEntire(row.trimEnd())?.groupValues?.drop(1) ?: return null
         }
         if (fields.size < 3) return null
         val tag = fields[0].trim().uppercase(Locale.US)
@@ -318,6 +399,7 @@ object PinpadEmvDataObjects {
 
     private fun String.normalizeHexValue(): String? {
         val normalized = replace(" ", "").uppercase(Locale.US)
+        if (normalized.isEmpty()) return ""
         if (!normalized.isHexString()) return null
         return if (normalized.length % 2 == 0) normalized else "0$normalized"
     }
@@ -326,11 +408,36 @@ object PinpadEmvDataObjects {
         return value.split(SUB).map { it.trim() }.filter { it.isNotEmpty() && !it.startsWith("NOTE:", true) }
     }
 
+    private fun configurationRows(value: String): List<String> {
+        return value.lineSequence()
+            .map { it.trimEnd() }
+            .takeWhile { !it.trimStart().startsWith("NOTE:", ignoreCase = true) }
+            .mapNotNull { raw ->
+                val trimmed = raw.trim()
+                if (trimmed.isEmpty() || trimmed.startsWith("//") || trimmed.startsWith("#")) {
+                    return@mapNotNull null
+                }
+
+                val withoutComment = trimmed.substringBefore("//").trim()
+                if (withoutComment.isEmpty()) return@mapNotNull null
+
+                // Legacy files often add a separate annotation row such as
+                // "9F06    //AID". The legacy downloader ignored it because
+                // it is not a complete tag/type/value record.
+                if (trimmed.contains("//") && withoutComment.none { it.isWhitespace() }) {
+                    return@mapNotNull null
+                }
+                withoutComment
+            }
+            .toList()
+    }
+
     private fun String.isHexString(): Boolean {
         return isNotEmpty() && all { it.digitToIntOrNull(16) != null }
     }
 
     fun String.hexToBytesOrNull(): ByteArray? {
+        if (isEmpty()) return byteArrayOf()
         if (length % 2 != 0 || !isHexString()) return null
         return chunked(2).map { it.toInt(16).toByte() }.toByteArray()
     }
@@ -388,6 +495,18 @@ object PinpadEmvDataObjects {
         val tlvHex: String,
     )
 
+    data class ParsedApplicationConfiguration(
+        val aid: String,
+        val tlvHex: String,
+    )
+
+    data class ParsedCapk(
+        val id: String,
+        val tlvHex: String,
+        val suppliedHash: String,
+        val computedHash: String,
+    )
+
     data class TlvRecord(val tag: String, val value: ByteArray)
 
     data class EmvDataFormatDefinition(
@@ -435,4 +554,7 @@ object PinpadEmvDataObjects {
         Numeric,
         Variable,
     }
+
+    private const val DEFAULT_CAPK_EXPIRY_ASCII_HEX = "3230393931323331"
+    private val DATA_OBJECT_ROW = Regex("""^(\S+)\s+(\S+)(?:\s+(.*))?$""")
 }

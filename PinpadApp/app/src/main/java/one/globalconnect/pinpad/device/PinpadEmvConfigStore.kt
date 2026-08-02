@@ -72,6 +72,12 @@ class PinpadEmvConfigStore(context: Context) {
         writeMapFile(CONTACT_AIDS_FILE, aidTlvs() + (id.uppercase() to tlv.uppercase()))
     }
 
+    fun replaceAidTlvs(value: Map<String, String>) {
+        val normalized = value.mapKeys { (id, _) -> id.uppercase() }.mapValues { (_, tlv) -> tlv.uppercase() }
+        writeMap(KEY_AID_TLVS, normalized)
+        writeMapFile(CONTACT_AIDS_FILE, normalized)
+    }
+
     fun removeAidTlvs(ids: List<String>): List<Boolean> {
         val normalized = ids.map { it.uppercase() }
         val current = aidTlvs().toMutableMap()
@@ -87,6 +93,13 @@ class PinpadEmvConfigStore(context: Context) {
         writeMapFile(CONTACTLESS_AIDS_FILE, pcdAidTlvs() + (id.uppercase() to tlv.uppercase()))
     }
 
+    fun replacePcdAidTlvs(value: Map<String, String>) {
+        writeMapFile(
+            CONTACTLESS_AIDS_FILE,
+            value.mapKeys { (id, _) -> id.uppercase() }.mapValues { (_, tlv) -> tlv.uppercase() },
+        )
+    }
+
     fun removePcdAidTlvs(ids: List<String>): List<Boolean> {
         val normalized = ids.map { it.uppercase() }
         val current = pcdAidTlvs().toMutableMap()
@@ -100,6 +113,12 @@ class PinpadEmvConfigStore(context: Context) {
     fun setCapkTlv(id: String, tlv: String) {
         writeMap(KEY_CAPK_TLVS, capkTlvs() + (id.uppercase() to tlv.uppercase()))
         writeMapFile(CAPKS_FILE, capkTlvs() + (id.uppercase() to tlv.uppercase()))
+    }
+
+    fun replaceCapkTlvs(value: Map<String, String>) {
+        val normalized = value.mapKeys { (id, _) -> id.uppercase() }.mapValues { (_, tlv) -> tlv.uppercase() }
+        writeMap(KEY_CAPK_TLVS, normalized)
+        writeMapFile(CAPKS_FILE, normalized)
     }
 
     fun removeCapkTlvs(ids: List<String>): List<Boolean> {

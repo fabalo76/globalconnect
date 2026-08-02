@@ -2,7 +2,9 @@ package one.globalconnect.xtmsagent.mqtt.versions
 
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.util.Base64
@@ -12,6 +14,7 @@ import one.globalconnect.xtmsagent.MainActivity
 import one.globalconnect.xtmsagent.R
 import one.globalconnect.xtmsagent.TMSFunc
 import one.globalconnect.xtmsagent.mqtt.TmsTaskStatus
+import one.globalconnect.xtmsagent.mqtt.downloads.DeviceOwnerPackageInstaller
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -40,7 +43,8 @@ private const val READ_TIMEOUT_MS    = 300_000
  * Request body: {"tid":"...","key":"<hmac>","fileId":<int>}
  * Auth: HMAC-SHA256(key=DownloadSecret, data=termId), Base64url-encoded.
  *
- * Installation is performed silently via the Nexgo Platform SDK.
+ * Installation is performed silently via Android PackageInstaller while xTMSAgent
+ * is Device Owner, with the NEXGO Platform SDK retained as a compatibility fallback.
  * A fresh status report is published after successful install.
  */
 private const val ACTION_PRE_INSTALL_CHECK   = "one.globalconnect.xtmsagent.ACTION_PRE_INSTALL_CHECK"
@@ -274,7 +278,7 @@ object AppUpdateManager {
 
     // ── Install ───────────────────────────────────────────────────────────────
 
-    private fun installApk(
+    private suspend fun installApk(
         context: Context,
         apkFile: File,
         packageName: String,
@@ -290,7 +294,37 @@ object AppUpdateManager {
         installApk.setReadable(true, false)
 
         TmsTaskStatus.taskOverride.value = "Installing: $displayName"
-        Log.i(TAG, "Installing $packageName via Nexgo SDK from ${installApk.absolutePath} (${installApk.length()} bytes)")
+        val expectedVersionCode = readApkVersionCode(context, installApk)
+        val deviceOwnerResult = DeviceOwnerPackageInstaller.install(
+            context = context,
+            taskId = null,
+            apkFile = installApk,
+            packageName = packageName,
+            versionCode = expectedVersionCode,
+            stagedFile = apkFile,
+        )
+        if (deviceOwnerResult.success || isInstalled(context, packageName, expectedVersionCode)) {
+            Log.i(TAG, "Device Owner app update succeeded: ${deviceOwnerResult.message}")
+            installApk.delete()
+            apkFile.delete()
+            MainActivity.writeLog("App update installed: $packageName")
+            showToast(context, context.getString(R.string.app_update_installed, displayName))
+            TmsTaskStatus.taskOverride.value = "Installed: $displayName"
+            publishFullStatus()
+            delay(3_000L)
+            TmsTaskStatus.taskOverride.value = null
+            return
+        }
+
+        Log.w(
+            TAG,
+            "Device Owner PackageInstaller did not complete; using NEXGO fallback: " +
+                deviceOwnerResult.message,
+        )
+        MainActivity.writeLog(
+            "App update installer fallback: $packageName reason=${deviceOwnerResult.message}",
+        )
+        Log.i(TAG, "Installing $packageName via NEXGO fallback from ${installApk.absolutePath} (${installApk.length()} bytes)")
 
         try {
             val platform = com.nexgo.oaf.apiv3.APIProxy.getDeviceEngine(context).platform
@@ -327,6 +361,32 @@ object AppUpdateManager {
             Log.e(TAG, "Nexgo SDK install threw for $packageName: ${e.message} — files kept for inspection: ${installApk.absolutePath}", e)
         }
     }
+
+    private fun readApkVersionCode(context: Context, apkFile: File): Long {
+        @Suppress("DEPRECATION")
+        val info = context.packageManager.getPackageArchiveInfo(apkFile.absolutePath, 0)
+            ?: throw IllegalStateException("Unable to read APK identity from ${apkFile.name}")
+        if (info.packageName.isNullOrBlank()) {
+            throw IllegalStateException("APK package name is missing for ${apkFile.name}")
+        }
+        return info.versionCodeCompat()
+    }
+
+    private fun isInstalled(context: Context, packageName: String, versionCode: Long): Boolean {
+        @Suppress("DEPRECATION")
+        val info = runCatching {
+            context.packageManager.getPackageInfo(packageName, 0)
+        }.getOrNull() ?: return false
+        return info.versionCodeCompat() >= versionCode
+    }
+
+    private fun PackageInfo.versionCodeCompat(): Long =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            longVersionCode
+        } else {
+            @Suppress("DEPRECATION")
+            versionCode.toLong()
+        }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 

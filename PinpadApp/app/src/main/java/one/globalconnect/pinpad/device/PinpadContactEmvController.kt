@@ -98,9 +98,7 @@ class PinpadContactEmvController(
         }
     }
 
-    fun applyStoredConfiguration() {
-        reloadStoredConfiguration("startup")
-    }
+    fun applyStoredConfiguration(): Boolean = reloadStoredConfiguration("startup")
 
     private fun reloadStoredConfiguration(reason: String): Boolean {
         synchronized(emvConfigLoadLock) {

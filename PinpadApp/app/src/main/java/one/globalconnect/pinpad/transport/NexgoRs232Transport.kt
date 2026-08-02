@@ -46,7 +46,10 @@ class NexgoRs232Transport(
 
     override fun send(bytes: ByteArray) {
         PinpadTraceLog.serialTx(SOURCE, bytes)
-        val result = driver.send(bytes, bytes.size)
+        val result = runCatching { driver.send(bytes, bytes.size) }
+            .onFailure { listener?.onTransportError(it) }
+            .getOrNull()
+            ?: return
         if (result != SdkResult.Success) {
             listener?.onTransportError(IllegalStateException("RS232 send failed: $result"))
         }
@@ -63,8 +66,11 @@ class NexgoRs232Transport(
         val buffer = ByteArray(MAX_READ)
         while (running.get()) {
             val read = runCatching { driver.recv(buffer, buffer.size, READ_TIMEOUT_MS) }
-                .onFailure { listener?.onTransportError(it) }
-                .getOrDefault(0)
+                .getOrElse { error ->
+                    listener?.onTransportError(error)
+                    running.set(false)
+                    break
+                }
             if (read > 0) {
                 val bytes = buffer.copyOf(read)
                 PinpadTraceLog.serialRx(SOURCE, bytes)
@@ -72,6 +78,10 @@ class NexgoRs232Transport(
             } else if (read != 0 && read != SdkResult.SerialPort_Timeout_Receiving_Data) {
                 Log.w(TAG, "RS232 recv returned $read")
                 PinpadTraceLog.transport("RS232 recv returned $read")
+                listener?.onTransportError(
+                    IllegalStateException("RS232 receive failed: $read"),
+                )
+                running.set(false)
             }
         }
     }

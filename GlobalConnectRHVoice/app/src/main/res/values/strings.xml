@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Global Connect RHVoice</string>
+    <string name="status_title">Offline RHVoice engine</string>
+    <string name="status_ready">Ready. Bundled voices: Slt (English, United States) and Mateo (Spanish, Mexico).</string>
+    <string name="status_failed">Bundled voice validation failed. See RHVoiceBundledData in logcat.</string>
+    <string name="status_details">Package: com.github.olga_yakovleva.rhvoice.android\nService: com.github.olga_yakovleva.rhvoice.android.RHVoiceService\nRHVoice: 1.18.4\nNetwork required: no\nOutput gain: 1.25</string>
+    <string name="english_sample">Global Connect offline English speech is ready.</string>
+    <string name="spanish_sample">La voz sin conexión de Global Connect está lista.</string>
+</resources>

@@ -2,6 +2,7 @@ package one.globalconnect.pinpad.storage
 
 import android.content.Context
 import android.util.Log
+import android.graphics.BitmapFactory
 import java.io.File
 import java.nio.charset.StandardCharsets
 import java.util.Base64
@@ -28,6 +29,26 @@ class PinpadJpegStore private constructor(rootDir: File) {
             upload = null
             true
         }.onFailure { Log.w(TAG, "Unable to initialize JPEG table", it) }.getOrDefault(false)
+    }
+
+    fun importManagedImage(fileName: String, source: File): Boolean {
+        val normalized = normalizedName(fileName) ?: return false
+        if (!normalized.endsWith(".jpg", true) && !normalized.endsWith(".jpeg", true)) return false
+        if (!source.isFile || source.length() == 0L || BitmapFactory.decodeFile(source.absolutePath) == null) {
+            return false
+        }
+        return runCatching {
+            val target = imageFile(normalized)
+            val staging = File(imageDir, ".$normalized.part")
+            source.copyTo(staging, overwrite = true)
+            if (target.exists() && !target.delete()) return@runCatching false
+            if (!staging.renameTo(target)) {
+                staging.copyTo(target, overwrite = true)
+                staging.delete()
+            }
+            target.isFile && target.length() == source.length()
+        }.onFailure { Log.w(TAG, "Unable to import managed JPEG $normalized", it) }
+            .getOrDefault(false)
     }
 
     fun table(): List<JpegEntry> {

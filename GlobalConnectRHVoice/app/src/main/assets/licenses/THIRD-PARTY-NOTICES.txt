@@ -1,0 +1,36 @@
+Global Connect unified offline RHVoice APK
+
+RHVoice engine and the Global Connect modifications
+Copyright (C) RHVoice contributors and Global Connect contributors.
+Licensed under GNU GPL version 2. The full text is GPL-2.0.txt.
+
+Spanish language data
+Copyright (C) RHVoice Spanish language data contributors.
+Licensed under GNU LGPL version 2.1. The full text is Spanish-LGPL-2.1.txt.
+
+Slt English voice
+RHVoice Slt model, based on the CMU ARCTIC US English female Slt speaker
+database. Distributed under the CMU ARCTIC license. The full text is
+CMU-ARCTIC.txt. The upstream attribution is retained with the voice assets.
+
+Mateo Spanish voice
+Speaker: Mateo Cedillo. Sound engineering: Sergey Parshakov. Final audio
+equalization and pause improvements: Sound Guard. Database suggestions and
+voice training: Zvonimir Stanecic. Distributed under the Unlicense; the
+upstream readme and the speaker's usage notes are retained with the voice
+assets. The full Unlicense is Mateo-UNLICENSE.txt.
+
+HTS engine
+Copyright (c) 2001-2015 Nagoya Institute of Technology and
+Copyright (c) 2001-2008 Tokyo Institute of Technology.
+Licensed under the three-clause BSD terms in HTS-engine-BSD.txt. RHVoice's
+modifications are also covered by GPL-2.0-or-later source headers.
+
+utf8-cpp
+Copyright 2006 Nemanja Trifunovic. Licensed under Boost Software License 1.0;
+the full text is utf8cpp-Boost-1.0.txt.
+
+RapidXML
+Copyright (c) 2006, 2007 Marcin Kalicinski. This build elects the MIT option
+offered by RapidXML's dual Boost/MIT license. The complete dual-license text is
+RapidXML-Boost-or-MIT.txt.

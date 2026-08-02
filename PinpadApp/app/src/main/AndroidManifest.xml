@@ -1,16 +1,25 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <permission
+        android:name="one.globalconnect.pinpad.permission.TMS_CONFIG"
+        android:protectionLevel="signature" />
+    <uses-permission android:name="one.globalconnect.pinpad.permission.TMS_CONFIG" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature
+        android:name="android.hardware.camera.any"
+        android:required="false" />
 
     <queries>
+        <package android:name="one.globalconnect.xtmsagent" />
+        <package android:name="one.globalconnect.xtmsagent.globalconnect" />
         <package android:name="com.reecedunn.espeak" />
         <package android:name="com.github.olga_yakovleva.rhvoice.android" />
-        <package android:name="com.github.olga_yakovleva.rhvoice.android.language.spanish" />
-        <package android:name="com.github.olga_yakovleva.rhvoice.android.voice.mateo" />
         <intent>
             <action android:name="one.globalconnect.xtmsagent.APPLICATION_LICENSE_SERVICE" />
         </intent>
@@ -52,6 +61,17 @@
             android:exported="false">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+
+        <receiver
+            android:name=".config.PinpadTmsConfigReceiver"
+            android:enabled="true"
+            android:exported="true"
+            android:permission="one.globalconnect.pinpad.permission.TMS_CONFIG">
+            <intent-filter>
+                <action android:name="one.globalconnect.xtmsagent.ACTION_PARAMS_READY" />
+                <action android:name="one.globalconnect.xtmsagent.ACTION_PARAMS_FAILED" />
             </intent-filter>
         </receiver>
     </application>

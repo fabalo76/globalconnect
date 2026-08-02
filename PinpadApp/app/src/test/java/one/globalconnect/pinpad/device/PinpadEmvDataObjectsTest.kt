@@ -8,6 +8,107 @@ import kotlin.test.assertTrue
 
 class PinpadEmvDataObjectsTest {
     @Test
+    fun parsesLegacyDataFormatsTextFile() {
+        val definitions = assertNotNull(
+            PinpadEmvDataObjects.parseDataFormatText(
+                """
+                DF01 B 08 08 0
+                DF02 B 08 10 1
+                50000010 B 01 01 0
+                """.trimIndent(),
+            ),
+        )
+
+        assertEquals("208080", definitions["DF01"]?.rule)
+        assertEquals("208101", definitions["DF02"]?.rule)
+        assertEquals("201010", definitions["50000010"]?.rule)
+    }
+
+    @Test
+    fun parsesLegacyTerminalConfigurationAndStopsAtNotes() {
+        val tlv = assertNotNull(
+            PinpadEmvDataObjects.parseConfigurationText(
+                """
+                9F1A n 0188
+                9F1C an SmartPOS
+                50000004 b DF01
+                NOTE:
+                9F35 n 99
+                """.trimIndent(),
+            ),
+        )
+
+        assertEquals(
+            "0188",
+            PinpadEmvDataObjects.findEncodedTlvValue(tlv, "9F1A")
+                ?.let { with(PinpadEmvDataObjects) { it.toHex() } },
+        )
+        assertEquals(
+            "536D617274504F53",
+            PinpadEmvDataObjects.findEncodedTlvValue(tlv, "9F1C")
+                ?.let { with(PinpadEmvDataObjects) { it.toHex() } },
+        )
+        assertEquals(null, PinpadEmvDataObjects.findEncodedTlvValue(tlv, "9F35"))
+    }
+
+    @Test
+    fun parsesContactAndContactlessApplicationFilesIncludingEmptyValues() {
+        val contact = assertNotNull(
+            PinpadEmvDataObjects.parseApplicationConfigurationText(
+                """
+                A0000000031010
+                9F06 b A0000000031010
+                9F06       //AID
+                9F09 b 0096
+                """.trimIndent(),
+            ),
+        )
+        assertEquals("A0000000031010", contact.aid)
+
+        val contactless = assertNotNull(
+            PinpadEmvDataObjects.parseApplicationConfigurationText(
+                """
+                9C n 00
+                9F06 b A000000003
+                9F01 n
+                DF810C b 030000
+                """.trimIndent(),
+            ),
+        )
+        assertEquals("A000000003", contactless.aid)
+        assertEquals(
+            0,
+            PinpadEmvDataObjects.findEncodedTlvValue(contactless.tlvHex, "9F01")?.size,
+        )
+    }
+
+    @Test
+    fun parsesLegacyCapkFileAndBuildsSdkTlv() {
+        val parsed = assertNotNull(
+            PinpadEmvDataObjects.parseCapkText(
+                """
+                RID A000000003
+                PKI 07
+                HashAlgorithm 01
+                HashValue 0000000000000000000000000000000000000000
+                PKAlgorithm 01
+                PKLen 01
+                PKExp 1
+                PKModulus AA
+                """.trimIndent(),
+            ),
+        )
+
+        assertEquals("A00000000307", parsed.id)
+        assertEquals(
+            "AA",
+            PinpadEmvDataObjects.findEncodedTlvValue(parsed.tlvHex, "DF02")
+                ?.let { with(PinpadEmvDataObjects) { it.toHex() } },
+        )
+        assertEquals(40, parsed.computedHash.length)
+    }
+
+    @Test
     fun parsesDataFormatTableFromConfigToolShape() {
         val sub = '\u001A'
         val fs = '\u001C'

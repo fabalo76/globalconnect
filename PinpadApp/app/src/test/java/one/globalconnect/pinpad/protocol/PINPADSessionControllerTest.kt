@@ -1,6 +1,7 @@
 package one.globalconnect.pinpad.protocol
 
 import one.globalconnect.pinpad.device.PinpadDeviceInfoProvider
+import one.globalconnect.pinpad.security.KeyLoadAuthorizer
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -122,10 +123,12 @@ class PINPADSessionControllerTest {
     }
 
     @Test
-    fun validLoadKeyRequestAcknowledgesAfterFormatValidationBeforeDeviceWork() {
+    fun clearKeyLoadWithoutAuthorizedModeReturnsOnlyEot() {
         val asyncResponses = CopyOnWriteArrayList<ByteArray>()
+        val authorizer = FakeKeyLoadAuthorizer()
         val commandController = PINPADSessionController(
             deviceInfoProvider = FakeDeviceInfoProvider(),
+            keyLoadAuthorizer = authorizer,
             codec = codec,
             asyncResponseSender = asyncResponses::add,
         )
@@ -135,18 +138,18 @@ class PINPADSessionControllerTest {
             PINPADInbound.Frame(PINPADFrame(PINPADFrameType.Administration, "02", payload.toByteArray())),
         )
 
-        assertEquals(PINPADControl.ACK, asyncResponses.single().single())
+        assertTrue(asyncResponses.isEmpty())
         assertEquals(1, responses.size)
-        val response = assertIs<PINPADFrameCodec.DecodeResult.Valid>(codec.decode(responses.single()))
-        assertEquals("02", response.frame.commandId)
-        assertEquals("?A", response.frame.payloadAscii)
+        assertEquals(PINPADControl.EOT, responses.single().single())
+        assertNull(authorizer.requestedCommand)
     }
 
     @Test
-    fun malformedLoadKeyRequestReturnsAckThenEot() {
+    fun malformedLoadKeyRequestWithoutAuthorizedModeReturnsOnlyEot() {
         val asyncResponses = CopyOnWriteArrayList<ByteArray>()
         val commandController = PINPADSessionController(
             deviceInfoProvider = FakeDeviceInfoProvider(),
+            keyLoadAuthorizer = FakeKeyLoadAuthorizer(),
             codec = codec,
             asyncResponseSender = asyncResponses::add,
         )
@@ -156,8 +159,89 @@ class PINPADSessionControllerTest {
         )
 
         assertTrue(asyncResponses.isEmpty())
+        assertEquals(PINPADControl.EOT, responses.single().single())
+    }
+
+    @Test
+    fun clearKeyLoadExecutesOnlyAfterModeWasAuthorized() {
+        val asyncResponses = CopyOnWriteArrayList<ByteArray>()
+        val authorizer = FakeKeyLoadAuthorizer(clearKeyModeActive = true)
+        val commandController = PINPADSessionController(
+            deviceInfoProvider = FakeDeviceInfoProvider(),
+            keyLoadAuthorizer = authorizer,
+            codec = codec,
+            asyncResponseSender = asyncResponses::add,
+        )
+        val payload = "1123456789ABCDE90123456789ABCDEF0\u001CP0E"
+
+        val responses = commandController.onInbound(
+            PINPADInbound.Frame(PINPADFrame(PINPADFrameType.Administration, "02", payload.toByteArray())),
+        )
+
+        assertEquals(1, responses.size)
+        assertEquals(PINPADControl.ACK, asyncResponses.single().single())
+        val rejected = assertIs<PINPADFrameCodec.DecodeResult.Valid>(codec.decode(responses.single()))
+        assertEquals("02", rejected.frame.commandId)
+        assertEquals("?A", rejected.frame.payloadAscii)
+        assertEquals(1, authorizer.clearKeyActivityCount)
+        assertNull(authorizer.requestedCommand)
+    }
+
+    @Test
+    fun keyInjectionModeDropsCommandsOutsideWhitelistWithOnlyEot() {
+        val authorizer = FakeKeyLoadAuthorizer(clearKeyModeActive = true)
+        val commandController = PINPADSessionController(
+            deviceInfoProvider = FakeDeviceInfoProvider(),
+            keyLoadAuthorizer = authorizer,
+            codec = codec,
+        )
+
+        val responses = commandController.onInbound(
+            PINPADInbound.Frame(PINPADFrame(PINPADFrameType.Administration, "19", "1".toByteArray())),
+        )
+
+        assertEquals(PINPADControl.EOT, responses.single().single())
+        assertEquals(0, authorizer.clearKeyActivityCount)
+    }
+
+    @Test
+    fun keyInjectionModeAllowsWhitelistedCommandsAndRecordsActivity() {
+        val authorizer = FakeKeyLoadAuthorizer(clearKeyModeActive = true)
+        val commandController = PINPADSessionController(
+            deviceInfoProvider = FakeDeviceInfoProvider(),
+            keyLoadAuthorizer = authorizer,
+            codec = codec,
+        )
+
+        val responses = commandController.onInbound(
+            PINPADInbound.Frame(PINPADFrame(PINPADFrameType.Administration, "06")),
+        )
+
         assertEquals(PINPADControl.ACK, responses[0].single())
-        assertEquals(PINPADControl.EOT, responses[1].single())
+        val response = assertIs<PINPADFrameCodec.DecodeResult.Valid>(codec.decode(responses[1]))
+        assertEquals("06", response.frame.commandId)
+        assertEquals(1, authorizer.clearKeyActivityCount)
+    }
+
+    @Test
+    fun secretKeyPasswordGateIsUsedOnlyWhenAuthorizerRequiresIt() {
+        val asyncResponses = CopyOnWriteArrayList<ByteArray>()
+        val authorizer = FakeKeyLoadAuthorizer(setOf("20"))
+        val commandController = PINPADSessionController(
+            deviceInfoProvider = FakeDeviceInfoProvider(),
+            keyLoadAuthorizer = authorizer,
+            codec = codec,
+            asyncResponseSender = asyncResponses::add,
+        )
+
+        val responses = commandController.onInbound(
+            PINPADInbound.Frame(PINPADFrame(PINPADFrameType.Transaction, "20", "0123456789ABCDEFF".toByteArray())),
+        )
+
+        assertTrue(responses.isEmpty())
+        assertEquals(PINPADControl.ACK, asyncResponses.single().single())
+        authorizer.complete(false)
+        assertEquals(PINPADControl.EOT, asyncResponses[1].single())
     }
 
     @Test
@@ -553,6 +637,11 @@ class PINPADSessionControllerTest {
             CommandCase(PINPADFrameType.Transaction, "T75", "\u001AA00000000300000151"),
             CommandCase(PINPADFrameType.Transaction, "T77", "\u001A4761739001010010"),
             CommandCase(PINPADFrameType.Transaction, "T81", "\u001A000000001000"),
+            CommandCase(
+                PINPADFrameType.Transaction,
+                "T90",
+                "T\u001CZmlsZS50eHQ=\u001COUYzMyBiIDA4",
+            ),
         )
 
         commands.forEach { command ->
@@ -636,6 +725,91 @@ class PINPADSessionControllerTest {
         assertEquals("1", response.frame.payloadAscii)
     }
 
+    @Test
+    fun invalidSignatureRequestUsesAckS2ErrorAndFinalEotHandshake() {
+        val asyncResponses = CopyOnWriteArrayList<ByteArray>()
+        val signatureController = PINPADSessionController(
+            deviceInfoProvider = FakeDeviceInfoProvider(),
+            codec = codec,
+            asyncResponseSender = asyncResponses::add,
+        )
+
+        val immediate = signatureController.onInbound(
+            PINPADInbound.Frame(
+                PINPADFrame(
+                    PINPADFrameType.Transaction,
+                    "S1",
+                    "001\u001CH\u001CP".toByteArray(),
+                ),
+            ),
+        )
+
+        assertTrue(immediate.isEmpty())
+        assertEquals(PINPADControl.ACK, asyncResponses[0].single())
+        val response = assertIs<PINPADFrameCodec.DecodeResult.Valid>(codec.decode(asyncResponses[1]))
+        assertEquals("S2", response.frame.commandId)
+        assertEquals("400000000", response.frame.payloadAscii)
+
+        val finalResponses = signatureController.onInbound(PINPADInbound.Control(PINPADControl.ACK))
+        assertEquals(PINPADControl.EOT, finalResponses.single().single())
+    }
+
+    @Test
+    fun invalidPhotoRequestUsesAckPh2ErrorAndFinalEotHandshake() {
+        val asyncResponses = CopyOnWriteArrayList<ByteArray>()
+        val cameraController = PINPADSessionController(
+            deviceInfoProvider = FakeDeviceInfoProvider(),
+            codec = codec,
+            asyncResponseSender = asyncResponses::add,
+        )
+
+        val immediate = cameraController.onInbound(
+            PINPADInbound.Frame(
+                PINPADFrame(
+                    PINPADFrameType.Transaction,
+                    "PH1",
+                    "001\u001CF\u001C80".toByteArray(),
+                ),
+            ),
+        )
+
+        assertTrue(immediate.isEmpty())
+        assertEquals(PINPADControl.ACK, asyncResponses[0].single())
+        val response = assertIs<PINPADFrameCodec.DecodeResult.Valid>(codec.decode(asyncResponses[1]))
+        assertEquals("PH2", response.frame.commandId)
+        assertEquals("400000000", response.frame.payloadAscii)
+        assertEquals(
+            PINPADControl.EOT,
+            cameraController.onInbound(PINPADInbound.Control(PINPADControl.ACK)).single().single(),
+        )
+    }
+
+    @Test
+    fun invalidQrScanRequestUsesAckQr4ErrorAndFinalEotHandshake() {
+        val asyncResponses = CopyOnWriteArrayList<ByteArray>()
+        val cameraController = PINPADSessionController(
+            deviceInfoProvider = FakeDeviceInfoProvider(),
+            codec = codec,
+            asyncResponseSender = asyncResponses::add,
+        )
+
+        val immediate = cameraController.onInbound(
+            PINPADInbound.Frame(
+                PINPADFrame(PINPADFrameType.Transaction, "QR3", "001\u001CF".toByteArray()),
+            ),
+        )
+
+        assertTrue(immediate.isEmpty())
+        assertEquals(PINPADControl.ACK, asyncResponses[0].single())
+        val response = assertIs<PINPADFrameCodec.DecodeResult.Valid>(codec.decode(asyncResponses[1]))
+        assertEquals("QR4", response.frame.commandId)
+        assertEquals("4", response.frame.payloadAscii)
+        assertEquals(
+            PINPADControl.EOT,
+            cameraController.onInbound(PINPADInbound.Control(PINPADControl.ACK)).single().single(),
+        )
+    }
+
     private open class FakeDeviceInfoProvider : PinpadDeviceInfoProvider {
         override fun modelName(): String = "CT20P"
 
@@ -646,6 +820,49 @@ class PINPADSessionControllerTest {
         }
 
         override fun hardwareCapabilities(): List<String> = listOf("ICC", "MSR", "PCD")
+    }
+
+    private class FakeKeyLoadAuthorizer(
+        private val protectedCommands: Set<String> = emptySet(),
+        clearKeyModeActive: Boolean = false,
+    ) : KeyLoadAuthorizer {
+        var requestedCommand: String? = null
+        var clearKeyActivityCount = 0
+        private var clearKeyModeActive = clearKeyModeActive
+        private var callback: ((Boolean) -> Unit)? = null
+
+        override fun requiresAuthorization(commandId: String): Boolean = commandId in protectedCommands
+
+        override fun requestAuthorization(commandId: String, onResult: (Boolean) -> Unit): Boolean {
+            requestedCommand = commandId
+            callback = onResult
+            return true
+        }
+
+        override fun beginClearKeyInjectionMode(): Boolean {
+            clearKeyModeActive = true
+            return true
+        }
+
+        override fun isClearKeyInjectionModeActive(): Boolean = clearKeyModeActive
+
+        override fun recordClearKeyInjectionActivity() {
+            clearKeyActivityCount += 1
+        }
+
+        override fun endClearKeyInjectionMode(reason: String): Boolean {
+            val wasActive = clearKeyModeActive
+            clearKeyModeActive = false
+            return wasActive
+        }
+
+        override fun onKeypadKey(key: PinpadKeypadKey): Boolean = false
+
+        override fun cancel(): Boolean = false
+
+        fun complete(authorized: Boolean) {
+            callback?.invoke(authorized)
+        }
     }
 
     private data class CommandCase(

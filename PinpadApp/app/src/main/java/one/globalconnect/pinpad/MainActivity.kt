@@ -34,6 +34,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -86,7 +89,9 @@ import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -95,6 +100,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
@@ -106,25 +112,38 @@ import com.mastercard.sonic.listeners.OnPrepareListener
 import com.mastercard.sonic.model.SonicMerchant
 import com.mastercard.sonic.widget.SonicView
 import com.nexgo.oaf.apiv3.SystemServiceHelper
+import one.globalconnect.pinpad.comms.PinpadSerialDiagnostics
 import one.globalconnect.pinpad.comms.PinpadSerialService
+import one.globalconnect.pinpad.comms.SerialConnectionState
 import one.globalconnect.pinpad.config.DeviceModelConfig
 import one.globalconnect.pinpad.config.DeviceModelSpec
+import one.globalconnect.pinpad.config.PinpadTmsConfigClient
 import one.globalconnect.pinpad.logging.PinpadTraceLog
 import one.globalconnect.pinpad.licensing.PinpadLicenseManager
 import one.globalconnect.pinpad.model.PinpadTransactionDisplay
 import one.globalconnect.pinpad.protocol.PinpadKeypadKey
+import one.globalconnect.pinpad.protocol.SignatureCaptureResult
+import one.globalconnect.pinpad.protocol.SignatureOrientation
 import one.globalconnect.pinpad.storage.PinpadPreferences
 import one.globalconnect.pinpad.storage.PinpadSettingsPasswordStore
 import one.globalconnect.pinpad.storage.SerialSettings
 import one.globalconnect.pinpad.ui.ContactlessLedState
 import one.globalconnect.pinpad.ui.PinpadDisplayController
+import one.globalconnect.pinpad.ui.PhotoCapturePrompt
+import one.globalconnect.pinpad.ui.QrDisplayPrompt
+import one.globalconnect.pinpad.ui.QrScanPrompt
+import one.globalconnect.pinpad.ui.RapidTapSequence
+import one.globalconnect.pinpad.ui.KeyLoadAuthenticationMessage
 import one.globalconnect.pinpad.ui.PinpadDisplayState
 import one.globalconnect.pinpad.ui.SensoryBrand
+import one.globalconnect.pinpad.ui.SignatureBitmapEncoder
+import one.globalconnect.pinpad.ui.SignaturePoint
 import one.globalconnect.pinpad.ui.TextEntryEchoMode
 import com.visa.CheckmarkMode
 import com.visa.CheckmarkTextOption
 import com.visa.SensoryBrandingView
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeoutOrNull
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -135,33 +154,45 @@ private const val MASTERCARD_SENSORY_FALLBACK_MS = 12_000L
 private const val MASTERCARD_ANIMATION_WARMUP_DELAY_MS = 1_500L
 private const val AUDIO_WARMUP_SAMPLE_RATE = 48_000
 private const val BRAND_SENSORY_LOG_TAG = "PinpadSensory"
+private const val MAIN_MENU_HOLD_MS = 5_000L
+private const val MAIN_MENU_TAP_COUNT = 10
+private const val MAIN_MENU_TAP_MAX_GAP_MS = 1_200L
 
 class MainActivity : ComponentActivity() {
     private val pressedKeys = mutableSetOf<Int>()
     private var settingsMenuVisible by mutableStateOf(false)
     private var serialSetupVisible by mutableStateOf(false)
     private var lastEnterPressAt = 0L
+    private var lastClearPressAt = 0L
     private var serialSettingsVersion by mutableStateOf(0)
     private var licenseAuthorized by mutableStateOf(false)
     private var licenseRegistering by mutableStateOf(false)
     private var exitingToAndroidHome = false
+    private var leavingPinpadUi = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enterImmersiveFullscreen()
-        applyNexgoSystemBarsLockedAsync(true)
+        val deviceSerialNumber =
+            (applicationContext as PinpadApplication).deviceInfoProvider.serialNumber()
         licenseAuthorized = PinpadLicenseManager.isAuthorized(
             this,
-            (applicationContext as PinpadApplication).deviceInfoProvider.serialNumber(),
+            deviceSerialNumber,
         )
         PinpadTraceLog.device("application certificate valid=$licenseAuthorized")
         if (licenseAuthorized) {
             PinpadLicenseManager.setKioskMode(this, true)
             startService(Intent(this, PinpadSerialService::class.java))
+        } else {
+            PinpadLicenseManager.setKioskMode(this, false)
         }
+        applyAuthorizationSystemUi()
         setContent {
             if (!licenseAuthorized) {
-                PinpadLicenseGate(licenseRegistering, ::requestApplicationLicense)
+                PinpadLicenseGate(
+                    registering = licenseRegistering,
+                    serialNumber = deviceSerialNumber,
+                    onRetry = ::requestApplicationLicense,
+                )
             } else PinpadRoot(
                 settingsMenuVisible = settingsMenuVisible,
                 serialSetupVisible = serialSetupVisible,
@@ -187,6 +218,12 @@ class MainActivity : ComponentActivity() {
                 },
                 onOpenAndroidSettings = ::openAndroidSettings,
                 onOpenWifiSettings = ::openWifiSettings,
+                onCloudUpdate = ::requestPinpadCloudUpdate,
+                onOpenSettingsMenu = {
+                    settingsMenuVisible = true
+                    serialSetupVisible = false
+                },
+                onBeginKeyInjection = ::beginKeyInjectionMode,
                 onExitToAndroidHome = ::exitToAndroidHome,
             )
         }
@@ -208,32 +245,49 @@ class MainActivity : ComponentActivity() {
                 PinpadLicenseManager.setKioskMode(this, true)
                 startService(Intent(this, PinpadSerialService::class.java))
             } else {
+                PinpadLicenseManager.setKioskMode(this, false)
                 Log.w(TAG, "PINPAD application license registration failed: $error")
             }
+            applyAuthorizationSystemUi()
         }
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
-        if (hasFocus && !exitingToAndroidHome) {
-            enterImmersiveFullscreen()
-            applyNexgoSystemBarsLockedAsync(true)
+        if (hasFocus && !leavingPinpadUi) {
+            applyAuthorizationSystemUi()
         }
     }
 
     override fun onResume() {
         super.onResume()
         if (!exitingToAndroidHome) {
-            enterImmersiveFullscreen()
-            applyNexgoSystemBarsLockedAsync(true)
+            leavingPinpadUi = false
+            PinpadLicenseManager.setKioskMode(this, licenseAuthorized)
+            applyAuthorizationSystemUi()
         }
+    }
+
+    override fun onPause() {
+        resetSetupShortcutTracking()
+        if (licenseAuthorized) {
+            startService(
+                Intent(this, PinpadSerialService::class.java)
+                    .setAction(PinpadSerialService.ACTION_END_CLEAR_KEY_INJECTION_MODE)
+                    .putExtra(PinpadSerialService.EXTRA_KEY_INJECTION_END_REASON, "activity_paused"),
+            )
+        }
+        super.onPause()
     }
 
     @SuppressLint("RestrictedApi")
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (!licenseAuthorized) {
+            return super.dispatchKeyEvent(event)
+        }
         recordKeyEvent(event)
         val settingsUiWasVisible = settingsMenuVisible || serialSetupVisible
-        detectSetupShortcuts(event)
+        if (detectSetupShortcuts(event)) return true
         if (isCancelLikeKey(event.keyCode)) {
             if (settingsUiWasVisible && event.action == KeyEvent.ACTION_DOWN) {
                 if (serialSetupVisible) {
@@ -275,20 +329,55 @@ class MainActivity : ComponentActivity() {
         )
     }
 
-    private fun detectSetupShortcuts(event: KeyEvent) {
-        when (event.action) {
-            KeyEvent.ACTION_DOWN -> {
-                pressedKeys += event.keyCode
-                if (pressedKeys.hasEnterAndOne() || event.completesEnterThenOneSequence()) {
-                    settingsMenuVisible = true
-                    serialSetupVisible = false
-                }
-                if (event.repeatCount == 0 && event.isEnterKey()) {
-                    lastEnterPressAt = event.eventTime
-                }
-            }
-            KeyEvent.ACTION_UP -> pressedKeys -= event.keyCode
+    private fun detectSetupShortcuts(event: KeyEvent): Boolean {
+        if (event.action == KeyEvent.ACTION_UP) {
+            pressedKeys -= event.keyCode
+            return false
         }
+        if (event.action != KeyEvent.ACTION_DOWN) return false
+
+        pressedKeys += event.keyCode
+        val shortcutsAllowed =
+            !settingsMenuVisible &&
+                !serialSetupVisible &&
+                PinpadDisplayController.state == PinpadDisplayState.Idle
+        if (!shortcutsAllowed) {
+            // Do not let ENTER/CLEAR events from a prior idle screen remain armed
+            // while passwords, PINs, signatures, or other operations are active.
+            lastEnterPressAt = 0L
+            lastClearPressAt = 0L
+            return false
+        }
+
+        if (pressedKeys.hasEnterAndOne() || event.completesEnterThenOneSequence()) {
+            settingsMenuVisible = true
+            serialSetupVisible = false
+            resetSetupShortcutTracking()
+            return true
+        }
+        if (pressedKeys.hasClearAndTwo() || event.completesClearThenTwoSequence()) {
+            settingsMenuVisible = false
+            serialSetupVisible = false
+            resetSetupShortcutTracking()
+            startService(
+                Intent(this, PinpadSerialService::class.java)
+                    .setAction(PinpadSerialService.ACTION_BEGIN_CLEAR_KEY_INJECTION_MODE),
+            )
+            return true
+        }
+        if (event.repeatCount == 0 && event.isEnterKey()) {
+            lastEnterPressAt = event.eventTime
+        }
+        if (event.repeatCount == 0 && event.isClearKey()) {
+            lastClearPressAt = event.eventTime
+        }
+        return false
+    }
+
+    private fun resetSetupShortcutTracking() {
+        pressedKeys.clear()
+        lastEnterPressAt = 0L
+        lastClearPressAt = 0L
     }
 
     private fun openAndroidSettings() {
@@ -303,9 +392,39 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun requestPinpadCloudUpdate() {
+        val requested = PinpadTmsConfigClient.request(applicationContext)
+        Toast.makeText(
+            this,
+            getString(
+                if (requested) {
+                    R.string.settings_cloud_update_requested
+                } else {
+                    R.string.settings_cloud_update_unavailable
+                },
+            ),
+            Toast.LENGTH_LONG,
+        ).show()
+    }
+
+    private fun beginKeyInjectionMode() {
+        if (PinpadDisplayController.state != PinpadDisplayState.Idle) {
+            Toast.makeText(this, getString(R.string.settings_key_injection_idle_required), Toast.LENGTH_SHORT).show()
+            return
+        }
+        settingsMenuVisible = false
+        serialSetupVisible = false
+        resetSetupShortcutTracking()
+        startService(
+            Intent(this, PinpadSerialService::class.java)
+                .setAction(PinpadSerialService.ACTION_BEGIN_CLEAR_KEY_INJECTION_MODE),
+        )
+    }
+
     private fun exitToAndroidHome() {
         if (exitingToAndroidHome) return
         exitingToAndroidHome = true
+        leavingPinpadUi = true
         settingsMenuVisible = false
         serialSetupVisible = false
         PinpadLicenseManager.setKioskMode(this, false)
@@ -326,6 +445,12 @@ class MainActivity : ComponentActivity() {
         return hasEnter && hasOne
     }
 
+    private fun Set<Int>.hasClearAndTwo(): Boolean {
+        val hasClear = any { keyCode -> keyCode.isClearKeyCode() }
+        val hasTwo = contains(KeyEvent.KEYCODE_2) || contains(KeyEvent.KEYCODE_NUMPAD_2)
+        return hasClear && hasTwo
+    }
+
     private fun KeyEvent.completesEnterThenOneSequence(): Boolean {
         if (repeatCount != 0 || !isOneKey()) return false
         return lastEnterPressAt > 0L && eventTime - lastEnterPressAt <= ENTER_ONE_SEQUENCE_WINDOW_MS
@@ -337,6 +462,22 @@ class MainActivity : ComponentActivity() {
 
     private fun KeyEvent.isOneKey(): Boolean {
         return keyCode == KeyEvent.KEYCODE_1 || keyCode == KeyEvent.KEYCODE_NUMPAD_1
+    }
+
+    private fun KeyEvent.completesClearThenTwoSequence(): Boolean {
+        if (repeatCount != 0 || !isTwoKey()) return false
+        return lastClearPressAt > 0L &&
+            eventTime - lastClearPressAt <= CLEAR_TWO_SEQUENCE_WINDOW_MS
+    }
+
+    private fun KeyEvent.isTwoKey(): Boolean {
+        return keyCode == KeyEvent.KEYCODE_2 || keyCode == KeyEvent.KEYCODE_NUMPAD_2
+    }
+
+    private fun KeyEvent.isClearKey(): Boolean = keyCode.isClearKeyCode()
+
+    private fun Int.isClearKeyCode(): Boolean {
+        return this == KeyEvent.KEYCODE_DEL || this == KeyEvent.KEYCODE_CLEAR
     }
 
     private fun isCancelLikeKey(keyCode: Int): Boolean {
@@ -387,7 +528,19 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun applyAuthorizationSystemUi() {
+        if (licenseAuthorized) {
+            enterImmersiveFullscreen()
+            applyNexgoSystemBarsLockedAsync(true)
+        } else {
+            showAndroidSystemBars()
+            applyNexgoSystemBarsLockedAsync(false)
+        }
+    }
+
     private fun runWithNexgoSystemBarsUnlocked(action: () -> Unit) {
+        leavingPinpadUi = true
+        PinpadLicenseManager.setKioskMode(this, false)
         showAndroidSystemBars()
         applyNexgoSystemBarsLockedAsync(false)
         Handler(Looper.getMainLooper()).postDelayed(action, SYSTEM_BAR_EXIT_DELAY_MS)
@@ -447,6 +600,14 @@ class MainActivity : ComponentActivity() {
     private fun applyNexgoSystemBarsLocked(locked: Boolean) {
         val platform = (applicationContext as PinpadApplication).deviceEngine.platform
         runCatching {
+            val helper = SystemServiceHelper.getInstance()
+            helper.init(applicationContext)
+            helper.getSystemUIManager()?.apply {
+                enableControlBar(!locked)
+                enableMessageBar(!locked)
+                enableHome(!locked)
+                enableRecv(!locked)
+            }
             if (locked) {
                 platform.hideNavigationBar()
                 platform.disableControlBar()
@@ -466,13 +627,18 @@ class MainActivity : ComponentActivity() {
         private const val TAG = "PinpadMainActivity"
         private const val KEYPAD_LOG_TAG = "PinpadKeypad"
         private const val ENTER_ONE_SEQUENCE_WINDOW_MS = 4_000L
+        private const val CLEAR_TWO_SEQUENCE_WINDOW_MS = 4_000L
         private const val SYSTEM_BAR_EXIT_DELAY_MS = 250L
         private const val NEXGO_NAVIGATION_RESTORE_TIMEOUT_MS = 1_500L
     }
 }
 
 @Composable
-private fun PinpadLicenseGate(registering: Boolean, onRetry: () -> Unit) {
+private fun PinpadLicenseGate(
+    registering: Boolean,
+    serialNumber: String,
+    onRetry: () -> Unit,
+) {
     Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         Column(
             modifier = Modifier.fillMaxSize().padding(32.dp),
@@ -487,6 +653,12 @@ private fun PinpadLicenseGate(registering: Boolean, onRetry: () -> Unit) {
             Spacer(Modifier.height(16.dp))
             Text(
                 text = stringResource(R.string.license_required_message),
+                textAlign = TextAlign.Center,
+            )
+            Spacer(Modifier.height(12.dp))
+            Text(
+                text = stringResource(R.string.license_device_serial, serialNumber),
+                style = MaterialTheme.typography.bodyMedium,
                 textAlign = TextAlign.Center,
             )
             Spacer(Modifier.height(24.dp))
@@ -508,6 +680,9 @@ private fun PinpadRoot(
     onSaveSettings: (SerialSettings) -> Unit,
     onOpenAndroidSettings: () -> Unit,
     onOpenWifiSettings: () -> Unit,
+    onCloudUpdate: () -> Unit,
+    onOpenSettingsMenu: () -> Unit,
+    onBeginKeyInjection: () -> Unit,
     onExitToAndroidHome: () -> Unit,
 ) {
     if (serialSetupVisible) {
@@ -520,11 +695,16 @@ private fun PinpadRoot(
             onSerialSettings = onOpenSerialSetup,
             onAndroidSettings = onOpenAndroidSettings,
             onWifiSettings = onOpenWifiSettings,
+            onCloudUpdate = onCloudUpdate,
+            onKeyInjection = onBeginKeyInjection,
             onExitToAndroidHome = onExitToAndroidHome,
             onClose = onCloseSettingsMenu,
         )
     } else {
-        PinpadIdleScreen(serialSettingsVersion = serialSettingsVersion)
+        PinpadIdleScreen(
+            serialSettingsVersion = serialSettingsVersion,
+            onLongPress = onOpenSettingsMenu,
+        )
     }
 }
 
@@ -533,6 +713,8 @@ private fun PinpadSettingsMenu(
     onSerialSettings: () -> Unit,
     onAndroidSettings: () -> Unit,
     onWifiSettings: () -> Unit,
+    onCloudUpdate: () -> Unit,
+    onKeyInjection: () -> Unit,
     onExitToAndroidHome: () -> Unit,
     onClose: () -> Unit,
 ) {
@@ -577,8 +759,8 @@ private fun PinpadSettingsMenu(
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(horizontal = 18.dp, vertical = 22.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
+                    .padding(horizontal = 18.dp, vertical = 14.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Text(
                     text = stringResource(R.string.settings_menu_title),
@@ -609,6 +791,16 @@ private fun PinpadSettingsMenu(
                     onClick = onWifiSettings,
                 )
                 SettingsMenuButton(
+                    text = stringResource(R.string.settings_cloud_update),
+                    background = Color(0xFF176C78),
+                    onClick = onCloudUpdate,
+                )
+                SettingsMenuButton(
+                    text = stringResource(R.string.settings_key_injection),
+                    background = Color(0xFF8A5A12),
+                    onClick = onKeyInjection,
+                )
+                SettingsMenuButton(
                     text = stringResource(R.string.settings_exit_home),
                     background = Color(0xFF9A4636),
                     onClick = { requestProtected(SettingsProtectedAction.ExitToAndroidHome) },
@@ -616,7 +808,7 @@ private fun PinpadSettingsMenu(
                 TextButton(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(54.dp),
+                        .height(48.dp),
                     onClick = onClose,
                 ) {
                     Text(stringResource(R.string.settings_close), fontSize = 18.sp)
@@ -628,6 +820,10 @@ private fun PinpadSettingsMenu(
     protectedAction?.let { action ->
         SettingsPasswordDialog(
             passwordStore = passwordStore,
+            passwordScope = when (action) {
+                SettingsProtectedAction.AndroidSettings -> PinpadSettingsPasswordStore.Scope.AndroidConfig
+                SettingsProtectedAction.ExitToAndroidHome -> PinpadSettingsPasswordStore.Scope.ExitHome
+            },
             hardwareOnly = useHardwarePasswordEntry,
             onDismiss = { protectedAction = null },
             onVerified = {
@@ -658,7 +854,7 @@ private fun SettingsMenuButton(
     Button(
         modifier = Modifier
             .fillMaxWidth()
-            .height(64.dp),
+            .height(54.dp),
         onClick = onClick,
         colors = ButtonDefaults.buttonColors(containerColor = background),
         shape = RoundedCornerShape(6.dp),
@@ -677,6 +873,7 @@ private fun SettingsMenuButton(
 @Composable
 private fun SettingsPasswordDialog(
     passwordStore: PinpadSettingsPasswordStore,
+    passwordScope: PinpadSettingsPasswordStore.Scope,
     hardwareOnly: Boolean,
     onDismiss: () -> Unit,
     onVerified: () -> Unit,
@@ -688,7 +885,7 @@ private fun SettingsPasswordDialog(
     val password2FocusRequester = remember { FocusRequester() }
     val hardwareFocusRequester = remember { FocusRequester() }
     fun submitPasswords() {
-        if (passwordStore.verify(password1, password2)) onVerified() else onRejected()
+        if (passwordStore.verify(passwordScope, password1, password2)) onVerified() else onRejected()
     }
     fun handleHardwarePasswordKey(event: androidx.compose.ui.input.key.KeyEvent): Boolean {
         if (event.type != KeyEventType.KeyDown) return false
@@ -957,7 +1154,10 @@ private enum class SettingsProtectedAction {
 }
 
 @Composable
-private fun PinpadIdleScreen(serialSettingsVersion: Int) {
+private fun PinpadIdleScreen(
+    serialSettingsVersion: Int,
+    onLongPress: () -> Unit,
+) {
     val context = LocalContext.current
     val defaultMessage = stringResource(R.string.idle_default)
     val prefs = remember(context) { PinpadPreferences(context) }
@@ -967,7 +1167,38 @@ private fun PinpadIdleScreen(serialSettingsVersion: Int) {
 
     MaterialTheme {
         Surface(
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier
+                .fillMaxSize()
+                .pointerInput(displayState) {
+                    if (displayState != PinpadDisplayState.Idle) return@pointerInput
+                    val rapidTaps = RapidTapSequence(
+                        requiredTaps = MAIN_MENU_TAP_COUNT,
+                        maximumGapMs = MAIN_MENU_TAP_MAX_GAP_MS,
+                    )
+                    while (true) {
+                        awaitPointerEventScope {
+                            awaitFirstDown(requireUnconsumed = false)
+                        }
+                        val finishedBeforeThreshold = withTimeoutOrNull(MAIN_MENU_HOLD_MS) {
+                            awaitPointerEventScope { waitForUpOrCancellation() } != null
+                        }
+                        when (finishedBeforeThreshold) {
+                            null -> {
+                                rapidTaps.reset()
+                                awaitPointerEventScope {
+                                    waitForUpOrCancellation()
+                                }
+                                onLongPress()
+                            }
+                            false -> rapidTaps.reset()
+                            true -> {
+                                if (rapidTaps.registerTap(SystemClock.elapsedRealtime())) {
+                                    onLongPress()
+                                }
+                            }
+                        }
+                    }
+                },
             color = Color(0xFF050608),
         ) {
             Box(
@@ -987,7 +1218,12 @@ private fun PinpadIdleScreen(serialSettingsVersion: Int) {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .padding(horizontal = 20.dp, vertical = 58.dp),
+                        .padding(
+                            start = if (displayState.usesFullWidth()) 0.dp else 20.dp,
+                            top = 58.dp,
+                            end = if (displayState.usesFullWidth()) 0.dp else 20.dp,
+                            bottom = 20.dp,
+                        ),
                     contentAlignment = Alignment.Center,
                 ) {
                     PinpadPromptContent(
@@ -998,7 +1234,51 @@ private fun PinpadIdleScreen(serialSettingsVersion: Int) {
                 if (BuildConfig.SENSORY_KITS_ENABLED) {
                     MastercardSensoryWarmupHost()
                 }
+                SerialErrorBanner(
+                    modifier = Modifier.align(Alignment.BottomCenter),
+                )
             }
+        }
+    }
+}
+
+@Composable
+private fun SerialErrorBanner(modifier: Modifier = Modifier) {
+    val snapshot = PinpadSerialDiagnostics.snapshot
+    if (snapshot.connectionState != SerialConnectionState.Error) {
+        return
+    }
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        color = Color(0xFF3B1115),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            Text(
+                text = stringResource(R.string.serial_diagnostics_status, stringResource(R.string.serial_diagnostics_error)),
+                color = Color(0xFFFF8A80),
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+            snapshot.error?.let { error ->
+                Text(
+                    text = stringResource(R.string.serial_diagnostics_error_message, error),
+                    color = Color(0xFFFF8A80),
+                    fontSize = 11.sp,
+                    lineHeight = 13.sp,
+                    maxLines = 2,
+                )
+            }
+            Text(
+                text = stringResource(R.string.serial_diagnostics_support),
+                color = Color(0xFFFFD166),
+                fontSize = 11.sp,
+                lineHeight = 13.sp,
+            )
         }
     }
 }
@@ -1016,6 +1296,15 @@ private fun PinpadPromptContent(
         is PinpadDisplayState.Message -> PromptText(state.text)
         is PinpadDisplayState.TextEntry -> TextEntryPrompt(state)
         is PinpadDisplayState.EnterPin -> PinEntryPrompt(state.digits, state.promptLines)
+        is PinpadDisplayState.KeyLoadAuthentication -> KeyLoadAuthenticationPrompt(state)
+        PinpadDisplayState.KeyInjectionMode -> PromptText(
+            stringResource(R.string.key_injection_mode_active),
+            Color(0xFF90F0B0),
+        )
+        is PinpadDisplayState.SignatureCapture -> SignatureCapturePrompt(state)
+        is PinpadDisplayState.PhotoCapture -> PhotoCapturePrompt(state)
+        is PinpadDisplayState.QrDisplay -> QrDisplayPrompt(state)
+        is PinpadDisplayState.QrScan -> QrScanPrompt(state)
         PinpadDisplayState.Processing -> PromptText(stringResource(R.string.prompt_pinpad_processing))
         PinpadDisplayState.BadRead -> PromptText(stringResource(R.string.prompt_bad_read), Color(0xFFFFD166))
         PinpadDisplayState.Declined -> DeclinedPrompt()
@@ -1043,6 +1332,284 @@ private fun PinpadPromptContent(
         is PinpadDisplayState.Media -> MediaPrompt(state.path, state.video)
         is PinpadDisplayState.BrandSensory -> BrandSensoryPrompt(state.brand)
     }
+}
+
+private fun PinpadDisplayState.usesFullWidth(): Boolean =
+    this is PinpadDisplayState.SignatureCapture ||
+        this is PinpadDisplayState.PhotoCapture ||
+        this is PinpadDisplayState.QrDisplay ||
+        this is PinpadDisplayState.QrScan
+
+@Composable
+private fun SignatureCapturePrompt(state: PinpadDisplayState.SignatureCapture) {
+    var strokes by remember(state) { mutableStateOf<List<List<Offset>>>(emptyList()) }
+    var canvasSize by remember(state) { mutableStateOf(IntSize.Zero) }
+    var showCancelConfirmation by remember(state) { mutableStateOf(false) }
+    var remainingSeconds by remember(state) { mutableStateOf(state.timeoutSeconds) }
+    val hasSignature = strokes.any { it.size > 1 }
+    val canvasHeight = if (state.orientation == SignatureOrientation.Horizontal) 235.dp else 330.dp
+
+    LaunchedEffect(state) {
+        while (remainingSeconds > 0) {
+            delay(1_000)
+            remainingSeconds--
+        }
+    }
+
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Text(
+            text = stringResource(R.string.signature_capture_title),
+            color = Color.White,
+            fontSize = 22.sp,
+            fontWeight = FontWeight.Bold,
+        )
+        Text(
+            text = stringResource(R.string.signature_capture_timeout, remainingSeconds.coerceAtLeast(0)),
+            color = Color(0xFFC8CDD5),
+            fontSize = 12.sp,
+        )
+        Canvas(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(canvasHeight)
+                .background(Color.White, RoundedCornerShape(8.dp))
+                .border(2.dp, Color(0xFF8FD3FF), RoundedCornerShape(8.dp))
+                .onSizeChanged { canvasSize = it }
+                .pointerInput(state) {
+                    detectDragGestures(
+                        onDragStart = { start ->
+                            strokes = strokes + listOf(listOf(start))
+                        },
+                        onDrag = { change, _ ->
+                            change.consume()
+                            val current = strokes.lastOrNull().orEmpty()
+                            if (current.isNotEmpty()) {
+                                strokes = strokes.dropLast(1) + listOf(current + change.position)
+                            }
+                        },
+                    )
+                },
+        ) {
+            val guideY = size.height * 0.62f
+            drawLine(
+                color = Color(0xFF9AA4B2),
+                start = Offset(size.width * 0.08f, guideY),
+                end = Offset(size.width * 0.92f, guideY),
+                strokeWidth = 2f,
+            )
+            strokes.forEach { stroke ->
+                stroke.zipWithNext().forEach { (start, end) ->
+                    drawLine(
+                        color = Color.Black,
+                        start = start,
+                        end = end,
+                        strokeWidth = 4f,
+                        cap = StrokeCap.Round,
+                    )
+                }
+            }
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
+        ) {
+            Button(
+                onClick = {
+                    runCatching {
+                        val points = strokes.map { stroke ->
+                            stroke.map { SignaturePoint(it.x, it.y) }
+                        }
+                        SignatureBitmapEncoder.encode(
+                            strokes = points,
+                            width = canvasSize.width,
+                            height = canvasSize.height,
+                            format = state.imageFormat,
+                        )
+                    }.fold(
+                        onSuccess = {
+                            PinpadDisplayController.completeSignatureCapture(
+                                SignatureCaptureResult.Captured(it),
+                            )
+                        },
+                        onFailure = {
+                            Log.e(BRAND_SENSORY_LOG_TAG, "Unable to encode signature", it)
+                            PinpadDisplayController.completeSignatureCapture(SignatureCaptureResult.Error)
+                        },
+                    )
+                },
+                enabled = hasSignature && canvasSize != IntSize.Zero,
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32)),
+            ) {
+                Text(stringResource(R.string.signature_capture_ok))
+            }
+            Button(
+                onClick = { strokes = emptyList() },
+                enabled = hasSignature,
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF455A64)),
+            ) {
+                Text(stringResource(R.string.signature_capture_clear))
+            }
+            Button(
+                onClick = { showCancelConfirmation = true },
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFB3261E)),
+            ) {
+                Text(stringResource(R.string.signature_capture_cancel))
+            }
+        }
+    }
+
+    if (showCancelConfirmation) {
+        AlertDialog(
+            onDismissRequest = { showCancelConfirmation = false },
+            title = { Text(stringResource(R.string.signature_capture_cancel_title)) },
+            text = { Text(stringResource(R.string.signature_capture_cancel_message)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showCancelConfirmation = false
+                        PinpadDisplayController.completeSignatureCapture(SignatureCaptureResult.Cancelled)
+                    },
+                    colors = ButtonDefaults.textButtonColors(contentColor = Color(0xFFB3261E)),
+                ) {
+                    Text(stringResource(R.string.signature_capture_cancel_confirm))
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { showCancelConfirmation = false },
+                    colors = ButtonDefaults.textButtonColors(contentColor = Color(0xFF2E7D32)),
+                ) {
+                    Text(stringResource(R.string.signature_capture_continue))
+                }
+            },
+        )
+    }
+}
+
+@Composable
+private fun KeyLoadAuthenticationPrompt(state: PinpadDisplayState.KeyLoadAuthentication) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .verticalScroll(rememberScrollState()),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Text(
+            text = stringResource(R.string.keyload_authentication_title),
+            color = Color.White,
+            fontSize = 24.sp,
+            fontWeight = FontWeight.SemiBold,
+            textAlign = TextAlign.Center,
+        )
+        Text(
+            text = stringResource(R.string.keyload_authentication_command, state.commandId),
+            color = Color(0xFFC8CDD5),
+            fontSize = 14.sp,
+        )
+        KeyLoadPasswordStatus(
+            label = stringResource(R.string.settings_password_1),
+            digits = state.password1Digits,
+            active = state.activePassword == 1,
+        )
+        KeyLoadPasswordStatus(
+            label = stringResource(R.string.settings_password_2),
+            digits = state.password2Digits,
+            active = state.activePassword == 2,
+        )
+        state.message?.let { message ->
+            Text(
+                text = when (message) {
+                    is KeyLoadAuthenticationMessage.InvalidPassword ->
+                        stringResource(
+                            R.string.keyload_authentication_invalid,
+                            message.attemptsRemaining,
+                        )
+                    is KeyLoadAuthenticationMessage.Cooldown ->
+                        stringResource(
+                            R.string.keyload_authentication_cooldown,
+                            message.secondsRemaining,
+                        )
+                },
+                color = Color(0xFFFFD166),
+                fontSize = 14.sp,
+                textAlign = TextAlign.Center,
+            )
+        }
+        if (state.useOnScreenKeypad) {
+            listOf(
+                listOf(PinpadKeypadKey.Digit1, PinpadKeypadKey.Digit2, PinpadKeypadKey.Digit3),
+                listOf(PinpadKeypadKey.Digit4, PinpadKeypadKey.Digit5, PinpadKeypadKey.Digit6),
+                listOf(PinpadKeypadKey.Digit7, PinpadKeypadKey.Digit8, PinpadKeypadKey.Digit9),
+                listOf(PinpadKeypadKey.Clear, PinpadKeypadKey.Digit0, PinpadKeypadKey.Enter),
+            ).forEach { row ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    row.forEach { key ->
+                        Button(
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(52.dp),
+                            onClick = { state.onKey(key) },
+                            shape = RoundedCornerShape(6.dp),
+                        ) {
+                            Text(key.keyLoadLabel(), fontSize = 20.sp)
+                        }
+                    }
+                }
+            }
+            TextButton(onClick = { state.onKey(PinpadKeypadKey.Cancel) }) {
+                Text(stringResource(R.string.settings_password_cancel))
+            }
+        } else {
+            Text(
+                text = stringResource(R.string.keyload_authentication_hardware_hint),
+                color = Color(0xFFC8CDD5),
+                fontSize = 14.sp,
+                textAlign = TextAlign.Center,
+            )
+        }
+    }
+}
+
+@Composable
+private fun KeyLoadPasswordStatus(label: String, digits: Int, active: Boolean) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(
+                width = if (active) 2.dp else 1.dp,
+                color = if (active) Color(0xFF8FD3FF) else Color(0xFF505965),
+                shape = RoundedCornerShape(6.dp),
+            )
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+    ) {
+        Text(label, color = if (active) Color(0xFF8FD3FF) else Color(0xFFC8CDD5), fontSize = 13.sp)
+        Text("*".repeat(digits), color = Color.White, fontSize = 22.sp, minLines = 1)
+    }
+}
+
+@Composable
+private fun PinpadKeypadKey.keyLoadLabel(): String = when (this) {
+    PinpadKeypadKey.Digit0 -> "0"
+    PinpadKeypadKey.Digit1 -> "1"
+    PinpadKeypadKey.Digit2 -> "2"
+    PinpadKeypadKey.Digit3 -> "3"
+    PinpadKeypadKey.Digit4 -> "4"
+    PinpadKeypadKey.Digit5 -> "5"
+    PinpadKeypadKey.Digit6 -> "6"
+    PinpadKeypadKey.Digit7 -> "7"
+    PinpadKeypadKey.Digit8 -> "8"
+    PinpadKeypadKey.Digit9 -> "9"
+    PinpadKeypadKey.Clear -> "⌫"
+    PinpadKeypadKey.Enter -> stringResource(R.string.keyload_authentication_confirm)
+    else -> ""
 }
 
 @Composable
@@ -2145,6 +2712,7 @@ private fun PinpadStatusBar(
 private fun SerialSettings.portDisplayText(usbSerialLabel: String): String {
     return when (transportMode.uppercase()) {
         "RS232" -> "RS232:$rs232Port"
+        "IP" -> "TCP:$tcpPort"
         else -> usbSerialLabel
     }
 }
@@ -2345,10 +2913,10 @@ private fun PinpadSetupScreen(
                 SetupCycleRow(
                     label = stringResource(R.string.setup_transport),
                     value = settings.transportMode,
-                    displayValue = if (settings.transportMode == "SERIAL") {
-                        stringResource(R.string.setup_usb_serial)
-                    } else {
-                        settings.transportMode
+                    displayValue = when (settings.transportMode) {
+                        "SERIAL" -> stringResource(R.string.setup_usb_serial)
+                        "IP" -> stringResource(R.string.setup_ip)
+                        else -> settings.transportMode
                     },
                     values = TRANSPORT_MODES,
                     onChanged = { settings = settings.copy(transportMode = it) },
@@ -2361,30 +2929,51 @@ private fun PinpadSetupScreen(
                         onChanged = { settings = settings.copy(rs232Port = it.toInt()) },
                     )
                 }
-                SetupCycleRow(
-                    label = stringResource(R.string.setup_baud_rate),
-                    value = settings.baudRate.toString(),
-                    values = BAUD_RATES.map(Int::toString),
-                    onChanged = { settings = settings.copy(baudRate = it.toInt()) },
-                )
-                SetupCycleRow(
-                    label = stringResource(R.string.setup_data_bits),
-                    value = settings.dataBits.toString(),
-                    values = DATA_BITS.map(Int::toString),
-                    onChanged = { settings = settings.copy(dataBits = it.toInt()) },
-                )
-                SetupCycleRow(
-                    label = stringResource(R.string.setup_stop_bits),
-                    value = settings.stopBits.toString(),
-                    values = STOP_BITS.map(Int::toString),
-                    onChanged = { settings = settings.copy(stopBits = it.toInt()) },
-                )
-                SetupCycleRow(
-                    label = stringResource(R.string.setup_parity),
-                    value = settings.parity,
-                    values = PARITY_VALUES,
-                    onChanged = { settings = settings.copy(parity = it) },
-                )
+                if (settings.transportMode == "IP") {
+                    OutlinedTextField(
+                        modifier = Modifier.fillMaxWidth(),
+                        value = settings.tcpPort.toString(),
+                        onValueChange = { value ->
+                            value.filter(Char::isDigit)
+                                .toIntOrNull()
+                                ?.coerceIn(1, 65_535)
+                                ?.let { settings = settings.copy(tcpPort = it) }
+                        },
+                        label = { Text(stringResource(R.string.setup_tcp_port)) },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        singleLine = true,
+                    )
+                    Text(
+                        text = stringResource(R.string.setup_ip_discovery_hint),
+                        color = Color(0xFFC8CDD5),
+                        fontSize = 13.sp,
+                    )
+                } else {
+                    SetupCycleRow(
+                        label = stringResource(R.string.setup_baud_rate),
+                        value = settings.baudRate.toString(),
+                        values = BAUD_RATES.map(Int::toString),
+                        onChanged = { settings = settings.copy(baudRate = it.toInt()) },
+                    )
+                    SetupCycleRow(
+                        label = stringResource(R.string.setup_data_bits),
+                        value = settings.dataBits.toString(),
+                        values = DATA_BITS.map(Int::toString),
+                        onChanged = { settings = settings.copy(dataBits = it.toInt()) },
+                    )
+                    SetupCycleRow(
+                        label = stringResource(R.string.setup_stop_bits),
+                        value = settings.stopBits.toString(),
+                        values = STOP_BITS.map(Int::toString),
+                        onChanged = { settings = settings.copy(stopBits = it.toInt()) },
+                    )
+                    SetupCycleRow(
+                        label = stringResource(R.string.setup_parity),
+                        value = settings.parity,
+                        values = PARITY_VALUES,
+                        onChanged = { settings = settings.copy(parity = it) },
+                    )
+                }
                 Spacer(Modifier.height(6.dp))
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -2470,7 +3059,7 @@ private fun List<String>.previousOf(value: String): String {
     return this[(index - 1 + size) % size]
 }
 
-private val TRANSPORT_MODES = listOf("SERIAL", "RS232")
+private val TRANSPORT_MODES = listOf("SERIAL", "RS232", "IP")
 private val BAUD_RATES = listOf(9600, 19200, 38400, 57600, 115200, 230400)
 private val DATA_BITS = listOf(8, 7, 6, 5)
 private val STOP_BITS = listOf(1, 2)

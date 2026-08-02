@@ -10,10 +10,31 @@ public sealed class MainForm : Form
     private const int DefaultBaudRate = 9_600;
     private static readonly int[] SupportedBaudRates =
         [1_200, 2_400, 4_800, 9_600, 19_200, 38_400, 57_600, 115_200];
+    private static readonly QrSample[] QrSamples =
+    [
+        new("Plain text", "Global Connect ONE — PINPAD QR test"),
+        new("Website URL", "https://portal.globalconnect.one"),
+        new("Wi-Fi network", "WIFI:T:WPA;S:GlobalConnect-Demo;P:12345678;;"),
+        new("Email", "mailto:support@globalconnect.one?subject=PINPAD%20QR%20test"),
+        new("Phone number", "tel:+50640000000"),
+        new("SMS message", "SMSTO:+50640000000:Global Connect QR test"),
+        new(
+            "Payment reference",
+            """{"reference":"GC-DEMO-0001","amount":"100.00","currency":"USD"}"""),
+        new("Spanish / UTF-8", "Prueba de código QR — Español: áéíóú ñ"),
+    ];
 
     private readonly PinpadClient _client;
+    private readonly ComboBox _connectionTypeCombo = new();
     private readonly ComboBox _portCombo = new();
     private readonly ComboBox _baudCombo = new();
+    private readonly Label _serialPortLabel = new();
+    private readonly Label _baudLabel = new();
+    private readonly Label _hostLabel = new();
+    private readonly Label _tcpPortLabel = new();
+    private readonly TextBox _hostTextBox = new();
+    private readonly NumericUpDown _tcpPort = new();
+    private readonly Button _discoverButton = new();
     private readonly Button _connectButton = new();
     private readonly Button _refreshPortsButton = new();
     private readonly Button _applyBaudButton = new();
@@ -27,6 +48,27 @@ public sealed class MainForm : Form
     private readonly Button _speakTextButton = new();
     private readonly PictureBox _imagePreview = new();
     private readonly Label _previewLabel = new();
+    private readonly NumericUpDown _signatureTimeout = new();
+    private readonly ComboBox _signatureOrientation = new();
+    private readonly ComboBox _signatureFormat = new();
+    private readonly Button _captureSignatureButton = new();
+    private readonly Button _saveSignatureButton = new();
+    private readonly PictureBox _signaturePreview = new();
+    private readonly Label _signaturePreviewLabel = new();
+    private readonly NumericUpDown _photoTimeout = new();
+    private readonly ComboBox _photoFacing = new();
+    private readonly NumericUpDown _photoQuality = new();
+    private readonly Button _capturePhotoButton = new();
+    private readonly Button _savePhotoButton = new();
+    private readonly PictureBox _photoPreview = new();
+    private readonly Label _photoPreviewLabel = new();
+    private readonly NumericUpDown _qrTimeout = new();
+    private readonly ComboBox _qrFacing = new();
+    private readonly ComboBox _qrSampleCombo = new();
+    private readonly TextBox _qrValueTextBox = new();
+    private readonly TextBox _qrResultTextBox = new();
+    private readonly Button _showQrButton = new();
+    private readonly Button _scanQrButton = new();
     private readonly ProgressBar _progressBar = new();
     private readonly Label _statusLabel = new();
     private readonly Button _cancelButton = new();
@@ -34,6 +76,9 @@ public sealed class MainForm : Form
     private readonly List<Control> _operationControls = [];
     private CancellationTokenSource? _operationCancellation;
     private bool _operationInProgress;
+    private byte[]? _capturedSignature;
+    private SignatureImageFormat _capturedSignatureFormat = SignatureImageFormat.Png;
+    private byte[]? _capturedPhoto;
 
     public MainForm()
     {
@@ -49,7 +94,9 @@ public sealed class MainForm : Form
 
         BuildLayout();
         ConfigureGrids();
-        RefreshPorts();
+        var preferences = ConnectionPreferencesStore.Load();
+        RestoreConnectionPreferences(preferences);
+        RefreshPorts(preferences.SerialPort);
         SetConnectedState(false);
 
         FormClosing += OnFormClosing;
@@ -76,39 +123,49 @@ public sealed class MainForm : Form
 
     private Control BuildConnectionPanel()
     {
-        var panel = new TableLayoutPanel
+        var panel = new FlowLayoutPanel
         {
             Dock = DockStyle.Top,
             AutoSize = true,
-            ColumnCount = 9,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            WrapContents = true,
+            FlowDirection = FlowDirection.LeftToRight,
             Padding = new Padding(8),
             BackColor = Color.FromArgb(245, 247, 250),
             Margin = new Padding(0, 0, 0, 10),
         };
 
-        panel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 135));
-        panel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        panel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 130));
-        panel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        panel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        panel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        panel.Controls.Add(new Label {
+            Text = "Connection",
+            AutoSize = true,
+            Margin = new Padding(3, 8, 3, 3),
+        });
+        _connectionTypeCombo.DropDownStyle = ComboBoxStyle.DropDownList;
+        _connectionTypeCombo.Width = 105;
+        _connectionTypeCombo.Items.AddRange(["Serial", "IP"]);
+        _connectionTypeCombo.SelectedIndex = 0;
+        _connectionTypeCombo.SelectedIndexChanged += (_, _) => UpdateConnectionModeControls();
+        panel.Controls.Add(_connectionTypeCombo);
 
-        panel.Controls.Add(new Label { Text = "Serial port", AutoSize = true, Anchor = AnchorStyles.Left }, 0, 0);
+        _serialPortLabel.Text = "Serial port";
+        _serialPortLabel.AutoSize = true;
+        _serialPortLabel.Margin = new Padding(12, 8, 3, 3);
+        panel.Controls.Add(_serialPortLabel);
         _portCombo.DropDownStyle = ComboBoxStyle.DropDownList;
-        _portCombo.Dock = DockStyle.Fill;
-        panel.Controls.Add(_portCombo, 1, 0);
+        _portCombo.Width = 125;
+        panel.Controls.Add(_portCombo);
 
         _refreshPortsButton.Text = "Refresh";
         _refreshPortsButton.AutoSize = true;
         _refreshPortsButton.Click += (_, _) => RefreshPorts();
-        panel.Controls.Add(_refreshPortsButton, 2, 0);
+        panel.Controls.Add(_refreshPortsButton);
 
-        panel.Controls.Add(new Label { Text = "Baud", AutoSize = true, Anchor = AnchorStyles.Left }, 3, 0);
+        _baudLabel.Text = "Baud";
+        _baudLabel.AutoSize = true;
+        _baudLabel.Margin = new Padding(12, 8, 3, 3);
+        panel.Controls.Add(_baudLabel);
         _baudCombo.DropDownStyle = ComboBoxStyle.DropDownList;
-        _baudCombo.Dock = DockStyle.Fill;
+        _baudCombo.Width = 110;
         _baudCombo.Items.AddRange(SupportedBaudRates.Cast<object>().ToArray());
         _baudCombo.Format += (_, eventArgs) =>
         {
@@ -118,37 +175,73 @@ public sealed class MainForm : Form
             }
         };
         _baudCombo.SelectedItem = DefaultBaudRate;
-        panel.Controls.Add(_baudCombo, 4, 0);
+        panel.Controls.Add(_baudCombo);
+
+        _hostLabel.Text = "Pinpad address";
+        _hostLabel.AutoSize = true;
+        _hostLabel.Margin = new Padding(12, 8, 3, 3);
+        panel.Controls.Add(_hostLabel);
+        _hostTextBox.Width = 145;
+        _hostTextBox.PlaceholderText = "192.168.1.50";
+        panel.Controls.Add(_hostTextBox);
+
+        _tcpPortLabel.Text = "TCP port";
+        _tcpPortLabel.AutoSize = true;
+        _tcpPortLabel.Margin = new Padding(12, 8, 3, 3);
+        panel.Controls.Add(_tcpPortLabel);
+        _tcpPort.Minimum = 1;
+        _tcpPort.Maximum = 65_535;
+        _tcpPort.Value = 9_100;
+        _tcpPort.Width = 80;
+        panel.Controls.Add(_tcpPort);
+
+        _discoverButton.Text = "Discover";
+        _discoverButton.AutoSize = true;
+        _discoverButton.Click += async (_, _) => await DiscoverPinpadsAsync();
+        panel.Controls.Add(_discoverButton);
 
         _connectButton.Text = "Connect";
         _connectButton.AutoSize = true;
         _connectButton.Click += ConnectButtonOnClick;
-        panel.Controls.Add(_connectButton, 5, 0);
+        panel.Controls.Add(_connectButton);
 
         _applyBaudButton.Text = "Apply baud to terminal";
         _applyBaudButton.AutoSize = true;
         _applyBaudButton.Click += async (_, _) => await ApplyBaudAsync();
-        panel.Controls.Add(_applyBaudButton, 6, 0);
+        panel.Controls.Add(_applyBaudButton);
 
         _connectionLabel.AutoSize = true;
-        _connectionLabel.Anchor = AnchorStyles.Right;
+        _connectionLabel.Margin = new Padding(12, 8, 3, 3);
         _connectionLabel.Font = new Font(Font, FontStyle.Bold);
-        panel.Controls.Add(_connectionLabel, 8, 0);
+        panel.Controls.Add(_connectionLabel);
 
         _operationControls.AddRange(
-            [_portCombo, _baudCombo, _refreshPortsButton, _connectButton, _applyBaudButton]);
+            [
+                _connectionTypeCombo, _portCombo, _baudCombo, _refreshPortsButton,
+                _hostTextBox, _tcpPort, _discoverButton, _connectButton, _applyBaudButton,
+            ]);
+        UpdateConnectionModeControls();
         return panel;
     }
 
     private Control BuildWorkspace()
     {
-        var tabs = new TabControl { Dock = DockStyle.Fill };
+        var tabs = new ProminentTabControl { Dock = DockStyle.Fill };
         var jpegPage = new TabPage("Images — J commands") { Padding = new Padding(8) };
         var mediaPage = new TabPage("Media — M commands") { Padding = new Padding(8) };
+        var signaturePage = new TabPage("Signature — S commands") { Padding = new Padding(8) };
+        var cameraQrPage = new TabPage("Camera & QR — PH/QR commands") { Padding = new Padding(8) };
+        var a10DemoPage = new TabPage("A10 Demo") { Padding = new Padding(8) };
         jpegPage.Controls.Add(BuildJpegPage());
         mediaPage.Controls.Add(BuildMediaPage());
+        signaturePage.Controls.Add(BuildSignaturePage());
+        cameraQrPage.Controls.Add(BuildCameraQrPage());
+        a10DemoPage.Controls.Add(new A10DemoControl(_client));
         tabs.TabPages.Add(jpegPage);
         tabs.TabPages.Add(mediaPage);
+        tabs.TabPages.Add(signaturePage);
+        tabs.TabPages.Add(cameraQrPage);
+        tabs.TabPages.Add(a10DemoPage);
         return tabs;
     }
 
@@ -253,6 +346,277 @@ public sealed class MainForm : Form
                    "MP3 is limited to 16 MiB and MP4 to 64 MiB by the terminal.",
         }, 0, 3);
         return panel;
+    }
+
+    private Control BuildSignaturePage()
+    {
+        var panel = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            RowCount = 3,
+            ColumnCount = 1,
+            Padding = new Padding(12),
+        };
+        panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        panel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+        var controls = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            AutoSize = true,
+            WrapContents = true,
+            Padding = new Padding(0, 0, 0, 8),
+        };
+        controls.Controls.Add(new Label
+        {
+            Text = "Timeout (seconds)",
+            AutoSize = true,
+            Margin = new Padding(4, 9, 4, 0),
+        });
+        _signatureTimeout.Minimum = 5;
+        _signatureTimeout.Maximum = 300;
+        _signatureTimeout.Value = 60;
+        _signatureTimeout.Width = 72;
+        _signatureTimeout.Margin = new Padding(3, 5, 12, 0);
+        controls.Controls.Add(_signatureTimeout);
+
+        controls.Controls.Add(new Label
+        {
+            Text = "Direction",
+            AutoSize = true,
+            Margin = new Padding(4, 9, 4, 0),
+        });
+        _signatureOrientation.DropDownStyle = ComboBoxStyle.DropDownList;
+        _signatureOrientation.Items.AddRange(Enum.GetValues<SignatureOrientation>().Cast<object>().ToArray());
+        _signatureOrientation.SelectedItem = SignatureOrientation.Horizontal;
+        _signatureOrientation.Width = 110;
+        _signatureOrientation.Margin = new Padding(3, 5, 12, 0);
+        controls.Controls.Add(_signatureOrientation);
+
+        controls.Controls.Add(new Label
+        {
+            Text = "Image format",
+            AutoSize = true,
+            Margin = new Padding(4, 9, 4, 0),
+        });
+        _signatureFormat.DropDownStyle = ComboBoxStyle.DropDownList;
+        _signatureFormat.Items.AddRange(Enum.GetValues<SignatureImageFormat>().Cast<object>().ToArray());
+        _signatureFormat.SelectedItem = SignatureImageFormat.Png;
+        _signatureFormat.Width = 90;
+        _signatureFormat.Margin = new Padding(3, 5, 12, 0);
+        controls.Controls.Add(_signatureFormat);
+
+        _captureSignatureButton.Text = "Capture signature";
+        _captureSignatureButton.AutoSize = true;
+        _captureSignatureButton.Height = 34;
+        _captureSignatureButton.Click += async (_, _) => await CaptureSignatureAsync();
+        controls.Controls.Add(_captureSignatureButton);
+        _saveSignatureButton.Text = "Save signature";
+        _saveSignatureButton.AutoSize = true;
+        _saveSignatureButton.Height = 34;
+        _saveSignatureButton.Enabled = false;
+        _saveSignatureButton.Click += async (_, _) => await SaveCapturedSignatureAsync();
+        controls.Controls.Add(_saveSignatureButton);
+        _operationControls.AddRange(
+            [_signatureTimeout, _signatureOrientation, _signatureFormat, _captureSignatureButton, _saveSignatureButton]);
+        panel.Controls.Add(controls, 0, 0);
+
+        _signaturePreview.Dock = DockStyle.Fill;
+        _signaturePreview.SizeMode = PictureBoxSizeMode.Zoom;
+        _signaturePreview.BackColor = Color.White;
+        _signaturePreview.BorderStyle = BorderStyle.FixedSingle;
+        panel.Controls.Add(_signaturePreview, 0, 1);
+
+        _signaturePreviewLabel.Text =
+            "S1 starts capture. S2 returns 1,024-character Base64 packets, which are reassembled here.";
+        _signaturePreviewLabel.AutoSize = true;
+        _signaturePreviewLabel.Padding = new Padding(4, 8, 4, 4);
+        panel.Controls.Add(_signaturePreviewLabel, 0, 2);
+        return panel;
+    }
+
+    private Control BuildCameraQrPage()
+    {
+        var split = new SplitContainer
+        {
+            Dock = DockStyle.Fill,
+            Orientation = Orientation.Vertical,
+            SplitterDistance = 610,
+        };
+
+        var photoPanel = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            RowCount = 4,
+            ColumnCount = 1,
+            Padding = new Padding(10),
+        };
+        photoPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        photoPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        photoPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        photoPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        photoPanel.Controls.Add(new Label
+        {
+            Text = "Photo capture",
+            AutoSize = true,
+            Font = new Font(Font, FontStyle.Bold),
+        }, 0, 0);
+        var photoControls = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            AutoSize = true,
+            WrapContents = true,
+            Padding = new Padding(0, 6, 0, 8),
+        };
+        photoControls.Controls.Add(FormLabel("Timeout"));
+        ConfigureTimeout(_photoTimeout);
+        photoControls.Controls.Add(_photoTimeout);
+        photoControls.Controls.Add(FormLabel("Camera"));
+        ConfigureFacing(_photoFacing);
+        photoControls.Controls.Add(_photoFacing);
+        photoControls.Controls.Add(FormLabel("JPEG quality"));
+        _photoQuality.Minimum = 10;
+        _photoQuality.Maximum = 100;
+        _photoQuality.Value = 80;
+        _photoQuality.Width = 65;
+        _photoQuality.Margin = new Padding(3, 5, 10, 0);
+        photoControls.Controls.Add(_photoQuality);
+        _capturePhotoButton.Text = "Capture photo";
+        _capturePhotoButton.AutoSize = true;
+        _capturePhotoButton.Height = 34;
+        _capturePhotoButton.Click += async (_, _) => await CapturePhotoAsync();
+        photoControls.Controls.Add(_capturePhotoButton);
+        _savePhotoButton.Text = "Save photo";
+        _savePhotoButton.AutoSize = true;
+        _savePhotoButton.Height = 34;
+        _savePhotoButton.Enabled = false;
+        _savePhotoButton.Click += async (_, _) => await SaveCapturedPhotoAsync();
+        photoControls.Controls.Add(_savePhotoButton);
+        photoPanel.Controls.Add(photoControls, 0, 1);
+        _photoPreview.Dock = DockStyle.Fill;
+        _photoPreview.SizeMode = PictureBoxSizeMode.Zoom;
+        _photoPreview.BackColor = Color.FromArgb(235, 238, 242);
+        _photoPreview.BorderStyle = BorderStyle.FixedSingle;
+        photoPanel.Controls.Add(_photoPreview, 0, 2);
+        _photoPreviewLabel.Text = "PH1 starts capture; PH2 returns the accepted JPEG in Base64 packets.";
+        _photoPreviewLabel.AutoSize = true;
+        _photoPreviewLabel.Padding = new Padding(4, 8, 4, 4);
+        photoPanel.Controls.Add(_photoPreviewLabel, 0, 3);
+        split.Panel1.Controls.Add(photoPanel);
+
+        var qrPanel = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            RowCount = 6,
+            ColumnCount = 1,
+            Padding = new Padding(10),
+        };
+        qrPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        qrPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        qrPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        qrPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 45));
+        qrPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        qrPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 55));
+        qrPanel.Controls.Add(new Label
+        {
+            Text = "QR generation and reading",
+            AutoSize = true,
+            Font = new Font(Font, FontStyle.Bold),
+        }, 0, 0);
+        var qrControls = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            AutoSize = true,
+            WrapContents = true,
+            Padding = new Padding(0, 6, 0, 6),
+        };
+        qrControls.Controls.Add(FormLabel("Timeout"));
+        ConfigureTimeout(_qrTimeout);
+        qrControls.Controls.Add(_qrTimeout);
+        qrControls.Controls.Add(FormLabel("Scan camera"));
+        ConfigureFacing(_qrFacing);
+        qrControls.Controls.Add(_qrFacing);
+        qrControls.Controls.Add(FormLabel("Sample"));
+        _qrSampleCombo.DropDownStyle = ComboBoxStyle.DropDownList;
+        _qrSampleCombo.Width = 180;
+        _qrSampleCombo.Items.AddRange(QrSamples.Cast<object>().ToArray());
+        _qrSampleCombo.SelectedIndexChanged += (_, _) =>
+        {
+            if (_qrSampleCombo.SelectedItem is QrSample sample)
+            {
+                _qrValueTextBox.Text = sample.Value;
+            }
+        };
+        _qrSampleCombo.SelectedIndex = 0;
+        qrControls.Controls.Add(_qrSampleCombo);
+        _showQrButton.Text = "Show QR";
+        _showQrButton.AutoSize = true;
+        _showQrButton.Height = 34;
+        _showQrButton.Click += async (_, _) => await ShowQrCodeAsync();
+        qrControls.Controls.Add(_showQrButton);
+        _scanQrButton.Text = "Scan QR";
+        _scanQrButton.AutoSize = true;
+        _scanQrButton.Height = 34;
+        _scanQrButton.Click += async (_, _) => await ScanQrCodeAsync();
+        qrControls.Controls.Add(_scanQrButton);
+        qrPanel.Controls.Add(qrControls, 0, 1);
+        qrPanel.Controls.Add(new Label { Text = "QR value to display", AutoSize = true }, 0, 2);
+        _qrValueTextBox.Multiline = true;
+        _qrValueTextBox.ScrollBars = ScrollBars.Vertical;
+        _qrValueTextBox.Dock = DockStyle.Fill;
+        _qrValueTextBox.MaxLength = 2_048;
+        _qrValueTextBox.PlaceholderText = "Text or URL encoded into the QR displayed by the PINPAD";
+        qrPanel.Controls.Add(_qrValueTextBox, 0, 3);
+        qrPanel.Controls.Add(new Label
+        {
+            Text = "Scanned value",
+            AutoSize = true,
+            Padding = new Padding(0, 8, 0, 0),
+        }, 0, 4);
+        _qrResultTextBox.Multiline = true;
+        _qrResultTextBox.ScrollBars = ScrollBars.Vertical;
+        _qrResultTextBox.Dock = DockStyle.Fill;
+        _qrResultTextBox.ReadOnly = true;
+        qrPanel.Controls.Add(_qrResultTextBox, 0, 5);
+        split.Panel2.Controls.Add(qrPanel);
+
+        _operationControls.AddRange(
+            [
+                _photoTimeout, _photoFacing, _photoQuality, _capturePhotoButton, _savePhotoButton,
+                _qrTimeout, _qrFacing, _qrSampleCombo, _qrValueTextBox, _showQrButton, _scanQrButton,
+            ]);
+        return split;
+    }
+
+    private sealed record QrSample(string Name, string Value)
+    {
+        public override string ToString() => Name;
+    }
+
+    private static Label FormLabel(string text) => new()
+    {
+        Text = text,
+        AutoSize = true,
+        Margin = new Padding(4, 9, 4, 0),
+    };
+
+    private static void ConfigureTimeout(NumericUpDown control)
+    {
+        control.Minimum = 5;
+        control.Maximum = 300;
+        control.Value = 60;
+        control.Width = 72;
+        control.Margin = new Padding(3, 5, 10, 0);
+    }
+
+    private static void ConfigureFacing(ComboBox control)
+    {
+        control.DropDownStyle = ComboBoxStyle.DropDownList;
+        control.Items.AddRange(Enum.GetValues<CameraFacing>().Cast<object>().ToArray());
+        control.SelectedItem = CameraFacing.Front;
+        control.Width = 82;
+        control.Margin = new Padding(3, 5, 10, 0);
     }
 
     private Control BuildSpeechBar()
@@ -395,6 +759,31 @@ public sealed class MainForm : Form
             return;
         }
 
+        if (IsIpMode)
+        {
+            var host = _hostTextBox.Text.Trim();
+            var tcpPort = decimal.ToInt32(_tcpPort.Value);
+            if (string.IsNullOrWhiteSpace(host))
+            {
+                MessageBox.Show(
+                    this,
+                    "Enter the pinpad IP address or use Discover.",
+                    "Connection",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information);
+                return;
+            }
+
+            await RunOperationAsync(_ =>
+            {
+                _client.ConnectTcp(host, tcpPort);
+                SaveConnectionPreferences();
+                SetConnectedState(true);
+                return Task.CompletedTask;
+            }, $"Connecting to {host}:{tcpPort}…", requiresConnection: false);
+            return;
+        }
+
         if (_portCombo.SelectedItem is not string portName || _baudCombo.SelectedItem is not int baudRate)
         {
             MessageBox.Show(this, "Select a serial port and baud rate.", "Connection", MessageBoxButtons.OK, MessageBoxIcon.Information);
@@ -404,6 +793,7 @@ public sealed class MainForm : Form
         await RunOperationAsync(_ =>
         {
             _client.Connect(portName, baudRate);
+            SaveConnectionPreferences();
             SetConnectedState(true);
             return Task.CompletedTask;
         }, $"Connecting to {portName}…", requiresConnection: false);
@@ -411,6 +801,10 @@ public sealed class MainForm : Form
 
     private async Task ApplyBaudAsync()
     {
+        if (_client.IsTcpConnection)
+        {
+            return;
+        }
         if (_baudCombo.SelectedItem is not int baudRate)
         {
             return;
@@ -420,6 +814,63 @@ public sealed class MainForm : Form
             token => _client.ChangeBaudRateAsync(baudRate, token),
             $"Changing terminal and local port to {baudRate:N0} bps…");
         SetConnectedState(_client.IsConnected);
+    }
+
+    private bool IsIpMode =>
+        string.Equals(_connectionTypeCombo.SelectedItem as string, "IP", StringComparison.Ordinal);
+
+    private void UpdateConnectionModeControls()
+    {
+        var ipMode = IsIpMode;
+        _serialPortLabel.Visible = !ipMode;
+        _portCombo.Visible = !ipMode;
+        _refreshPortsButton.Visible = !ipMode;
+        _baudLabel.Visible = !ipMode;
+        _baudCombo.Visible = !ipMode;
+        _applyBaudButton.Visible = !ipMode;
+        _hostLabel.Visible = ipMode;
+        _hostTextBox.Visible = ipMode;
+        _tcpPortLabel.Visible = ipMode;
+        _tcpPort.Visible = ipMode;
+        _discoverButton.Visible = ipMode;
+        SetConnectedState(_client.IsConnected);
+    }
+
+    private async Task DiscoverPinpadsAsync()
+    {
+        IReadOnlyList<DiscoveredPinpad> devices = [];
+        var completed = await RunOperationAsync(async token =>
+        {
+            devices = await PinpadLanDiscovery.DiscoverAsync(TimeSpan.FromSeconds(2), token);
+        }, "Discovering pinpads on the local network…", requiresConnection: false);
+        if (!completed)
+        {
+            return;
+        }
+
+        if (devices.Count == 0)
+        {
+            MessageBox.Show(
+                this,
+                "No IP pinpads answered on this LAN. Confirm that IP mode is enabled and the PC is on the same Wi-Fi/Ethernet network.",
+                "Pinpad discovery",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+            _statusLabel.Text = "No IP pinpads discovered.";
+            return;
+        }
+
+        var selected = devices.Count == 1
+            ? devices[0]
+            : PinpadDiscoveryDialog.SelectDevice(this, devices);
+        if (selected is null)
+        {
+            return;
+        }
+
+        _hostTextBox.Text = selected.Address;
+        _tcpPort.Value = selected.TcpPort;
+        _statusLabel.Text = $"Selected {selected.SerialNumber} ({selected.Model}) at {selected.Address}:{selected.TcpPort}.";
     }
 
     private async Task RefreshJpegsAsync() =>
@@ -714,6 +1165,201 @@ public sealed class MainForm : Form
             $"Speaking text in {language}…");
     }
 
+    private async Task CaptureSignatureAsync()
+    {
+        if (_signatureOrientation.SelectedItem is not SignatureOrientation orientation ||
+            _signatureFormat.SelectedItem is not SignatureImageFormat imageFormat)
+        {
+            return;
+        }
+
+        SignatureCaptureResult? result = null;
+        await RunOperationAsync(async token =>
+        {
+            result = await _client.CaptureSignatureAsync(
+                decimal.ToInt32(_signatureTimeout.Value),
+                orientation,
+                imageFormat,
+                CreateProgress(),
+                token);
+        }, "Waiting for signature capture…");
+        if (result is null)
+        {
+            return;
+        }
+
+        if (result.Status != SignatureCaptureStatus.Captured)
+        {
+            ClearCapturedSignature();
+            _statusLabel.Text = $"Signature capture result: {result.Status}.";
+            _signaturePreviewLabel.Text = $"No signature image returned. Result: {result.Status}.";
+            return;
+        }
+
+        _capturedSignature = result.ImageBytes;
+        _capturedSignatureFormat = result.ImageFormat;
+        PreviewImage(
+            result.ImageBytes,
+            $"Captured {result.ImageFormat} signature — {result.ImageBytes.LongLength:N0} bytes",
+            _signaturePreview,
+            _signaturePreviewLabel);
+        _saveSignatureButton.Enabled = true;
+        _statusLabel.Text = "Signature captured. Use Save signature to store it.";
+    }
+
+    private async Task SaveCapturedSignatureAsync()
+    {
+        var imageBytes = _capturedSignature;
+        if (imageBytes is null)
+        {
+            return;
+        }
+
+        var extension = _capturedSignatureFormat == SignatureImageFormat.Png ? "png" : "jpg";
+        using var dialog = new SaveFileDialog
+        {
+            Title = "Save captured signature",
+            Filter = _capturedSignatureFormat == SignatureImageFormat.Png
+                ? "PNG image (*.png)|*.png|All files (*.*)|*.*"
+                : "JPEG image (*.jpg)|*.jpg|All files (*.*)|*.*",
+            FileName = $"signature-{DateTime.Now:yyyyMMdd-HHmmss}.{extension}",
+        };
+        if (dialog.ShowDialog(this) == DialogResult.OK)
+        {
+            await File.WriteAllBytesAsync(dialog.FileName, imageBytes);
+            _statusLabel.Text = $"Saved {dialog.FileName}.";
+        }
+    }
+
+    private void ClearCapturedSignature()
+    {
+        _capturedSignature = null;
+        _saveSignatureButton.Enabled = false;
+        var previous = _signaturePreview.Image;
+        _signaturePreview.Image = null;
+        previous?.Dispose();
+    }
+
+    private async Task CapturePhotoAsync()
+    {
+        if (_photoFacing.SelectedItem is not CameraFacing facing)
+        {
+            return;
+        }
+
+        PhotoCaptureResult? result = null;
+        await RunOperationAsync(async token =>
+        {
+            result = await _client.CapturePhotoAsync(
+                decimal.ToInt32(_photoTimeout.Value),
+                facing,
+                decimal.ToInt32(_photoQuality.Value),
+                CreateProgress(),
+                token);
+        }, "Waiting for photo capture…");
+        if (result is null)
+        {
+            return;
+        }
+        if (result.Status != PhotoCaptureStatus.Captured)
+        {
+            ClearCapturedPhoto();
+            _statusLabel.Text = $"Photo capture result: {result.Status}.";
+            _photoPreviewLabel.Text = $"No photo returned. Result: {result.Status}.";
+            return;
+        }
+
+        _capturedPhoto = result.JpegBytes;
+        PreviewImage(
+            result.JpegBytes,
+            $"Captured JPEG photo — {result.JpegBytes.LongLength:N0} bytes",
+            _photoPreview,
+            _photoPreviewLabel);
+        _savePhotoButton.Enabled = true;
+        _statusLabel.Text = "Photo captured. Use Save photo to store it.";
+    }
+
+    private async Task SaveCapturedPhotoAsync()
+    {
+        var photo = _capturedPhoto;
+        if (photo is null)
+        {
+            return;
+        }
+        using var dialog = new SaveFileDialog
+        {
+            Title = "Save captured photo",
+            Filter = "JPEG image (*.jpg)|*.jpg|All files (*.*)|*.*",
+            FileName = $"photo-{DateTime.Now:yyyyMMdd-HHmmss}.jpg",
+        };
+        if (dialog.ShowDialog(this) == DialogResult.OK)
+        {
+            await File.WriteAllBytesAsync(dialog.FileName, photo);
+            _statusLabel.Text = $"Saved {dialog.FileName}.";
+        }
+    }
+
+    private void ClearCapturedPhoto()
+    {
+        _capturedPhoto = null;
+        _savePhotoButton.Enabled = false;
+        var previous = _photoPreview.Image;
+        _photoPreview.Image = null;
+        previous?.Dispose();
+    }
+
+    private async Task ShowQrCodeAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_qrValueTextBox.Text))
+        {
+            MessageBox.Show(
+                this,
+                "Enter the text or URL to encode.",
+                "Show QR",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+            return;
+        }
+
+        QrOperationStatus? result = null;
+        await RunOperationAsync(async token =>
+        {
+            result = await _client.ShowQrCodeAsync(
+                _qrValueTextBox.Text,
+                decimal.ToInt32(_qrTimeout.Value),
+                token);
+        }, "Displaying QR code on the PINPAD…");
+        if (result is not null)
+        {
+            _statusLabel.Text = $"QR display result: {result}.";
+        }
+    }
+
+    private async Task ScanQrCodeAsync()
+    {
+        if (_qrFacing.SelectedItem is not CameraFacing facing)
+        {
+            return;
+        }
+
+        QrScanResult? result = null;
+        await RunOperationAsync(async token =>
+        {
+            result = await _client.ScanQrCodeAsync(
+                decimal.ToInt32(_qrTimeout.Value),
+                facing,
+                token);
+        }, "Waiting for the PINPAD to scan a QR code…");
+        if (result is null)
+        {
+            return;
+        }
+        _qrResultTextBox.Text = result.Value ?? "";
+        _statusLabel.Text = result.Status == QrOperationStatus.Completed
+            ? "QR code read successfully."
+            : $"QR scan result: {result.Status}.";
+    }
+
     private async Task InitializeMediaAsync()
     {
         if (MessageBox.Show(
@@ -804,14 +1450,19 @@ public sealed class MainForm : Form
                 : $"{progress.Operation}: {progress.Completed:N0} packets";
         });
 
-    private void RefreshPorts()
+    private void RefreshPorts(string? preferredPort = null)
     {
-        var selected = _portCombo.SelectedItem as string;
+        var selected = string.IsNullOrWhiteSpace(preferredPort)
+            ? _portCombo.SelectedItem as string
+            : preferredPort;
         var ports = SerialPinpadTransport.GetPortNames();
         _portCombo.DataSource = ports;
-        if (selected is not null && ports.Contains(selected, StringComparer.OrdinalIgnoreCase))
+        var availableSelection = selected is null
+            ? null
+            : ports.FirstOrDefault(port => string.Equals(port, selected, StringComparison.OrdinalIgnoreCase));
+        if (availableSelection is not null)
         {
-            _portCombo.SelectedItem = selected;
+            _portCombo.SelectedItem = availableSelection;
         }
 
         if (ports.Length == 0)
@@ -820,17 +1471,51 @@ public sealed class MainForm : Form
         }
     }
 
+    private void RestoreConnectionPreferences(ConnectionPreferences preferences)
+    {
+        if (_connectionTypeCombo.Items.Contains(preferences.ConnectionType))
+        {
+            _connectionTypeCombo.SelectedItem = preferences.ConnectionType;
+        }
+        if (SupportedBaudRates.Contains(preferences.BaudRate))
+        {
+            _baudCombo.SelectedItem = preferences.BaudRate;
+        }
+        _hostTextBox.Text = preferences.Host;
+        if (preferences.TcpPort is >= 1 and <= 65_535)
+        {
+            _tcpPort.Value = preferences.TcpPort;
+        }
+        UpdateConnectionModeControls();
+    }
+
+    private void SaveConnectionPreferences()
+    {
+        ConnectionPreferencesStore.Save(new ConnectionPreferences(
+            _connectionTypeCombo.SelectedItem as string ?? "Serial",
+            _portCombo.SelectedItem as string ?? "",
+            _baudCombo.SelectedItem is int baudRate ? baudRate : DefaultBaudRate,
+            _hostTextBox.Text.Trim(),
+            decimal.ToInt32(_tcpPort.Value)));
+    }
+
     private void SetConnectedState(bool connected)
     {
         _connectButton.Text = connected ? "Disconnect" : "Connect";
         _connectionLabel.Text = connected
-            ? $"Connected: {_client.PortName} @ {_client.BaudRate:N0}"
+            ? _client.IsTcpConnection
+                ? $"Connected: {_client.PortName}"
+                : $"Connected: {_client.PortName} @ {_client.BaudRate:N0}"
             : "Disconnected";
         _connectionLabel.ForeColor = connected ? Color.ForestGreen : Color.Firebrick;
-        _portCombo.Enabled = !connected && !_operationInProgress;
-        _refreshPortsButton.Enabled = !connected && !_operationInProgress;
-        _baudCombo.Enabled = !_operationInProgress;
-        _applyBaudButton.Enabled = connected && !_operationInProgress;
+        _connectionTypeCombo.Enabled = !connected && !_operationInProgress;
+        _portCombo.Enabled = !connected && !_operationInProgress && !IsIpMode;
+        _refreshPortsButton.Enabled = !connected && !_operationInProgress && !IsIpMode;
+        _baudCombo.Enabled = !connected && !_operationInProgress && !IsIpMode;
+        _hostTextBox.Enabled = !connected && !_operationInProgress && IsIpMode;
+        _tcpPort.Enabled = !connected && !_operationInProgress && IsIpMode;
+        _discoverButton.Enabled = !connected && !_operationInProgress && IsIpMode;
+        _applyBaudButton.Enabled = connected && !_operationInProgress && !_client.IsTcpConnection;
     }
 
     private void SetOperationControls(bool enabled)
@@ -839,6 +1524,8 @@ public sealed class MainForm : Form
         {
             control.Enabled = enabled;
         }
+        _saveSignatureButton.Enabled = enabled && _capturedSignature is not null;
+        _savePhotoButton.Enabled = enabled && _capturedPhoto is not null;
     }
 
     private JpegEntry? SelectedJpeg()
@@ -876,21 +1563,28 @@ public sealed class MainForm : Form
             .OfType<MediaEntry>()
             .ToList();
 
-    private void PreviewImage(byte[] content, string description)
+    private void PreviewImage(byte[] content, string description) =>
+        PreviewImage(content, description, _imagePreview, _previewLabel);
+
+    private static void PreviewImage(
+        byte[] content,
+        string description,
+        PictureBox preview,
+        Label previewLabel)
     {
         try
         {
             using var stream = new MemoryStream(content);
             using var source = Image.FromStream(stream);
             var copy = new Bitmap(source);
-            var previous = _imagePreview.Image;
-            _imagePreview.Image = copy;
+            var previous = preview.Image;
+            preview.Image = copy;
             previous?.Dispose();
-            _previewLabel.Text = $"{description}{Environment.NewLine}{copy.Width:N0} × {copy.Height:N0}";
+            previewLabel.Text = $"{description}{Environment.NewLine}{copy.Width:N0} × {copy.Height:N0}";
         }
         catch (Exception error)
         {
-            _previewLabel.Text = $"Preview unavailable: {error.Message}";
+            previewLabel.Text = $"Preview unavailable: {error.Message}";
         }
     }
 
@@ -927,6 +1621,8 @@ public sealed class MainForm : Form
         }
 
         _imagePreview.Image?.Dispose();
+        _signaturePreview.Image?.Dispose();
+        SaveConnectionPreferences();
         _client.Dispose();
     }
 

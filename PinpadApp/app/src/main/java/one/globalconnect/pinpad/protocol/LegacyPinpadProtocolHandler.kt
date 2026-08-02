@@ -64,6 +64,14 @@ class LegacyPinpadProtocolHandler(
         sessionController.onKeypadKey(key)
     }
 
+    override fun beginClearKeyInjectionMode() {
+        sessionController.beginClearKeyInjectionMode()
+    }
+
+    override fun endClearKeyInjectionMode(reason: String) {
+        sessionController.endClearKeyInjectionMode(reason)
+    }
+
     fun sendAsyncResponse(response: ByteArray) {
         trackResponseForAck(listOf(response))
         asyncResponseSender(response)

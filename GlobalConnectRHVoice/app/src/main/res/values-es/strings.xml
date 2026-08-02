@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Global Connect RHVoice</string>
+    <string name="status_title">Motor RHVoice sin conexión</string>
+    <string name="status_ready">Listo. Voces incluidas: Slt (inglés, Estados Unidos) y Mateo (español, México).</string>
+    <string name="status_failed">Falló la validación de las voces incluidas. Consulte RHVoiceBundledData en logcat.</string>
+    <string name="status_details">Paquete: com.github.olga_yakovleva.rhvoice.android\nServicio: com.github.olga_yakovleva.rhvoice.android.RHVoiceService\nRHVoice: 1.18.4\nRequiere red: no\nGanancia de salida: 1.25</string>
+    <string name="english_sample">Global Connect offline English speech is ready.</string>
+    <string name="spanish_sample">La voz sin conexión de Global Connect está lista.</string>
+</resources>

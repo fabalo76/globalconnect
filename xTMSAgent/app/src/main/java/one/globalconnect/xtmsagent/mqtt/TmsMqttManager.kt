@@ -155,8 +155,17 @@ object TmsMqttManager {
         try {
             when (taskType.lowercase()) {
                 "refreshconfig", "parametersdownload" -> {
-                    val sent = publishConfigRequest(payload)
-                    publishTaskAck(taskId, sent, if (sent) null else "MQTT client is not connected")
+                    val applicationId = readPayloadString(
+                        payload,
+                        "applicationId",
+                        "ApplicationId",
+                    )
+                    val started = ParamManager.requestParamDownload(appContext, applicationId)
+                    publishTaskAck(
+                        taskId,
+                        started,
+                        if (started) null else "Configuration request could not be started",
+                    )
                 }
                 "applicationdownload", "firmwaredownload", "updatefirmware", "bootanimationdownload" -> {
                     managerScope.launch(Dispatchers.IO) {
@@ -689,7 +698,7 @@ object TmsMqttManager {
 
             // Deliver any status report that failed to publish while disconnected
             // (e.g. report_status command received just before the link dropped).
-            if (pendingStatusPublish) {
+            if (pendingStatusPublish || credentialStore.isStatusReportPending()) {
                 Log.i(TAG, "Pending status publish detected on reconnect — sending now")
                 publishFullStatusReport()
             }
@@ -1308,6 +1317,9 @@ object TmsMqttManager {
         if (client == null || !isConnected) {
             Log.w(TAG, "publishFullStatusReport: not connected — flagging for retry on reconnect")
             pendingStatusPublish = true
+            if (::credentialStore.isInitialized) {
+                credentialStore.saveStatusReportPending(true)
+            }
             onComplete?.invoke(false, "MQTT client is not connected")
             return
         }
@@ -1321,13 +1333,24 @@ object TmsMqttManager {
                 if (err != null) {
                     Log.w(TAG, "Full status report publish failed: ${err.message} — flagging for retry on reconnect")
                     pendingStatusPublish = true
+                    credentialStore.saveStatusReportPending(true)
                     onComplete?.invoke(false, err.message ?: "Full status report publish failed")
                 } else {
                     pendingStatusPublish = false
+                    credentialStore.saveStatusReportPending(false)
                     Log.i(TAG, "Full status report published → ${termStatusTopic(termId)}")
                     onComplete?.invoke(true, null)
                 }
             }
+    }
+
+    fun queueFullStatusReport(context: Context, reason: String) {
+        TmsCredentialStore(context.applicationContext).saveStatusReportPending(true)
+        pendingStatusPublish = true
+        Log.i(TAG, "Full status report queued: $reason")
+        if (::appContext.isInitialized && isConnected) {
+            publishFullStatusReport()
+        }
     }
 
     private fun publishTaskAck(

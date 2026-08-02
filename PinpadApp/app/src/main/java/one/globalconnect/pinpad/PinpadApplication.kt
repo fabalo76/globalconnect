@@ -6,6 +6,7 @@ import com.nexgo.oaf.apiv3.APIProxy
 import com.nexgo.oaf.apiv3.DeviceEngine
 import one.globalconnect.pinpad.device.NexgoDeviceInfoProvider
 import one.globalconnect.pinpad.logging.PinpadTraceLog
+import one.globalconnect.pinpad.config.PinpadTmsConfigClient
 
 class PinpadApplication : Application() {
     val deviceEngine: DeviceEngine by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
@@ -25,6 +26,7 @@ class PinpadApplication : Application() {
         )
         runCatching { deviceEngine.deviceInfo }
             .onFailure { Log.w(TAG, "Nexgo device engine not ready yet", it) }
+        PinpadTmsConfigClient.request(this)
     }
 
     companion object {

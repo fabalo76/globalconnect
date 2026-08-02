@@ -33,6 +33,25 @@ class PinpadMediaStore private constructor(rootDir: File) {
         }.onFailure { Log.w(TAG, "Unable to initialize media table", it) }.getOrDefault(false)
     }
 
+    fun importManagedMedia(fileName: String, source: File): Boolean {
+        val normalized = normalizedName(fileName) ?: return false
+        val mediaType = MediaType.fromFileName(normalized) ?: return false
+        if (!source.isFile || source.length() == 0L || source.length() > maxDecodedBytes(mediaType)) return false
+        if (!isValidMedia(source, mediaType)) return false
+        return runCatching {
+            val target = mediaFile(normalized)
+            val staging = File(transferDir, ".$normalized.part")
+            source.copyTo(staging, overwrite = true)
+            if (target.exists() && !target.delete()) return@runCatching false
+            if (!staging.renameTo(target)) {
+                staging.copyTo(target, overwrite = true)
+                staging.delete()
+            }
+            target.isFile && target.length() == source.length()
+        }.onFailure { Log.w(TAG, "Unable to import managed media $normalized", it) }
+            .getOrDefault(false)
+    }
+
     fun table(): List<MediaEntry> {
         return mediaDir.listFiles()
             .orEmpty()

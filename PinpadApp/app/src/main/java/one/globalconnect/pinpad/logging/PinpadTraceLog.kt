@@ -10,6 +10,12 @@ object PinpadTraceLog {
     private const val TAG = "PINPADTrace"
     private const val MAX_BYTES = 512
     private val THREE_CHARACTER_COMMANDS = setOf(
+        "PH1",
+        "PH2",
+        "QR1",
+        "QR2",
+        "QR3",
+        "QR4",
         "Z42",
         "Z43",
         "Z50",
@@ -78,6 +84,9 @@ object PinpadTraceLog {
             shown
         }
     }
+
+    fun diagnosticWireSummary(direction: String, bytes: ByteArray): String =
+        wireSummary(direction, bytes)
 
     private fun serialBytes(direction: String, source: String, bytes: ByteArray) {
         log("$direction[$source] ${wireSummary(direction, bytes)} len=${bytes.size} hex=${bytesToHex(bytes)} ascii=${bytesToAscii(bytes)}")

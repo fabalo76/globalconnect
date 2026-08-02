@@ -1,6 +1,11 @@
 package one.globalconnect.xtmsagent.mqtt
 
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.launch
 
 enum class TmsStatusSeverity {
     CONNECTING,
@@ -25,6 +30,9 @@ internal fun shouldShowTmsConnectionStatus(
  * Shared status text for the TMS foreground notification and launcher warning strip.
  */
 object TmsTaskStatus {
+    private const val TRANSIENT_STATUS_MS = 5_000L
+    private val statusScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
     val taskOverride = MutableStateFlow<String?>(null)
     val connection = MutableStateFlow(
         TmsConnectionStatus("TMS starting", TmsStatusSeverity.CONNECTING)
@@ -44,6 +52,16 @@ object TmsTaskStatus {
 
     fun disconnected(message: String) {
         connection.value = TmsConnectionStatus(message, TmsStatusSeverity.WARNING)
+    }
+
+    fun showTransient(message: String, durationMs: Long = TRANSIENT_STATUS_MS) {
+        taskOverride.value = message
+        statusScope.launch {
+            delay(durationMs)
+            if (taskOverride.value == message) {
+                taskOverride.value = null
+            }
+        }
     }
 
     fun terminalNotRegistered(termId: String) {

@@ -12,6 +12,7 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.util.Log
+import com.nexgo.oaf.apiv3.SdkResult
 import one.globalconnect.pinpad.BuildConfig
 import one.globalconnect.pinpad.MainActivity
 import one.globalconnect.pinpad.PinpadApplication
@@ -29,6 +30,7 @@ import one.globalconnect.pinpad.transport.PINPADTransport
 import one.globalconnect.pinpad.transport.NexgoRs232Transport
 import one.globalconnect.pinpad.transport.NexgoUsbCdcTransport
 import one.globalconnect.pinpad.transport.NoOpTransport
+import one.globalconnect.pinpad.transport.TcpPinpadTransport
 
 class PinpadSerialService : Service(), PINPADTransport.Listener {
     private lateinit var protocolHandler: PinpadProtocolHandler
@@ -36,6 +38,7 @@ class PinpadSerialService : Service(), PINPADTransport.Listener {
     private var appRef: PinpadApplication? = null
     private val mainHandler = Handler(Looper.getMainLooper())
     private var pendingSerialPortChangeTask: Runnable? = null
+    private var currentEndpoint = ""
 
     override fun onCreate() {
         super.onCreate()
@@ -49,7 +52,7 @@ class PinpadSerialService : Service(), PINPADTransport.Listener {
         appRef = app
         protocolHandler = PinpadProtocolFactory.create(app) { response ->
             PinpadTraceLog.service("TX async len=${response.size}")
-            transport?.send(response)
+            sendTransport(response)
         }
         restartTransport()
     }
@@ -58,6 +61,11 @@ class PinpadSerialService : Service(), PINPADTransport.Listener {
         when (intent?.action) {
             ACTION_RELOAD_SETTINGS -> restartTransport()
             ACTION_CANCEL_ACTIVE_OPERATION -> protocolHandler.cancelActiveOperation()
+            ACTION_BEGIN_CLEAR_KEY_INJECTION_MODE -> protocolHandler.beginClearKeyInjectionMode()
+            ACTION_END_CLEAR_KEY_INJECTION_MODE ->
+                protocolHandler.endClearKeyInjectionMode(
+                    intent.getStringExtra(EXTRA_KEY_INJECTION_END_REASON) ?: "requested",
+                )
             ACTION_KEYPAD_KEY -> intent.getStringExtra(EXTRA_KEYPAD_KEY)
                 ?.let { runCatching { PinpadKeypadKey.valueOf(it) }.getOrNull() }
                 ?.let(protocolHandler::onKeypadKey)
@@ -70,6 +78,7 @@ class PinpadSerialService : Service(), PINPADTransport.Listener {
         pendingSerialPortChangeTask = null
         transport?.stop()
         transport = null
+        PinpadSerialDiagnostics.stopped()
         protocolHandler.shutdown()
         super.onDestroy()
     }
@@ -77,36 +86,100 @@ class PinpadSerialService : Service(), PINPADTransport.Listener {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onBytesReceived(bytes: ByteArray) {
+        PinpadSerialDiagnostics.received(bytes)
         PinpadTraceLog.service("RX dispatch len=${bytes.size}")
         val responses = protocolHandler.onBytesReceived(bytes)
         PinpadTraceLog.service("TX responses=${responses.size} totalBytes=${responses.sumOf { it.size }}")
-        responses.forEach { response ->
-            transport?.send(response)
+        responses.forEach(::sendTransport)
+        protocolHandler.consumeCompletedSerialPortChange()?.let { change ->
+            if (effectiveTransportMode(PinpadPreferences(this).serialSettings()) != "IP") {
+                scheduleSerialPortChange(change)
+            }
         }
-        protocolHandler.consumeCompletedSerialPortChange()?.let(::scheduleSerialPortChange)
     }
 
     override fun onTransportError(error: Throwable) {
         Log.w(TAG, "PINPAD transport error", error)
+        PinpadSerialDiagnostics.failed(currentEndpoint, error)
     }
 
     private fun restartTransport() {
         val app = appRef ?: return
         val settings = PinpadPreferences(app).serialSettings(app.deviceInfoProvider.modelName())
+        val mode = effectiveTransportMode(settings).uppercase()
+        currentEndpoint = serialEndpointDescription(app, settings)
+        PinpadSerialDiagnostics.opening(currentEndpoint)
         transport?.stop()
-        transport = createTransport(app)
+        disableUsbCdcWhenUnused(app, mode)
         runCatching {
-            transport?.start(this)
+            createTransport(app).also { next ->
+                transport = next
+                next.start(this)
+            }
         }.onSuccess {
             Log.i(TAG, "PINPAD serial service started with $settings")
             PinpadTraceLog.service("started settings=$settings")
+            PinpadSerialDiagnostics.opened(currentEndpoint)
         }.onFailure { error ->
             Log.e(TAG, "PINPAD serial service failed to start with $settings", error)
             PinpadTraceLog.service("failed settings=$settings error=${error.message}")
+            PinpadSerialDiagnostics.failed(currentEndpoint, error)
             transport?.stop()
             transport = NoOpTransport(error)
             transport?.start(this)
         }
+    }
+
+    private fun disableUsbCdcWhenUnused(app: PinpadApplication, mode: String) {
+        if (!shouldDisableUsbCdc(mode)) return
+
+        val platform = app.deviceEngine.platform
+        val enabled = runCatching { platform.usbCdcStatus }
+            .onFailure { error ->
+                Log.w(TAG, "Unable to read USB CDC status before switching to $mode", error)
+                PinpadTraceLog.transport(
+                    "USB_CDC status read failed before mode=$mode error=${error.message}",
+                )
+            }
+            .getOrDefault(false)
+        if (!enabled) {
+            PinpadTraceLog.transport("USB_CDC already disabled for mode=$mode")
+            return
+        }
+
+        val result = runCatching { platform.disableUsbCdc() }
+            .onFailure { error ->
+                Log.w(TAG, "USB CDC disable failed while switching to $mode", error)
+                PinpadTraceLog.transport(
+                    "USB_CDC disable failed mode=$mode error=${error.message}",
+                )
+            }
+            .getOrNull()
+            ?: return
+        Log.i(TAG, "USB CDC disable result=$result for mode=$mode")
+        PinpadTraceLog.transport("USB_CDC disable result=$result mode=$mode")
+        if (result != SdkResult.Success) {
+            Log.w(TAG, "USB CDC remained enabled while switching to $mode: result=$result")
+        }
+    }
+
+    private fun sendTransport(bytes: ByteArray) {
+        PinpadSerialDiagnostics.transmitted(bytes)
+        transport?.send(bytes)
+    }
+
+    private fun serialEndpointDescription(app: PinpadApplication, settings: SerialSettings): String {
+        val mode = effectiveTransportMode(settings).uppercase()
+        if (mode == "IP") {
+            return "IP • TCP ${settings.tcpPort} • discovery UDP ${TcpPinpadTransport.DISCOVERY_PORT}"
+        }
+        val port = if (mode == "RS232") {
+            settings.rs232Port
+        } else {
+            DeviceModelConfig.getUsbCdcSerialPort(app.deviceInfoProvider.modelName())
+        }
+        val label = if (mode == "RS232") "RS232" else "USB Serial"
+        return "$label • port $port • ${settings.baudRate} ${settings.dataBits}${settings.parity}${settings.stopBits}"
     }
 
     private fun scheduleSerialPortChange(change: SerialPortChange) {
@@ -153,6 +226,12 @@ class PinpadSerialService : Service(), PINPADTransport.Listener {
             parity = settings.parity,
         )
         return when (effectiveTransportMode(settings).uppercase()) {
+            "IP" -> TcpPinpadTransport(
+                context = app,
+                tcpPort = settings.tcpPort,
+                serialNumber = app.deviceInfoProvider.serialNumber(),
+                modelName = modelName,
+            )
             "RS232" -> rs232
             else -> usbCdc
         }
@@ -209,11 +288,20 @@ class PinpadSerialService : Service(), PINPADTransport.Listener {
     companion object {
         const val ACTION_RELOAD_SETTINGS = "one.globalconnect.pinpad.action.RELOAD_PINPAD_SETTINGS"
         const val ACTION_CANCEL_ACTIVE_OPERATION = "one.globalconnect.pinpad.action.CANCEL_ACTIVE_OPERATION"
+        const val ACTION_BEGIN_CLEAR_KEY_INJECTION_MODE =
+            "one.globalconnect.pinpad.action.BEGIN_CLEAR_KEY_INJECTION_MODE"
+        const val ACTION_END_CLEAR_KEY_INJECTION_MODE =
+            "one.globalconnect.pinpad.action.END_CLEAR_KEY_INJECTION_MODE"
         const val ACTION_KEYPAD_KEY = "one.globalconnect.pinpad.action.KEYPAD_KEY"
         const val EXTRA_KEYPAD_KEY = "one.globalconnect.pinpad.extra.KEYPAD_KEY"
+        const val EXTRA_KEY_INJECTION_END_REASON =
+            "one.globalconnect.pinpad.extra.KEY_INJECTION_END_REASON"
         private const val NOTIFICATION_ID = 1001
         private const val NOTIFICATION_CHANNEL_ID = "pinpad_serial_service"
         private const val TAG = "PINPADSerialService"
         private const val SERIAL_PORT_CHANGE_DELAY_MS = 150L
     }
 }
+
+internal fun shouldDisableUsbCdc(transportMode: String): Boolean =
+    transportMode.uppercase() != "SERIAL"

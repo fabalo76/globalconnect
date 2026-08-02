@@ -36,6 +36,7 @@ import one.globalconnect.xtmsagent.mqtt.TmsMqttManager
 import one.globalconnect.xtmsagent.mqtt.TmsMqttService
 import one.globalconnect.xtmsagent.policy.FactoryTmsManager
 import one.globalconnect.xtmsagent.policy.FactoryTmsState
+import one.globalconnect.xtmsagent.policy.UsbFileTransferManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -187,6 +188,15 @@ class ConfigMenuActivity : AppCompatActivity() {
                 backgroundColor = "#5D4037".toColorInt(),
                 iconDrawable    = ContextCompat.getDrawable(this, R.drawable.ic_tms_server),
                 onClickAction   = Runnable { showFactoryTmsDialog() }
+            ),
+            GridAdapter.ButtonItem(
+                text            = getString(R.string.config_usb),
+                packageName     = "cfg_usb",
+                backgroundColor = "#37474F".toColorInt(),
+                iconDrawable    = ContextCompat.getDrawable(this, R.drawable.ic_network),
+                onClickAction   = Runnable {
+                    requestPassword { showUsbFileTransferDialog() }
+                }
             )
         )
 
@@ -423,6 +433,69 @@ class ConfigMenuActivity : AppCompatActivity() {
                 .setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f)
         }
         dlg.show()
+    }
+
+    private fun showUsbFileTransferDialog() {
+        if (!TmsDeviceAdminReceiver.isDeviceOwner(this)) {
+            AlertDialog.Builder(this)
+                .setTitle(R.string.usb_config_title)
+                .setMessage(R.string.usb_config_owner_required)
+                .setPositiveButton(R.string.ok, null)
+                .show()
+            return
+        }
+
+        val enabled = UsbFileTransferManager.isEnabled(this)
+        AlertDialog.Builder(this)
+            .setTitle(R.string.usb_config_title)
+            .setMessage(
+                if (enabled) R.string.usb_config_status_enabled
+                else R.string.usb_config_status_disabled
+            )
+            .setPositiveButton(
+                if (enabled) R.string.usb_config_disable else R.string.usb_config_enable
+            ) { _, _ ->
+                if (enabled) {
+                    applyUsbFileTransferEnabled(false)
+                } else {
+                    confirmUsbFileTransferEnable()
+                }
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
+    private fun confirmUsbFileTransferEnable() {
+        AlertDialog.Builder(this)
+            .setTitle(R.string.usb_config_enable)
+            .setMessage(R.string.usb_config_enable_warning)
+            .setPositiveButton(R.string.usb_config_enable) { _, _ ->
+                applyUsbFileTransferEnabled(true)
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
+    private fun applyUsbFileTransferEnabled(enabled: Boolean) {
+        val result = UsbFileTransferManager.setEnabled(this, enabled)
+        val message = if (result.success) {
+            MainActivity.writeLog(
+                "USB file transfer ${if (enabled) "enabled" else "disabled"} from Config"
+            )
+            if (enabled) {
+                getString(R.string.usb_config_updated_enabled)
+            } else {
+                getString(R.string.usb_config_updated_disabled)
+            }
+        } else {
+            getString(R.string.usb_config_update_failed, result.code)
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle(R.string.usb_config_title)
+            .setMessage(message)
+            .setPositiveButton(R.string.ok, null)
+            .show()
     }
 
     private fun showFactoryTmsDialog() {

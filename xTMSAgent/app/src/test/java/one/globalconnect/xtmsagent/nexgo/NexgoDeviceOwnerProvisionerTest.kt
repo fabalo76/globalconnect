@@ -8,8 +8,8 @@ class NexgoDeviceOwnerProvisionerTest {
     @Test
     fun `device owner command matches verified Nexgo model command table`() {
         assertEquals(702_108_171, NexgoDeviceOwnerProvisioner.deviceOwnerCommand("CT20P"))
+        assertEquals(802_108_171, NexgoDeviceOwnerProvisioner.deviceOwnerCommand("N6S"))
         assertEquals(802_108_171, NexgoDeviceOwnerProvisioner.deviceOwnerCommand("N82"))
-        assertEquals(null, NexgoDeviceOwnerProvisioner.deviceOwnerCommand("N6S"))
         assertEquals(null, NexgoDeviceOwnerProvisioner.deviceOwnerCommand("N96"))
         assertEquals(null, NexgoDeviceOwnerProvisioner.deviceOwnerCommand("UNKNOWN"))
     }

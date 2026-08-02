@@ -17,7 +17,8 @@ Stage 1 is implemented:
 
 - `MainActivity` shows only the localized idle message. The default text is `NEXGO WELCOME` in English and `BIENVENIDO NEXGO` in Spanish.
 - `PINPADSerialService` owns serial communication and starts automatically from the app and boot receiver.
-- `transport/*` abstracts CT20P RS232 and USB CDC access through the NEXGO SDK.
+- `transport/*` abstracts CT20P RS232 and USB CDC access through the NEXGO SDK,
+  plus raw TCP/IP over Wi-Fi or Ethernet.
 - `protocol/PINPADFrameCodec` e~~~~ncodes and decodes raw PINPAD frames, including LRC validation.
 - `protocol/PINPADStreamParser` accepts arbitrary byte chunks, discards garbage before a valid start byte, emits `ACK`/`NAK`/`EOT` controls, and drops incomplete partial frames after one second.
 - `protocol/PINPADSessionController` converts valid frames into the Stage 1 command responses.
@@ -29,16 +30,35 @@ The Nexgo SmartPOS SDK AAR is stored locally in `app/libs` and loaded by Gradle 
 
 ## Transport Defaults
 
-The first-run default is `SERIAL`, which uses USB CDC. The setup screen can change:
+The debug build defaults to `RS232` so USB remains available for ADB. The release
+build defaults to `SERIAL`, which uses USB CDC. An explicitly saved terminal
+setting takes precedence over the build default. The setup screen can change:
 
-- Port mode: `SERIAL` (USB CDC) or `RS232`
+- Port mode: `SERIAL` (USB CDC), `RS232`, or `IP`
 - RS232 port number
+- TCP listening port (default `9100`)
 - Baud rate
 - Data bits
 - Stop bits
 - Parity
 
 USB CDC currently keeps the default VID/PID values `0x6352` and `0x294A`.
+
+In `IP` mode the existing byte-for-byte PINPAD framing runs over one raw TCP
+connection. Listeners are created only on active Wi-Fi or Ethernet IPv4
+addresses; cellular is not accepted. There is no TLS in
+this first LAN-only implementation. The terminal answers
+`GLOBALCONNECT_PINPAD_DISCOVER_V1` UDP broadcasts on port `39100` with its
+serial number, model, IPv4 address, and configured TCP port.
+
+The normal customer screen does not show the development RX/TX diagnostics
+panel. If the selected communication transport fails, a concise error-only
+banner still tells the operator to restart the terminal or contact support.
+
+The `ENTER + 1` administration menu includes **Cloud Update**, which asks
+xTMSAgent to request and reapply the `PINPAD_APP` configuration from TMS.
+The same menu opens from the idle screen after either a five-second hold or ten
+rapid taps, supporting touchscreen-only models such as N6/N6S.
 
 ## Host-Controlled Serial Speed
 
@@ -111,11 +131,63 @@ The four-digit field has a theoretical ceiling of 9,999 characters. Use 8,192 as
 
 `M16` accepts one or more FS-separated filenames and returns one FS-separated status per filename: `0` deleted, `1` invalid name or unsupported extension, `2` file not found, and `3` deletion failed.
 
-`M17` uses `language + FS + Base64(UTF-8 text)`. Hosts should send the simple language values `es` or `en`; PinpadApp resolves the appropriate locale and installed offline voice. Regional aliases remain accepted for backward compatibility. After application-certificate provisioning starts the licensed Pinpad service, PinpadApp always requires the managed RHVoice engine even when another Android TTS engine is already installed. AWS resolves the TTS capabilities to the model-compatible RHVoice engine, language pack, and voice pack, and xTMSAgent installs them. PinpadApp then binds specifically to RHVoice and selects the offline Spanish `Mateo` voice or an offline English voice. Other installed engines remain temporary fallbacks while RHVoice is being installed. Spanish explicitly selects `Mateo`; a missing Mateo voice returns status `2` instead of using an unrelated Spanish fallback. The text is limited to 1,000 characters. Status values are `0` accepted for speech, `1` invalid payload/language/text, `2` speech engine or requested language unavailable or still provisioning, and `3` playback could not be started.
+`M17` uses `language + FS + Base64(UTF-8 text)`. Hosts should send the simple language values `es` or `en`; PinpadApp resolves the appropriate locale and installed offline voice. Regional aliases remain accepted for backward compatibility. After application-certificate provisioning starts the licensed Pinpad service, PinpadApp always requires the managed RHVoice engine even when another Android TTS engine is already installed. AWS resolves the `android.tts` capability to the model-compatible unified RHVoice APK, and xTMSAgent installs it. That one APK internally contains English/Slt and Spanish/Mateo; separate language and voice application packages are not required. PinpadApp then binds specifically to RHVoice and selects the offline Spanish `Mateo` voice or the bundled offline English voice. Other installed engines remain temporary fallbacks while RHVoice is being installed. Spanish explicitly selects `Mateo`; a missing Mateo voice returns status `2` instead of using an unrelated Spanish fallback. The text is limited to 1,000 characters. Status values are `0` accepted for speech, `1` invalid payload/language/text, `2` speech engine or requested language unavailable or still provisioning, and `3` playback could not be started.
 
 JPEG command `J4` uses the same four-digit data length and 8,192-character host-download packet size, while continuing to accept legacy three-digit packets.
 
 Only valid MP3 and MP4 signatures are accepted. File names are limited to 64 characters, the table to 50 files, MP3 files to 16 MB, and MP4 files to 64 MB.
+
+## A10 Demo EMV configuration bridge
+
+Transaction command `T90` lets the Global Connect Pinpad Media Manager send an
+original A10 configuration text file directly to the PINPAD. Its payload is:
+
+`type + FS + Base64(UTF-8 file name) + FS + Base64(file contents)`
+
+Supported type values are `D` Data Formats, `T` Terminal Configuration, `K`
+contact CA key, `A` contact application, `R` contactless CA key, and `L`
+contactless application. The PINPAD validates and parses the file, persists the
+result in its EMV configuration store, reloads the NEXGO kernel, and responds
+with `T91`. Status `0` means applied; other statuses indicate invalid content or
+an SDK rejection. Files are limited to 256 KiB.
+
+This bridge complements the legacy `T01`-`T5H` packet commands. It exists to
+preserve the original text-file workflow without copying the legacy desktop
+application's packet splitting and unmanaged dependencies.
+
+## Signature Capture Protocol
+
+Signature capture uses two-character transaction commands:
+
+| Command | Direction | Operation |
+|---|---|---|
+| `S1` | Host → PINPAD | Start an on-screen signature capture |
+| `S2` | PINPAD → Host | Return the result and, when captured, the image packets |
+
+The `S1` payload is `timeoutSeconds + FS + direction + FS + imageFormat`. Timeout is `005`–`300` seconds. Direction is `H` for a horizontal/wide signing area or `V` for a vertical/tall signing area. Image format is `P` for PNG or `J` for JPEG. Example: `060 + FS + H + FS + P`.
+
+The PINPAD acknowledges `S1` immediately, displays the signature screen, and later sends one or more `S2` frames. Each `S2` payload is `result + packet + totalPackets + Base64Data`: result is one digit, packet and total are four decimal digits each, and Base64 data is limited to 1,024 characters per frame. Packet numbering starts at `0001`. The host ACKs every `S2`; the PINPAD sends the next packet after that ACK and sends EOT after the final ACK.
+
+Result values are `1` captured, `2` cancelled, `3` timed out, and `4` error. Non-captured results contain packet `0000`, total `0000`, and no image data. The capture screen provides OK, Clear, and Cancel buttons; Cancel requires confirmation.
+
+## Photo and QR Protocol
+
+Camera and QR operations use three-character transaction commands:
+
+| Command | Direction | Operation |
+|---|---|---|
+| `PH1` | Host → PINPAD | Start photo capture |
+| `PH2` | PINPAD → Host | Return the result and accepted JPEG packets |
+| `QR1` | Host → PINPAD | Generate and display a QR code |
+| `QR2` | PINPAD → Host | Return the QR display result |
+| `QR3` | Host → PINPAD | Start camera-based QR reading |
+| `QR4` | PINPAD → Host | Return the scan result and decoded value |
+
+`PH1` uses `timeoutSeconds + FS + camera + FS + jpegQuality`. Timeout is `005`–`300`, camera is `F` (front) or `B` (back), and JPEG quality is `10`–`100`. A model that lacks the requested camera automatically uses its other available camera. `PH2` uses the same `result + packet + totalPackets + Base64Data` packet and ACK/EOT handshake as `S2`, with 1,024 Base64 characters per packet. Result values are `1` captured, `2` cancelled, `3` timed out, and `4` error.
+
+`QR1` uses `timeoutSeconds + FS + Base64(UTF-8 value)`. The value is limited to 2,048 UTF-8 bytes. `QR2` contains one status digit: `1` done, `2` cancelled, `3` timed out, or `4` error.
+
+`QR3` uses `timeoutSeconds + FS + camera`. `QR4` contains the same status values; a successful scan is `1 + FS + Base64(UTF-8 decoded value)`. Camera operations require Android camera permission, which the PINPAD requests on first use.
 
 ## Keypad Diagnostics
 
@@ -135,6 +207,22 @@ Setup can currently be opened with:
 - `ENTER`, then `1` within 4 seconds
 
 CANCEL is consumed by `MainActivity` so it does not close the app from the idle screen.
+
+## Clear-key injection mode
+
+Clear-key command `02` is disabled during normal PINPAD operation. On a CT20P, press
+`CLEAR`, then `2` within four seconds (or hold `CLEAR` while pressing `2`) and enter
+both configured seven-digit key-load passwords to authorize Clear-key Injection Mode.
+
+While this mode is active:
+
+- Only commands `02`, `04`, `06`, and `08` are accepted.
+- Command `02` received outside the mode is discarded with a single `04` EOT byte;
+  it does not open the password prompt.
+- Other commands received inside the mode are also discarded with EOT only.
+- Each accepted command restarts a one-minute inactivity timer.
+- The mode closes on one minute of inactivity, CANCEL, leaving PinpadApp, or service
+  shutdown.
 
 ## Operator Exit
 
@@ -164,4 +252,6 @@ Pinpad requires the `PINPAD_APP` license issued by Global Connect ONE. It genera
 
 The Android application ID and Kotlin namespace are `one.globalconnect.pinpad`.
 
-Set `licenseSigningPublicKeySpkiBase64` in the build environment or user-level Gradle properties to the Base64 SPKI public key returned by the deployed KMS application-license signing key. Builds without the matching trust anchor fail authorization closed at runtime.
+Set `licenseSigningPublicKeySpkiBase64`
+in the build environment or user-level Gradle properties to the Base64 SPKI public key returned by the deployed KMS application-license signing key.
+Builds without the matching trust anchor fail authorization closed at runtime.

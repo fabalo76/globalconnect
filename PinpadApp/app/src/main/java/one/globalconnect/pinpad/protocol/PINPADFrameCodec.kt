@@ -49,6 +49,12 @@ class PINPADFrameCodec {
     companion object {
         private const val MIN_FRAME_SIZE = 5
         private val THREE_CHARACTER_COMMANDS = setOf(
+            "PH1",
+            "PH2",
+            "QR1",
+            "QR2",
+            "QR3",
+            "QR4",
             "Z42",
             "Z43",
             "Z50",

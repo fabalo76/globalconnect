@@ -1,6 +1,8 @@
 package one.globalconnect.xtmsagent.mqtt.downloads
 
 import android.content.Context
+import android.content.pm.PackageInfo
+import android.os.Build
 import android.util.Log
 import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
@@ -15,6 +17,7 @@ import one.globalconnect.xtmsagent.nexgo.NexgoSystemAssetInstaller
 import one.globalconnect.xtmsagent.requirements.ApplicationRequirementNotifier
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
@@ -33,6 +36,9 @@ private const val TAG = "AwsDeviceDownload"
 private const val CONNECT_TIMEOUT_MS = 30_000
 private const val READ_TIMEOUT_MS = 300_000
 private const val INSTALL_TIMEOUT_MS = 180_000L
+private const val INSTALL_POLL_INTERVAL_MS = 1_000L
+private const val INSTALL_RETRY_DELAY_MS = 5_000L
+private const val INSTALL_ATTEMPTS = 2
 
 object AwsDeviceDownloadManager {
 
@@ -54,7 +60,28 @@ object AwsDeviceDownloadManager {
             val isFirmware = taskType.equals("FirmwareDownload", ignoreCase = true)
                 || taskType.equals("UpdateFirmware", ignoreCase = true)
             val isBootAnimation = taskType.equals("BootAnimationDownload", ignoreCase = true)
+            val isApplication = !isFirmware && !isBootAnimation
+            val payloadPresentation = if (isApplication) {
+                ApplicationPresentation.fromPayload(payload)
+            } else {
+                null
+            }
+            payloadPresentation?.let {
+                TmsTaskStatus.taskOverride.value = context.getString(
+                    one.globalconnect.xtmsagent.R.string.task_app_preparing,
+                    it.label()
+                )
+            }
             val response = requestDownload(context, isFirmware, isBootAnimation, payload)
+            val applicationPresentation = if (isApplication) {
+                ApplicationPresentation.fromResponse(
+                    response,
+                    payloadPresentation,
+                    context.getString(one.globalconnect.xtmsagent.R.string.task_application)
+                )
+            } else {
+                null
+            }
             val files = response.files.ifEmpty {
                 listOf(
                     DownloadFile(
@@ -68,7 +95,12 @@ object AwsDeviceDownloadManager {
 
             val downloaded = files.map { file ->
                 ensureNotCancelled(context, taskId)
-                val localFile = downloadSignedFile(context, taskId, file)
+                val localFile = downloadSignedFile(
+                    context,
+                    taskId,
+                    file,
+                    applicationPresentation?.label()
+                )
                 verifyFile(localFile, file)
                 localFile
             }
@@ -76,7 +108,14 @@ object AwsDeviceDownloadManager {
             ensureNotCancelled(context, taskId)
             val effectiveAt = parseEffectiveAt(payload)
             if (effectiveAt != null && effectiveAt.isAfter(Instant.now())) {
-                persistStagedTask(context, taskId, taskType, effectiveAt, downloaded)
+                persistStagedTask(
+                    context,
+                    taskId,
+                    taskType,
+                    effectiveAt,
+                    downloaded,
+                    applicationPresentation
+                )
                 scheduleApply(context, taskId, effectiveAt)
                 TmsTaskStatus.taskOverride.value = null
                 return@withContext Result(
@@ -86,9 +125,25 @@ object AwsDeviceDownloadManager {
                 )
             }
 
-            applyDownloadedFiles(context, taskId, taskType, downloaded, payload)
+            applyDownloadedFiles(
+                context,
+                taskId,
+                taskType,
+                downloaded,
+                payload,
+                applicationPresentation
+            )
             taskDirectory(context, taskId).deleteRecursively()
-            TmsTaskStatus.taskOverride.value = null
+            if (applicationPresentation != null) {
+                TmsTaskStatus.showTransient(
+                    context.getString(
+                        one.globalconnect.xtmsagent.R.string.task_app_installed,
+                        applicationPresentation.label()
+                    )
+                )
+            } else {
+                TmsTaskStatus.taskOverride.value = null
+            }
             Result(success = true, status = "applied")
         } catch (e: Exception) {
             if (isCancelled(context, taskId)) {
@@ -97,7 +152,20 @@ object AwsDeviceDownloadManager {
                 return@withContext Result(success = true, status = "cancelled", statusMessage = "Task cancelled")
             }
             Log.e(TAG, "AWS download task failed: ${e.message}", e)
-            TmsTaskStatus.taskOverride.value = null
+            MainActivity.writeLog(
+                "AWS task failed: id=$taskId type=$taskType error=${e.message ?: "unknown"}"
+            )
+            val presentation = ApplicationPresentation.fromPayload(payload)
+            if (presentation != null) {
+                TmsTaskStatus.showTransient(
+                    context.getString(
+                        one.globalconnect.xtmsagent.R.string.task_app_failed,
+                        presentation.label()
+                    )
+                )
+            } else {
+                TmsTaskStatus.taskOverride.value = null
+            }
             Result(success = false, errorMessage = e.message ?: "Download task failed")
         }
     }
@@ -123,8 +191,14 @@ object AwsDeviceDownloadManager {
             val names = metadata.getJSONArray("files")
             val files = (0 until names.length()).map { File(taskDirectory(context, taskId), names.getString(it)) }
             if (files.any { !it.isFile }) return@withContext Result(false, "One or more staged task files are missing")
-            applyDownloadedFiles(context, taskId, taskType, files)
+            val presentation = ApplicationPresentation.fromMetadata(metadata)
+            applyDownloadedFiles(context, taskId, taskType, files, presentation = presentation)
             taskDirectory(context, taskId).deleteRecursively()
+            presentation?.let {
+                TmsTaskStatus.showTransient(
+                    context.getString(one.globalconnect.xtmsagent.R.string.task_app_installed, it.label())
+                )
+            }
             Result(true, status = "applied")
         } catch (e: Exception) {
             if (isCancelled(context, taskId)) {
@@ -142,6 +216,7 @@ object AwsDeviceDownloadManager {
         taskType: String,
         downloaded: List<File>,
         payload: JSONObject? = null,
+        presentation: ApplicationPresentation? = null,
     ) {
         ensureNotCancelled(context, taskId)
         val isFirmware = taskType.equals("FirmwareDownload", ignoreCase = true)
@@ -150,12 +225,12 @@ object AwsDeviceDownloadManager {
         if (isBootAnimation) {
             installBootMedia(context, downloaded)
         } else if (isFirmware) {
-            installApkFiles(context, downloaded)
+            installApkFiles(context, taskId, downloaded)
             Log.i(TAG, "Firmware files installed: ${downloaded.joinToString { it.name }}")
         } else {
             val apk = downloaded.firstOrNull { it.name.endsWith(".apk", ignoreCase = true) }
                 ?: throw IllegalStateException("Application download did not include an APK file")
-            installApk(context, apk)
+            installApk(context, taskId, apk, presentation?.label())
             MainActivity.writeLog("AWS app download installed: ${apk.name}")
             ApplicationRequirementNotifier.notifyInstalled(context, payload)
         }
@@ -269,12 +344,21 @@ object AwsDeviceDownloadManager {
         )
     }
 
-    private fun downloadSignedFile(context: Context, downloadId: String, file: DownloadFile): File {
+    private fun downloadSignedFile(
+        context: Context,
+        downloadId: String,
+        file: DownloadFile,
+        displayLabel: String? = null
+    ): File {
         val dest = stagingFile(context, downloadId, file.fileName)
         dest.parentFile?.mkdirs()
         dest.delete()
 
-        TmsTaskStatus.taskOverride.value = "Downloading: ${file.fileName}"
+        val label = displayLabel ?: file.fileName
+        TmsTaskStatus.taskOverride.value = context.getString(
+            one.globalconnect.xtmsagent.R.string.task_download_preparing,
+            label
+        )
         val conn = URL(file.url).openConnection() as HttpURLConnection
         try {
             conn.requestMethod = "GET"
@@ -300,7 +384,11 @@ object AwsDeviceDownloadManager {
                             val pct = (bytesWritten * 100L / totalBytes).toInt().coerceAtMost(100)
                             if (pct != lastPct) {
                                 lastPct = pct
-                                TmsTaskStatus.taskOverride.value = "Downloading: ${file.fileName} $pct%"
+                                TmsTaskStatus.taskOverride.value = context.getString(
+                                    one.globalconnect.xtmsagent.R.string.task_download_progress,
+                                    label,
+                                    pct
+                                )
                             }
                         }
                     }
@@ -313,44 +401,181 @@ object AwsDeviceDownloadManager {
         }
     }
 
-    private suspend fun installApkFiles(context: Context, files: List<File>) {
+    private suspend fun installApkFiles(context: Context, taskId: String, files: List<File>) {
         for (file in files.filter { it.name.endsWith(".apk", ignoreCase = true) }) {
-            installApk(context, file)
+            installApk(context, taskId, file)
         }
     }
 
-    private suspend fun installApk(context: Context, apkFile: File) {
+    private suspend fun installApk(
+        context: Context,
+        taskId: String,
+        apkFile: File,
+        displayLabel: String? = null,
+    ) {
         val extCache = context.getExternalCacheDir() ?: context.cacheDir
         val installFile = File(extCache, apkFile.name.ensureApkExtension())
         apkFile.copyTo(installFile, overwrite = true)
         installFile.setReadable(true, false)
+        val expected = readApkIdentity(context, installFile)
 
-        TmsTaskStatus.taskOverride.value = "Installing: ${apkFile.name}"
-        val result = CompletableDeferred<Boolean>()
-        val platform = com.nexgo.oaf.apiv3.APIProxy.getDeviceEngine(context).platform
-        val sdkResult = platform.installApp(
-            installFile.absolutePath,
-            object : com.nexgo.oaf.apiv3.OnAppOperatListener {
-                override fun onOperatResult(res: Int) {
-                    val success = res == com.nexgo.oaf.apiv3.SdkResult.Success
-                    Log.i(TAG, "Nexgo install result for ${apkFile.name}: res=$res success=$success")
-                    result.complete(success)
-                }
-            }
+        TmsTaskStatus.taskOverride.value = context.getString(
+            one.globalconnect.xtmsagent.R.string.task_app_installing,
+            displayLabel ?: apkFile.name
         )
 
-        if (sdkResult != com.nexgo.oaf.apiv3.SdkResult.Success) {
-            throw IllegalStateException("installApp returned $sdkResult for ${apkFile.name}")
+        val deviceOwnerResult = DeviceOwnerPackageInstaller.install(
+            context = context,
+            taskId = taskId,
+            apkFile = installFile,
+            packageName = expected.packageName,
+            versionCode = expected.versionCode,
+            stagedFile = apkFile,
+        )
+        if (deviceOwnerResult.success || isExpectedPackageInstalled(context, expected)) {
+            Log.i(TAG, "Device Owner install succeeded: ${deviceOwnerResult.message}")
+            cleanupInstalledApk(installFile, apkFile)
+            return
+        }
+        if (!deviceOwnerResult.shouldFallback) {
+            throw IllegalStateException(deviceOwnerResult.message)
+        }
+        Log.w(
+            TAG,
+            "Device Owner PackageInstaller did not complete; using NEXGO fallback: " +
+                deviceOwnerResult.message,
+        )
+        MainActivity.writeLog(
+            "Application installer fallback: ${expected.describe()} " +
+                "reason=${deviceOwnerResult.message}",
+        )
+
+        val platform = com.nexgo.oaf.apiv3.APIProxy.getDeviceEngine(context).platform
+        var lastFailure =
+            "Android PackageInstaller: ${deviceOwnerResult.message}; " +
+                "NEXGO installer did not complete"
+
+        repeat(INSTALL_ATTEMPTS) { attemptIndex ->
+            val attempt = attemptIndex + 1
+            if (isExpectedPackageInstalled(context, expected)) {
+                Log.i(
+                    TAG,
+                    "APK already installed while preparing attempt $attempt: " +
+                        "${expected.describe()}"
+                )
+                cleanupInstalledApk(installFile, apkFile)
+                return
+            }
+
+            val result = CompletableDeferred<Boolean>()
+            val sdkResult = platform.installApp(
+                installFile.absolutePath,
+                object : com.nexgo.oaf.apiv3.OnAppOperatListener {
+                    override fun onOperatResult(res: Int) {
+                        val success = res == com.nexgo.oaf.apiv3.SdkResult.Success
+                        Log.i(
+                            TAG,
+                            "Nexgo install result for ${apkFile.name}: " +
+                                "attempt=$attempt res=$res success=$success"
+                        )
+                        result.complete(success)
+                    }
+                }
+            )
+
+            if (sdkResult == com.nexgo.oaf.apiv3.SdkResult.Success) {
+                val success = awaitInstallCompletion(context, result, expected)
+                if (success == true || isExpectedPackageInstalled(context, expected)) {
+                    if (success == null) {
+                        Log.w(
+                            TAG,
+                            "NEXGO install callback timed out, but PackageManager confirms " +
+                                "${expected.describe()}"
+                        )
+                    }
+                    cleanupInstalledApk(installFile, apkFile)
+                    return
+                }
+                lastFailure = if (success == null) {
+                    "NEXGO install callback timed out and PackageManager does not report " +
+                        expected.describe()
+                } else {
+                    "NEXGO installer reported failure for ${expected.describe()}"
+                }
+            } else {
+                lastFailure =
+                    "installApp returned $sdkResult for ${expected.describe()}"
+            }
+
+            if (attempt < INSTALL_ATTEMPTS) {
+                Log.w(
+                    TAG,
+                    "$lastFailure; retrying installation in ${INSTALL_RETRY_DELAY_MS}ms " +
+                        "(attempt ${attempt + 1}/$INSTALL_ATTEMPTS)"
+                )
+                MainActivity.writeLog(
+                    "Application install retry: ${expected.describe()} " +
+                        "attempt=${attempt + 1}/$INSTALL_ATTEMPTS reason=$lastFailure"
+                )
+                delay(INSTALL_RETRY_DELAY_MS)
+            }
         }
 
-        val success = withTimeoutOrNull(INSTALL_TIMEOUT_MS) { result.await() }
-            ?: throw IllegalStateException("Install timed out for ${apkFile.name}")
-        if (!success) {
-            throw IllegalStateException("Install failed for ${apkFile.name}")
+        throw IllegalStateException(
+            "Install failed after $INSTALL_ATTEMPTS attempts: $lastFailure"
+        )
+    }
+
+    private suspend fun awaitInstallCompletion(
+        context: Context,
+        callback: CompletableDeferred<Boolean>,
+        expected: ApkIdentity,
+    ): Boolean? = withTimeoutOrNull(INSTALL_TIMEOUT_MS) {
+        while (true) {
+            if (callback.isCompleted) {
+                val callbackSuccess = callback.await()
+                return@withTimeoutOrNull callbackSuccess ||
+                    isExpectedPackageInstalled(context, expected)
+            }
+            if (isExpectedPackageInstalled(context, expected)) {
+                Log.i(
+                    TAG,
+                    "PackageManager confirmed ${expected.describe()} before the NEXGO callback"
+                )
+                return@withTimeoutOrNull true
+            }
+            delay(INSTALL_POLL_INTERVAL_MS)
+        }
+        @Suppress("UNREACHABLE_CODE")
+        false
+    }
+
+    private fun readApkIdentity(context: Context, apkFile: File): ApkIdentity {
+        @Suppress("DEPRECATION")
+        val info = context.packageManager.getPackageArchiveInfo(apkFile.absolutePath, 0)
+            ?: throw IllegalStateException("Unable to read APK identity from ${apkFile.name}")
+        return ApkIdentity(info.packageName, info.versionCodeCompat())
+    }
+
+    private fun isExpectedPackageInstalled(context: Context, expected: ApkIdentity): Boolean {
+        @Suppress("DEPRECATION")
+        val installed = runCatching {
+            context.packageManager.getPackageInfo(expected.packageName, 0)
+        }.getOrNull() ?: return false
+        return installed.versionCodeCompat() >= expected.versionCode
+    }
+
+    private fun PackageInfo.versionCodeCompat(): Long =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            longVersionCode
+        } else {
+            @Suppress("DEPRECATION")
+            versionCode.toLong()
         }
 
+    private fun cleanupInstalledApk(installFile: File, stagedFile: File) {
         installFile.delete()
-        apkFile.delete()
+        stagedFile.delete()
     }
 
     private fun verifyFile(file: File, expected: DownloadFile) {
@@ -392,12 +617,23 @@ object AwsDeviceDownloadManager {
         return File(taskDirectory(context, taskId), safeName)
     }
 
-    private fun persistStagedTask(context: Context, taskId: String, taskType: String, effectiveAt: Instant, files: List<File>) {
+    private fun persistStagedTask(
+        context: Context,
+        taskId: String,
+        taskType: String,
+        effectiveAt: Instant,
+        files: List<File>,
+        presentation: ApplicationPresentation? = null
+    ) {
         val metadata = JSONObject()
             .put("taskId", taskId)
             .put("taskType", taskType)
             .put("effectiveAt", effectiveAt.toString())
             .put("files", JSONArray(files.map { it.name }))
+        presentation?.let {
+            metadata.put("applicationName", it.name)
+            metadata.put("applicationVersion", it.version)
+        }
         metadataFile(context, taskId).writeText(metadata.toString())
     }
 
@@ -442,13 +678,22 @@ object AwsDeviceDownloadManager {
     private fun String.urlEncode(): String =
         java.net.URLEncoder.encode(this, "UTF-8").replace("+", "%20")
 
+    private data class ApkIdentity(
+        val packageName: String,
+        val versionCode: Long,
+    ) {
+        fun describe(): String = "$packageName versionCode=$versionCode"
+    }
+
     private data class DownloadResponse(
         val downloadId: String,
         val fileName: String,
         val url: String,
         val sha256: String,
         val sizeBytes: Long,
-        val files: List<DownloadFile>
+        val files: List<DownloadFile>,
+        val applicationName: String?,
+        val versionId: String?
     ) {
         companion object {
             fun fromJson(json: JSONObject): DownloadResponse {
@@ -462,8 +707,70 @@ object AwsDeviceDownloadManager {
                     url = json.optString("url", json.optString("Url")),
                     sha256 = json.optString("sha256", json.optString("Sha256")),
                     sizeBytes = json.optLong("sizeBytes", json.optLong("SizeBytes", 0L)),
-                    files = files
+                    files = files,
+                    applicationName = json.optString(
+                        "applicationName",
+                        json.optString("ApplicationName")
+                    ).takeIf { it.isNotBlank() },
+                    versionId = json.optString(
+                        "versionId",
+                        json.optString("VersionId")
+                    ).takeIf { it.isNotBlank() }
                 )
+            }
+        }
+    }
+
+    private data class ApplicationPresentation(
+        val name: String,
+        val version: String?
+    ) {
+        fun label(): String {
+            val normalizedVersion = version?.trim()?.takeIf { it.isNotBlank() } ?: return name
+            val versionLabel = if (normalizedVersion.startsWith("v", ignoreCase = true)) {
+                normalizedVersion
+            } else {
+                "v$normalizedVersion"
+            }
+            return "$name $versionLabel"
+        }
+
+        companion object {
+            fun fromPayload(payload: JSONObject?): ApplicationPresentation? {
+                val name = payload.readFirstString(
+                    "applicationName",
+                    "ApplicationName",
+                    "appName",
+                    "AppName",
+                    "packageName",
+                    "PackageName"
+                ) ?: return null
+                val version = payload.readFirstString(
+                    "version",
+                    "Version",
+                    "versionId",
+                    "VersionId",
+                    "applicationVersion",
+                    "ApplicationVersion"
+                )
+                return ApplicationPresentation(name, version)
+            }
+
+            fun fromResponse(
+                response: DownloadResponse,
+                fallback: ApplicationPresentation?,
+                defaultName: String
+            ): ApplicationPresentation {
+                val name = response.applicationName
+                    ?: fallback?.name
+                    ?: defaultName
+                return ApplicationPresentation(name, response.versionId ?: fallback?.version)
+            }
+
+            fun fromMetadata(metadata: JSONObject): ApplicationPresentation? {
+                val name = metadata.optString("applicationName").takeIf { it.isNotBlank() } ?: return null
+                val version = metadata.optString("applicationVersion").takeIf { it.isNotBlank() }
+                return ApplicationPresentation(name, version)
             }
         }
     }
@@ -482,6 +789,13 @@ object AwsDeviceDownloadManager {
                     sha256 = json.optString("sha256", json.optString("Sha256")),
                     sizeBytes = json.optLong("sizeBytes", json.optLong("SizeBytes", 0L))
                 )
+        }
+    }
+
+    private fun JSONObject?.readFirstString(vararg names: String): String? {
+        if (this == null) return null
+        return names.firstNotNullOfOrNull { name ->
+            optString(name).trim().takeIf { it.isNotBlank() }
         }
     }
 }

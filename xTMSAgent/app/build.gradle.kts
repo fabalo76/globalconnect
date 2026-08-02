@@ -62,8 +62,8 @@ android {
         minSdk = 29
         //noinspection OldTargetApi
         targetSdk = 35
-        versionCode = 47
-        versionName = "2.1.2.47"
+        versionCode = 56
+        versionName = "2.1.2.56"
         buildConfigField("String", "GLOBAL_CONNECT_ENV", "\"dev\"")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"

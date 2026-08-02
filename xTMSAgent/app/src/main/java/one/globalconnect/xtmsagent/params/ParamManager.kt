@@ -64,6 +64,8 @@ object ParamManager {
     private var requestedApplicationId: String? = null
     @Volatile
     private var timeoutRunnable: Runnable? = null
+    private val configChunkLock = Any()
+    private val configChunks = mutableMapOf<String, ConfigChunkAccumulator>()
 
     // ── Public API ────────────────────────────────────────────────────────────
 
@@ -77,10 +79,10 @@ object ParamManager {
      *
      * @param context Application context.
      */
-    fun requestParamDownload(context: Context, applicationId: String? = null) {
+    fun requestParamDownload(context: Context, applicationId: String? = null): Boolean {
         if (!downloadInProgress.compareAndSet(false, true)) {
             Log.d(TAG, "Download already in progress — ignoring concurrent request")
-            return
+            return false
         }
 
         requestedApplicationId = applicationId?.trim()?.takeIf { it.isNotEmpty() }
@@ -95,10 +97,12 @@ object ParamManager {
             Log.w(TAG, "MQTT not connected — cannot send paramreq")
             clearDownloadState(generation)
             notifyPaymentAppFailed(context.applicationContext, "MQTT not connected")
+            return false
         } else {
             scheduleConfigResponseTimeout(context.applicationContext, generation, requestedApplicationId)
         }
         // On success: the pipeline continues in onParamReady() when the broker replies.
+        return true
     }
 
     /**
@@ -138,39 +142,56 @@ object ParamManager {
     fun onConfigResponse(context: Context, payloadText: String) {
         val generation = downloadGeneration.get()
         Thread {
+            var terminalResponse = false
             try {
-                val failureMessage = readConfigFailure(payloadText)
+                val completePayload = acceptConfigResponsePayload(payloadText)
+                if (completePayload == null) {
+                    return@Thread
+                }
+                terminalResponse = true
+
+                val failureMessage = readConfigFailure(completePayload)
                 if (failureMessage != null) {
                     Log.w(TAG, "Config response reported failure: $failureMessage")
                     notifyPaymentAppFailed(context.applicationContext, failureMessage)
                     return@Thread
                 }
 
-                val selectedConfig = selectRequestedConfiguration(payloadText)
-                if (selectedConfig == null) {
-                    notifyPaymentAppFailed(context.applicationContext, "No PAYMENT_APP configuration in response")
+                val selectedConfigs = selectConfigurationsForDelivery(completePayload)
+                if (selectedConfigs.isEmpty()) {
+                    notifyPaymentAppFailed(context.applicationContext, "No supported application configuration in response")
                     return@Thread
                 }
 
-                val jsonBytes = selectedConfig.toString().toByteArray(Charsets.UTF_8)
-                val paramsFile = saveParamsFile(context.applicationContext, jsonBytes)
-                    ?: run {
-                        notifyPaymentAppFailed(context.applicationContext, "Could not save params file")
-                        return@Thread
-                    }
+                selectedConfigs.forEach { selectedConfig ->
+                    val applicationId = selectedConfig.optString("applicationId", "").trim()
+                    val jsonBytes = selectedConfig.toString().toByteArray(Charsets.UTF_8)
+                    val paramsFile = saveParamsFile(context.applicationContext, jsonBytes, applicationId)
+                        ?: run {
+                            notifyParameterClientFailed(
+                                context.applicationContext,
+                                applicationId,
+                                "Could not save params file",
+                            )
+                            return@forEach
+                        }
 
-                Log.i(
-                    TAG,
-                    "Config response saved for payment app: applicationId=${selectedConfig.optString("applicationId", "(unknown)")} " +
-                        "schemaVersion=${selectedConfig.opt("schemaVersion") ?: "(none)"} " +
-                        "path=${paramsFile.absolutePath} bytes=${jsonBytes.size}"
-                )
-                notifyPaymentAppReady(context.applicationContext, paramsFile)
+                    Log.i(
+                        TAG,
+                        "Config response saved: applicationId=${applicationId.ifBlank { "(unknown)" }} " +
+                            "schemaVersion=${selectedConfig.opt("schemaVersion") ?: "(none)"} " +
+                            "path=${paramsFile.absolutePath} bytes=${jsonBytes.size}"
+                    )
+                    notifyParameterClientReady(context.applicationContext, paramsFile, applicationId)
+                }
             } catch (e: Exception) {
+                terminalResponse = true
                 Log.e(TAG, "Config response handling failed: ${e.message}", e)
                 notifyPaymentAppFailed(context.applicationContext, e.message ?: "config response error")
             } finally {
-                clearDownloadState(generation)
+                if (terminalResponse) {
+                    clearDownloadState(generation)
+                }
             }
         }.start()
     }
@@ -257,7 +278,7 @@ object ParamManager {
                     }
 
                 Log.i(TAG, "Params saved: ${paramsFile.absolutePath} (${jsonBytes.size} bytes raw)")
-                notifyPaymentAppReady(context, paramsFile)
+                notifyParameterClientReady(context, paramsFile)
 
             } finally {
                 conn.disconnect()
@@ -271,11 +292,19 @@ object ParamManager {
 
     // ── File storage ──────────────────────────────────────────────────────────
 
-    private fun saveParamsFile(context: Context, data: ByteArray): File? {
+    private fun saveParamsFile(context: Context, data: ByteArray, applicationId: String? = null): File? {
         return try {
             val dir = File(context.filesDir, ParamConstants.PARAMS_FOLDER)
             dir.mkdirs()
-            val file = File(dir, ParamConstants.PARAMS_FILENAME)
+            val suffix = applicationId
+                ?.trim()
+                ?.lowercase()
+                ?.replace(Regex("[^a-z0-9_-]"), "_")
+                ?.takeIf { it.isNotBlank() }
+            val file = File(
+                dir,
+                suffix?.let { "params-$it.json" } ?: ParamConstants.PARAMS_FILENAME,
+            )
             file.writeBytes(data)
             file
         } catch (e: Exception) {
@@ -294,8 +323,12 @@ object ParamManager {
      * the payment app side.  The payment app should consume the file immediately;
      * the grant is not persistent across process restarts.
      */
-    private fun notifyPaymentAppReady(context: Context, paramsFile: File) {
-        val paymentPkg = findPaymentAppPackage(context)
+    private fun notifyParameterClientReady(
+        context: Context,
+        paramsFile: File,
+        applicationId: String? = requestedApplicationId,
+    ) {
+        val paymentPkg = findParameterClientPackage(context, applicationId)
         if (paymentPkg == null) {
             Log.w(TAG, "No payment app found (PAY_APP intent filter) — params saved locally but not forwarded")
             return
@@ -325,7 +358,11 @@ object ParamManager {
     }
 
     private fun notifyPaymentAppFailed(context: Context, error: String) {
-        val paymentPkg = findPaymentAppPackage(context) ?: return
+        notifyParameterClientFailed(context, requestedApplicationId, error)
+    }
+
+    private fun notifyParameterClientFailed(context: Context, applicationId: String?, error: String) {
+        val paymentPkg = findParameterClientPackage(context, applicationId) ?: return
         context.sendBroadcast(
             Intent(ParamConstants.ACTION_PARAMS_FAILED).apply {
                 `package` = paymentPkg
@@ -359,6 +396,23 @@ object ParamManager {
         else Log.d(TAG, "Payment app discovered: $pkg")
         return pkg
     }
+
+    private fun findParameterClientPackage(context: Context, applicationId: String?): String? {
+        return if (applicationId.equals(PINPAD_APPLICATION_ID, ignoreCase = true)) {
+            runCatching {
+                context.packageManager.getApplicationInfo(PINPAD_PACKAGE, 0)
+                PINPAD_PACKAGE
+            }.getOrNull().also {
+                if (it == null) Log.w(TAG, "PINPAD_APP requested but $PINPAD_PACKAGE is not installed")
+            }
+        } else {
+            findPaymentAppPackage(context)
+        }
+    }
+
+    private const val PINPAD_APPLICATION_ID = "PINPAD_APP"
+    private const val PAYMENT_APPLICATION_ID = "PAYMENT_APP"
+    private const val PINPAD_PACKAGE = "one.globalconnect.pinpad"
 
     // ── Crypto / helpers ──────────────────────────────────────────────────────
 
@@ -452,6 +506,32 @@ object ParamManager {
         return null
     }
 
+    private fun selectConfigurationsForDelivery(payloadText: String): List<JSONObject> {
+        if (!requestedApplicationId.isNullOrBlank()) {
+            return listOfNotNull(selectRequestedConfiguration(payloadText))
+        }
+
+        val root = JSONObject(payloadText)
+        val configurations = root.optJSONArray("configurations")
+            ?: return listOfNotNull(selectRequestedConfiguration(payloadText))
+        val result = mutableListOf<JSONObject>()
+        for (index in 0 until configurations.length()) {
+            val item = configurations.optJSONObject(index) ?: continue
+            val wrapperApplicationId = item.optString("applicationId", "").trim()
+            val normalized = normalizeCompiledConfig(item.optJSONObject("configuration") ?: item)
+            if (normalized.optString("applicationId").isBlank() && wrapperApplicationId.isNotBlank()) {
+                normalized.put("applicationId", wrapperApplicationId)
+            }
+            val applicationId = normalized.optString("applicationId", wrapperApplicationId)
+            if (applicationId.equals(PAYMENT_APPLICATION_ID, ignoreCase = true)
+                || applicationId.equals(PINPAD_APPLICATION_ID, ignoreCase = true)
+            ) {
+                result += normalized
+            }
+        }
+        return result
+    }
+
     private fun readConfigFailure(payloadText: String): String? {
         val root = JSONObject(payloadText)
         val success = root.opt("success")
@@ -496,4 +576,94 @@ object ParamManager {
             null
         }
     }
+
+    /**
+     * Reassembles the bounded chunked envelope used by Global Connect when a
+     * compressed configuration is too large for one MQTT publish.
+     *
+     * Returns null while more chunks are required, otherwise returns either
+     * the original payload or a regular inline-data envelope that the existing
+     * decoder can process.
+     */
+    private fun acceptConfigResponsePayload(payloadText: String): String? {
+        val root = JSONObject(payloadText)
+        if (!root.optBoolean("chunked", false)) {
+            return payloadText
+        }
+
+        val requestId = root.optString("requestId", "").trim()
+        val encoding = root.optString("encoding", "").trim()
+        val chunkIndex = root.optInt("chunkIndex", -1)
+        val chunkCount = root.optInt("chunkCount", -1)
+        val data = root.optString("data", "")
+        require(requestId.isNotBlank()) { "Chunked config response is missing requestId" }
+        require(encoding.contains("gzip", ignoreCase = true) &&
+            encoding.contains("base64", ignoreCase = true)) {
+            "Unsupported chunked config encoding '$encoding'"
+        }
+        require(chunkCount in 1..MAX_CONFIG_CHUNKS) {
+            "Invalid config chunk count $chunkCount"
+        }
+        require(chunkIndex in 0 until chunkCount) {
+            "Invalid config chunk index $chunkIndex/$chunkCount"
+        }
+        require(data.length <= MAX_CONFIG_CHUNK_CHARS) {
+            "Config chunk $chunkIndex is too large"
+        }
+
+        synchronized(configChunkLock) {
+            val now = System.currentTimeMillis()
+            configChunks.entries.removeAll { now - it.value.createdAtMs > CONFIG_CHUNK_TTL_MS }
+
+            val accumulator = configChunks.getOrPut(requestId) {
+                ConfigChunkAccumulator(
+                    encoding = encoding,
+                    chunkCount = chunkCount,
+                    chunks = arrayOfNulls(chunkCount),
+                    createdAtMs = now,
+                )
+            }
+            require(accumulator.chunkCount == chunkCount && accumulator.encoding == encoding) {
+                "Config chunk metadata changed for request $requestId"
+            }
+
+            val previous = accumulator.chunks[chunkIndex]
+            require(previous == null || previous == data) {
+                "Conflicting duplicate config chunk $chunkIndex"
+            }
+            accumulator.chunks[chunkIndex] = data
+
+            val received = accumulator.chunks.count { it != null }
+            Log.i(TAG, "Config response chunk received requestId=$requestId part=${chunkIndex + 1}/$chunkCount received=$received")
+            if (received != chunkCount) return null
+
+            val encoded = buildString {
+                accumulator.chunks.forEach { append(requireNotNull(it)) }
+            }
+            configChunks.remove(requestId)
+            require(encoded.length <= MAX_CONFIG_ENCODED_CHARS) {
+                "Reassembled config response is too large"
+            }
+
+            Log.i(TAG, "Config response chunks reassembled requestId=$requestId encodedChars=${encoded.length}")
+            return JSONObject()
+                .put("success", true)
+                .put("requestId", requestId)
+                .put("encoding", encoding)
+                .put("data", encoded)
+                .toString()
+        }
+    }
+
+    private data class ConfigChunkAccumulator(
+        val encoding: String,
+        val chunkCount: Int,
+        val chunks: Array<String?>,
+        val createdAtMs: Long,
+    )
+
+    private const val MAX_CONFIG_CHUNKS = 512
+    private const val MAX_CONFIG_CHUNK_CHARS = 16 * 1024
+    private const val MAX_CONFIG_ENCODED_CHARS = 8 * 1024 * 1024
+    private const val CONFIG_CHUNK_TTL_MS = 2 * CONFIG_RESPONSE_TIMEOUT_MS
 }

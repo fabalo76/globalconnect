@@ -22,6 +22,8 @@ import javax.crypto.spec.SecretKeySpec
 private const val TAG = "LauncherConfigMgr"
 private const val CONNECT_TIMEOUT_MS = 30_000
 private const val READ_TIMEOUT_MS    = 60_000
+private const val DEFAULT_SYSTEM_BAR_COLOR = "#FF000000"
+private val ARGB_COLOR_PATTERN = Regex("^#?[0-9A-Fa-f]{8}$")
 
 /**
  * Broadcast fired after a new LauncherConfig has been downloaded and applied.
@@ -302,8 +304,8 @@ object LauncherConfigManager {
         val blockUnknown     = json.optBooleanAny(default = false, "blockUnknownApps", "BlockUnknownApps")
         val enableNavBar     = json.optBooleanAny(default = true, "enableNavigationBar", "EnableNavigationBar")
         val enableControlBar = json.optBooleanAny(default = true, "enableControlBar", "EnableControlBar")
-        val statusBarColor   = json.optStringAny("statusBarColor", "StatusBarColor")
-        val navBarColor      = json.optStringAny("navigationBarColor", "NavigationBarColor")
+        val statusBarColor   = normalizeSystemBarColor(json.optStringAny("statusBarColor", "StatusBarColor"))
+        val navBarColor      = normalizeSystemBarColor(json.optStringAny("navigationBarColor", "NavigationBarColor"))
         val appsArray        = json.optJSONArrayAny("apps", "Apps", "applications", "Applications")
 
         // Build new app list sorted by displayOrder
@@ -342,14 +344,8 @@ object LauncherConfigManager {
         // Apply theme overrides from TMS config
         MainActivity.stTheme.enable_navigation_bar = enableNavBar
         MainActivity.stTheme.enable_control_bar    = enableControlBar
-        if (statusBarColor.isNotEmpty()) {
-            MainActivity.stTheme.status_bar_color =
-                if (statusBarColor.startsWith("#")) statusBarColor else "#$statusBarColor"
-        }
-        if (navBarColor.isNotEmpty()) {
-            MainActivity.stTheme.navigation_bar_color =
-                if (navBarColor.startsWith("#")) navBarColor else "#$navBarColor"
-        }
+        MainActivity.stTheme.status_bar_color = statusBarColor
+        MainActivity.stTheme.navigation_bar_color = navBarColor
 
         // If MainActivity hasn't finished Init() yet, sPathLaunch is blank —
         // we cannot write LaunchAPP.xml.  Do NOT write the marker file either;
@@ -396,16 +392,18 @@ object LauncherConfigManager {
         if (!prefs.contains("enableNavigationBar")) return  // no TMS theme saved yet
         MainActivity.stTheme.enable_navigation_bar = prefs.getBoolean("enableNavigationBar", true)
         MainActivity.stTheme.enable_control_bar    = prefs.getBoolean("enableControlBar", true)
-        val statusBarColor = prefs.getString("statusBarColor", "") ?: ""
-        val navBarColor    = prefs.getString("navigationBarColor", "") ?: ""
-        if (statusBarColor.isNotEmpty()) {
-            MainActivity.stTheme.status_bar_color =
-                if (statusBarColor.startsWith("#")) statusBarColor else "#$statusBarColor"
+        val storedStatusBarColor = prefs.getString("statusBarColor", null)
+        val storedNavBarColor = prefs.getString("navigationBarColor", null)
+        val statusBarColor = normalizeSystemBarColor(storedStatusBarColor)
+        val navBarColor = normalizeSystemBarColor(storedNavBarColor)
+        if (storedStatusBarColor != statusBarColor || storedNavBarColor != navBarColor) {
+            prefs.edit()
+                .putString("statusBarColor", statusBarColor)
+                .putString("navigationBarColor", navBarColor)
+                .apply()
         }
-        if (navBarColor.isNotEmpty()) {
-            MainActivity.stTheme.navigation_bar_color =
-                if (navBarColor.startsWith("#")) navBarColor else "#$navBarColor"
-        }
+        MainActivity.stTheme.status_bar_color = statusBarColor
+        MainActivity.stTheme.navigation_bar_color = navBarColor
     }
 
     private fun saveConfigIdMarker(configId: String) {
@@ -427,10 +425,23 @@ object LauncherConfigManager {
 
     private fun JSONObject.optStringAny(vararg keys: String): String {
         for (key in keys) {
+            if (!has(key) || isNull(key)) continue
             val value = optString(key, "")
-            if (value.isNotBlank()) return value
+            if (value.isNotBlank() && !value.equals("null", ignoreCase = true)) return value
         }
         return ""
+    }
+
+    private fun normalizeSystemBarColor(value: String?): String {
+        val candidate = value?.trim().orEmpty()
+        if (!ARGB_COLOR_PATTERN.matches(candidate)) {
+            if (candidate.isNotEmpty()) {
+                Log.w(TAG, "Invalid launcher system-bar color ignored")
+            }
+            return DEFAULT_SYSTEM_BAR_COLOR
+        }
+
+        return if (candidate.startsWith("#")) candidate.uppercase() else "#${candidate.uppercase()}"
     }
 
     private fun JSONObject.optBooleanAny(default: Boolean, vararg keys: String): Boolean {

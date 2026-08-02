@@ -1,0 +1,167 @@
+import java.security.MessageDigest
+
+plugins {
+    id "com.android.application"
+}
+
+def rhVoiceVersion = "1.18.4"
+def bundleRevision = "gc1"
+def bundledDataVersion = "${rhVoiceVersion}-${bundleRevision}"
+def bundledDataSource = file("src/main/bundledData")
+def generatedAssets = layout.buildDirectory.dir("generated/bundledAssets")
+def bundledDataExcludes = [
+    "**/.github/**",
+    "**/Readme-ru.txt",
+    "**/htsvoice_parser.py"
+]
+
+tasks.register("generateBundledDataAssets") {
+    inputs.dir(bundledDataSource)
+    outputs.dir(generatedAssets)
+
+    doLast {
+        File outputRoot = generatedAssets.get().asFile
+        delete(outputRoot)
+        File dataOutput = new File(outputRoot, "bundled-data")
+        copy {
+            from bundledDataSource
+            into dataOutput
+            exclude bundledDataExcludes
+        }
+
+        List<File> files = fileTree(bundledDataSource)
+            .matching { exclude bundledDataExcludes }
+            .files
+            .findAll { it.isFile() }
+            .sort { left, right ->
+                bundledDataSource.toPath().relativize(left.toPath()).toString() <=>
+                    bundledDataSource.toPath().relativize(right.toPath()).toString()
+            }
+
+        File manifest = new File(outputRoot, "bundled-manifest.txt")
+        manifest.parentFile.mkdirs()
+        manifest.withWriter("UTF-8") { writer ->
+            writer.write("bundle.version\t${bundledDataVersion}\n")
+            files.each { source ->
+                String relative = bundledDataSource.toPath()
+                    .relativize(source.toPath())
+                    .toString()
+                    .replace(File.separatorChar, '/' as char)
+                MessageDigest digest = MessageDigest.getInstance("SHA-256")
+                source.withInputStream { input ->
+                    byte[] buffer = new byte[64 * 1024]
+                    int count
+                    while ((count = input.read(buffer)) >= 0) {
+                        if (count > 0) {
+                            digest.update(buffer, 0, count)
+                        }
+                    }
+                }
+                String sha256 = digest.digest().collect { String.format("%02x", it & 0xff) }.join()
+                writer.write("${relative}\t${source.length()}\t${sha256}\n")
+            }
+        }
+    }
+}
+
+android {
+    namespace "com.github.olga_yakovleva.rhvoice.android"
+    compileSdk 35
+    ndkVersion "25.1.8937393"
+
+    defaultConfig {
+        applicationId "com.github.olga_yakovleva.rhvoice.android"
+        minSdk 26
+        targetSdk 33
+        versionCode 1180401
+        versionName rhVoiceVersion
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+
+        buildConfigField "String", "BUNDLED_DATA_VERSION", "\"${bundledDataVersion}\""
+        buildConfigField "double", "GLOBAL_CONNECT_OUTPUT_GAIN", "1.25d"
+        buildConfigField "String", "UPSTREAM_COMMIT", "\"fa9dd196fd2dac3b0bf089a2d80fc8477c2380e3\""
+
+        ndk {
+            abiFilters "armeabi-v7a", "arm64-v8a"
+        }
+
+        externalNativeBuild {
+            ndkBuild {
+                arguments "V=1"
+                cppFlags "-fexceptions", "-frtti", "-std=c++11"
+            }
+        }
+
+        resourceConfigurations += ["en", "es"]
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_11
+        targetCompatibility JavaVersion.VERSION_11
+    }
+
+    buildFeatures {
+        buildConfig true
+    }
+
+    sourceSets {
+        main {
+            assets.srcDir(generatedAssets.get().asFile)
+        }
+    }
+
+    externalNativeBuild {
+        ndkBuild {
+            path file("src/main/cpp/Android.mk")
+        }
+    }
+
+    signingConfigs {
+        releasePreSigned {
+            initWith signingConfigs.debug
+        }
+    }
+
+    buildTypes {
+        debug {
+            applicationIdSuffix ""
+            versionNameSuffix "-debug"
+        }
+        release {
+            signingConfig signingConfigs.releasePreSigned
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
+        }
+    }
+
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+        }
+        resources {
+            excludes += [
+                "META-INF/DEPENDENCIES",
+                "META-INF/LICENSE*",
+                "META-INF/NOTICE*"
+            ]
+        }
+    }
+
+    applicationVariants.configureEach { variant ->
+        variant.outputs.configureEach {
+            String suffix = variant.buildType.name == "release" ? "release-PreSigned" : "debug"
+            outputFileName =
+                "GlobalConnect-RHVoice-English-Spanish-Mateo-${rhVoiceVersion}-${suffix}.apk"
+        }
+    }
+}
+
+tasks.named("preBuild").configure {
+    dependsOn(tasks.named("generateBundledDataAssets"))
+}
+
+dependencies {
+    androidTestImplementation "androidx.test:runner:1.7.0"
+    androidTestImplementation "androidx.test.ext:junit:1.3.0"
+}

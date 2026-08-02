@@ -198,7 +198,7 @@ class PinpadDeviceCommands(
         }
         if (result == KeyLoadResult.Success) {
             prefs.setMasterKeyAttribute(keyId, attribute.storageValue())
-            showKeyLoadCue(KEY_LOAD_MASTER_MESSAGE)
+            showKeyLoadCue(KEY_LOAD_MASTER_MESSAGE, returnToKeyInjectionMode = true)
         }
         return result
     }
@@ -1468,6 +1468,55 @@ class PinpadDeviceCommands(
         return contactEmv.loadPcdDrlConfiguration(payload)
     }
 
+    fun applyA10DemoEmvConfiguration(
+        type: Char,
+        fileName: String,
+        contents: String,
+    ): PinpadContactEmvController.EmvCommandResult {
+        return runCatching {
+            val store = PinpadEmvConfigStore(applicationContext)
+            when (type.uppercaseChar()) {
+                'D' -> {
+                    val definitions = PinpadEmvDataObjects.parseDataFormatText(contents)
+                        ?: return PinpadContactEmvController.EmvCommandResult.failure('2')
+                    store.setDataFormatDefinitions(definitions)
+                }
+                'T' -> {
+                    val terminal = PinpadEmvDataObjects.parseConfigurationText(contents)
+                        ?: return PinpadContactEmvController.EmvCommandResult.failure('2')
+                    store.setTerminalConfigTlv(terminal)
+                }
+                'K', 'R' -> {
+                    val capk = PinpadEmvDataObjects.parseCapkText(contents)
+                        ?: return PinpadContactEmvController.EmvCommandResult.failure('2')
+                    store.setCapkTlv(capk.id, capk.tlvHex)
+                }
+                'A', 'L' -> {
+                    val application = PinpadEmvDataObjects.parseApplicationConfigurationText(contents)
+                        ?: return PinpadContactEmvController.EmvCommandResult.failure('2')
+                    if (type.uppercaseChar() == 'A') {
+                        store.setAidTlv(application.aid, application.tlvHex)
+                    } else {
+                        store.setPcdAidTlv(application.aid, application.tlvHex)
+                    }
+                }
+                else -> return PinpadContactEmvController.EmvCommandResult.failure('2')
+            }
+            val applied = contactEmv.applyStoredConfiguration()
+            PinpadTraceLog.device("A10 demo EMV file applied type=$type file=$fileName sdk=$applied")
+            if (applied) {
+                PinpadContactEmvController.EmvCommandResult.ok()
+            } else {
+                PinpadContactEmvController.EmvCommandResult.failure('5')
+            }
+        }.getOrElse { error ->
+            PinpadTraceLog.device(
+                "A10 demo EMV file failed type=$type file=$fileName error=${error.message}",
+            )
+            PinpadContactEmvController.EmvCommandResult.failure('6')
+        }
+    }
+
     fun deletePcdDrlConfiguration(): PinpadContactEmvController.EmvCommandResult {
         return contactEmv.deletePcdDrlConfiguration()
     }
@@ -2384,9 +2433,13 @@ class PinpadDeviceCommands(
         return minPin in DEFAULT_MIN_PIN..DEFAULT_MAX_PIN && maxPin in minPin..DEFAULT_MAX_PIN
     }
 
-    private fun showKeyLoadCue(message: String) {
+    private fun showKeyLoadCue(message: String, returnToKeyInjectionMode: Boolean = false) {
         PinpadTraceLog.device("key load cue message=$message")
-        PinpadDisplayController.showMessageThenIdle(message)
+        if (returnToKeyInjectionMode) {
+            PinpadDisplayController.showMessageThenKeyInjectionMode(message)
+        } else {
+            PinpadDisplayController.showMessageThenIdle(message)
+        }
         runCatching { deviceEngine.beeper.beep(KEY_LOAD_BEEP_MS) }
             .onFailure {
                 Log.w(TAG, "Key load cue beep failed", it)
@@ -2611,10 +2664,6 @@ class PinpadDeviceCommands(
         private const val CPU_APDU_MAX_HEX_CHARS = 524
         private const val MAX_SPEECH_CHARACTERS = 1_000
         private const val RHVOICE_ENGINE_PACKAGE = "com.github.olga_yakovleva.rhvoice.android"
-        private const val RHVOICE_SPANISH_LANGUAGE_PACKAGE =
-            "com.github.olga_yakovleva.rhvoice.android.language.spanish"
-        private const val RHVOICE_MATEO_VOICE_PACKAGE =
-            "com.github.olga_yakovleva.rhvoice.android.voice.mateo"
         private const val ESPEAK_ENGINE_PACKAGE = "com.reecedunn.espeak"
         private const val RHVOICE_SPANISH_VOICE = "Mateo"
         private const val VOICE_PROVISIONING_TEXT = "."
@@ -2636,9 +2685,6 @@ class PinpadDeviceCommands(
         private val SPANISH_SPEECH_LANGUAGE_TAGS = setOf("es", "es-mx", "es-419", "es-la")
         private val REQUIRED_TEXT_TO_SPEECH_APPLICATIONS = listOf(
             ApplicationRequirementClient.CAPABILITY_ANDROID_TTS to RHVOICE_ENGINE_PACKAGE,
-            ApplicationRequirementClient.CAPABILITY_ANDROID_TTS_SPANISH_LANGUAGE to
-                RHVOICE_SPANISH_LANGUAGE_PACKAGE,
-            ApplicationRequirementClient.CAPABILITY_ANDROID_TTS_MATEO_VOICE to RHVOICE_MATEO_VOICE_PACKAGE,
         )
         private val REQUIRED_TEXT_TO_SPEECH_CAPABILITIES =
             REQUIRED_TEXT_TO_SPEECH_APPLICATIONS.mapTo(mutableSetOf()) { it.first }

@@ -55,6 +55,7 @@ class KinesisWebRtcRemoteClient(
     private var videoCapturer: VideoCapturer? = null
     private var videoTrack: VideoTrack? = null
     private var videoSender: RtpSender? = null
+    private val screenCaptureStarted = AtomicBoolean(false)
     private var remoteDescriptionSet = false
     private var viewerClientId: String? = null
     private val pendingRemoteIce = mutableListOf<IceCandidate>()
@@ -77,7 +78,7 @@ class KinesisWebRtcRemoteClient(
         initializePeerConnectionFactory(context)
         peerConnectionFactory = createPeerConnectionFactory()
         peerConnection = createPeerConnection()
-        startScreenCapture()
+        prepareScreenCapture()
 
         signalingClient = KinesisSignalingClient(config, object : KinesisSignalingListener {
             override fun onSignalingOpen() {
@@ -121,7 +122,9 @@ class KinesisWebRtcRemoteClient(
     private fun finalizeStop() {
         if (!lifecycle.tryFinalize()) return
         synchronized(nativeResourceLock) {
-            try { videoCapturer?.stopCapture() } catch (_: Exception) {}
+            if (screenCaptureStarted.get()) {
+                try { videoCapturer?.stopCapture() } catch (_: Exception) {}
+            }
             try { videoCapturer?.dispose() } catch (_: Exception) {}
             try { videoTrack?.dispose() } catch (_: Exception) {}
             try { peerConnection?.close() } catch (_: Exception) {}
@@ -156,7 +159,7 @@ class KinesisWebRtcRemoteClient(
         }
     }
 
-    private fun startScreenCapture() {
+    private fun prepareScreenCapture() {
         val factory = requireNotNull(peerConnectionFactory)
         val capturer = ScreenCapturerAndroid(projectionData, object : MediaProjection.Callback() {
             override fun onStop() {
@@ -167,8 +170,6 @@ class KinesisWebRtcRemoteClient(
         val videoSource = factory.createVideoSource(false)
         val surfaceTextureHelper = SurfaceTextureHelper.create("xTMSAgentScreenCapture", eglBase.eglBaseContext)
         capturer.initialize(surfaceTextureHelper, context, videoSource.capturerObserver)
-        val capture = currentQuality.captureSize(screenWidth, screenHeight)
-        capturer.startCapture(capture.width, capture.height, currentQuality.fps)
 
         val track = factory.createVideoTrack(VIDEO_TRACK_ID, videoSource)
         val sender = peerConnection?.addTrack(track, listOf(VIDEO_STREAM_ID))
@@ -177,7 +178,26 @@ class KinesisWebRtcRemoteClient(
 
         videoCapturer = capturer
         videoTrack = track
-        Log.i(WEBRTC_TAG, "Remote video quality=${currentQuality.name.lowercase()} ${capture.width}x${capture.height}@${currentQuality.fps} ${currentQuality.bitrateBps}bps")
+        Log.i(WEBRTC_TAG, "Remote screen capture prepared; waiting for the viewer connection")
+    }
+
+    private fun startPreparedScreenCapture() {
+        synchronized(nativeResourceLock) {
+            if (lifecycle.isStopping() || !screenCaptureStarted.compareAndSet(false, true)) return
+            val capture = currentQuality.captureSize(screenWidth, screenHeight)
+            try {
+                requireNotNull(videoCapturer).startCapture(capture.width, capture.height, currentQuality.fps)
+                Log.i(
+                    WEBRTC_TAG,
+                    "Remote screen capture started after ICE connection: quality=${currentQuality.name.lowercase()} " +
+                        "${capture.width}x${capture.height}@${currentQuality.fps} ${currentQuality.bitrateBps}bps",
+                )
+            } catch (e: Exception) {
+                screenCaptureStarted.set(false)
+                Log.e(WEBRTC_TAG, "Failed to start remote screen capture", e)
+                stop()
+            }
+        }
     }
 
     private fun applyQuality(value: String) {
@@ -362,7 +382,11 @@ class KinesisWebRtcRemoteClient(
 
         override fun onIceConnectionChange(state: PeerConnection.IceConnectionState) {
             Log.i(WEBRTC_TAG, "ICE connection state=$state")
-            if (state == PeerConnection.IceConnectionState.FAILED ||
+            if (state == PeerConnection.IceConnectionState.CONNECTED ||
+                state == PeerConnection.IceConnectionState.COMPLETED
+            ) {
+                startPreparedScreenCapture()
+            } else if (state == PeerConnection.IceConnectionState.FAILED ||
                 state == PeerConnection.IceConnectionState.CLOSED
             ) {
                 stop()

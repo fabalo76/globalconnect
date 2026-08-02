@@ -12,7 +12,11 @@ import android.os.Build
 import android.os.IBinder
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import one.globalconnect.xtmsagent.MainActivity
 import one.globalconnect.xtmsagent.R
+import one.globalconnect.xtmsagent.TmsDeviceAdminReceiver
+import one.globalconnect.xtmsagent.diagnostics.NexgoDiagnosticsManager
+import one.globalconnect.xtmsagent.mqtt.downloads.DeviceOwnerPackageInstaller
 import one.globalconnect.xtmsagent.mqtt.housekeeping.TmsHkScheduler
 import one.globalconnect.xtmsagent.mqtt.persistence.TmsCredentialStore
 import one.globalconnect.xtmsagent.mqtt.status.TmsLocationTracker
@@ -192,10 +196,61 @@ class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action == Intent.ACTION_BOOT_COMPLETED ||
             intent.action == Intent.ACTION_MY_PACKAGE_REPLACED) {
-            Log.i("BootReceiver", "Boot/package-replaced — starting TmsMqttService")
+            val wasUpdated = intent.action == Intent.ACTION_MY_PACKAGE_REPLACED
+            Log.i(
+                "BootReceiver",
+                "${if (wasUpdated) "Package replaced" else "Boot completed"} — " +
+                    "restoring device policy and starting TmsMqttService",
+            )
+
+            TmsDeviceAdminReceiver.applyKioskRestrictions(context)
+
+            if (wasUpdated) {
+                DeviceOwnerPackageInstaller.reconcileSelfUpdate(context)
+                TmsMqttManager.queueFullStatusReport(
+                    context,
+                    "xTMSAgent package replaced",
+                )
+            }
+
             if (!TmsMqttService.start(context)) {
                 Log.e("BootReceiver", "MQTT service start was rejected by Android")
             }
+
+            if (wasUpdated) {
+                relaunchHomeAfterSelfUpdate(context)
+            }
+        }
+    }
+
+    /**
+     * The package installer terminates the old xTMSAgent process while replacing it.
+     * The replacement broadcast starts a fresh process, but Android does not recreate
+     * the launcher Activity automatically. Launch it explicitly so a self-update does
+     * not leave the operator on the previous launcher or a blank Home screen.
+     */
+    private fun relaunchHomeAfterSelfUpdate(context: Context) {
+        try {
+            context.startActivity(
+                Intent(context, MainActivity::class.java).apply {
+                    action = Intent.ACTION_MAIN
+                    addCategory(Intent.CATEGORY_HOME)
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                        Intent.FLAG_ACTIVITY_SINGLE_TOP
+                },
+            )
+            Log.i("BootReceiver", "xTMSAgent launcher restarted after self-update")
+            NexgoDiagnosticsManager.record(
+                context,
+                "selfUpdateRestart success=true",
+            )
+        } catch (e: Exception) {
+            Log.e("BootReceiver", "Unable to restart launcher after self-update", e)
+            NexgoDiagnosticsManager.record(
+                context,
+                "selfUpdateRestart success=false error=${e.message}",
+            )
         }
     }
 }

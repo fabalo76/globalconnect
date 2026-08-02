@@ -39,7 +39,18 @@
     <string name="config_diagnostics">Diagnostics</string>
     <string name="config_network">Mobile / SIM</string>
     <string name="config_factory_tms">Factory Nexgo TMS</string>
+    <string name="config_usb">USB Config</string>
     <string name="config_back">Back</string>
+    <string name="usb_config_title">USB file transfer</string>
+    <string name="usb_config_status_enabled">Enabled. A connected computer can select File transfer (MTP/PTP).</string>
+    <string name="usb_config_status_disabled">Disabled by xTMSAgent. Charging and other configured USB functions remain available.</string>
+    <string name="usb_config_owner_required">xTMSAgent must be the Device Owner to manage USB file transfer.</string>
+    <string name="usb_config_enable">Enable file transfer</string>
+    <string name="usb_config_disable">Disable file transfer</string>
+    <string name="usb_config_enable_warning">Enabling USB file transfer allows a physically connected computer to exchange files with the terminal. Continue?</string>
+    <string name="usb_config_updated_enabled">USB file transfer is enabled. Reconnect the USB cable if the File transfer option does not appear immediately.</string>
+    <string name="usb_config_updated_disabled">USB file transfer is disabled.</string>
+    <string name="usb_config_update_failed">USB file transfer could not be changed: %1$s</string>
     <string name="factory_tms_title">Factory Nexgo TMS</string>
     <string name="factory_tms_status_enabled">Enabled. The factory application can communicate with Nexgo TMS.</string>
     <string name="factory_tms_status_disabled">Disabled by xTMSAgent. Its application and data remain installed.</string>
@@ -101,6 +112,13 @@
     <string name="app_update_installed">App update installed: %1$s</string>
     <string name="app_update_download_failed">App update download failed: %1$s</string>
     <string name="app_update_install_failed">App update install failed: %1$s</string>
+    <string name="task_app_preparing">Preparing %1$s…</string>
+    <string name="task_download_preparing">Starting download: %1$s…</string>
+    <string name="task_download_progress">Downloading %1$s — %2$d%%</string>
+    <string name="task_app_installing">Installing %1$s…</string>
+    <string name="task_app_installed">Installed %1$s</string>
+    <string name="task_app_failed">Could not install %1$s</string>
+    <string name="task_application">Application</string>
     <string name="app_update_deferred">App update deferred (terminal busy): %1$s</string>
     <!-- RemoteControl -->
     <string name="accessibility_service_description">Enables TMS remote control to inject touch and key events during a remote support session.</string>

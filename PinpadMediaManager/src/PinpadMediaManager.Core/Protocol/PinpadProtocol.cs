@@ -25,7 +25,79 @@ public static class PinpadControl
     public const byte So = 0x0E;
     public const byte Si = 0x0F;
     public const byte Nak = 0x15;
+    public const char Sub = '\u001A';
     public const char Fs = '\u001C';
+    public const char Gs = '\u001D';
+    public const char Rs = '\u001E';
+}
+
+public static class PinpadProtocolText
+{
+    public static string FormatBytes(ReadOnlySpan<byte> data, int maxContentBytes = 160)
+    {
+        if (data.IsEmpty) return "(empty)";
+
+        var start = data[0];
+        var expectedEnd = start switch
+        {
+            PinpadControl.Stx => PinpadControl.Etx,
+            PinpadControl.Si => PinpadControl.So,
+            _ => (byte)0,
+        };
+        if (expectedEnd != 0 && data.Length >= 3 && data[^2] == expectedEnd)
+        {
+            return string.Concat(
+                Token(start),
+                FormatContent(data[1..^2], maxContentBytes),
+                Token(expectedEnd),
+                $"<LRC:{data[^1]:X2}>");
+        }
+
+        return FormatContent(data, maxContentBytes);
+    }
+
+    private static string FormatContent(ReadOnlySpan<byte> data, int maximumBytes)
+    {
+        var shown = Math.Min(data.Length, Math.Max(1, maximumBytes));
+        var output = new StringBuilder(shown + 32);
+        foreach (var value in data[..shown])
+        {
+            var token = Token(value);
+            if (token is not null)
+            {
+                output.Append(token);
+            }
+            else if (value is >= 0x20 and <= 0x7E)
+            {
+                output.Append((char)value);
+            }
+            else
+            {
+                output.Append($"<0x{value:X2}>");
+            }
+        }
+        if (shown < data.Length)
+        {
+            output.Append($"… ({data.Length:N0} bytes)");
+        }
+        return output.ToString();
+    }
+
+    private static string? Token(byte value) => value switch
+    {
+        PinpadControl.Stx => "<STX>",
+        PinpadControl.Etx => "<ETX>",
+        PinpadControl.Eot => "<EOT>",
+        PinpadControl.Ack => "<ACK>",
+        PinpadControl.So => "<SO>",
+        PinpadControl.Si => "<SI>",
+        PinpadControl.Nak => "<NACK>",
+        (byte)PinpadControl.Sub => "<SUB>",
+        (byte)PinpadControl.Fs => "<FS>",
+        (byte)PinpadControl.Gs => "<GS>",
+        (byte)PinpadControl.Rs => "<RS>",
+        _ => null,
+    };
 }
 
 public static class PinpadFrameCodec
@@ -110,7 +182,8 @@ public static class PinpadFrameCodec
         if (content.Length >= 3)
         {
             var prefix = Encoding.ASCII.GetString(content[..3]);
-            if (prefix is "Z42" or "Z43" or "Z50" or "Z51" or "Z60" or "Z62" or "Z64" or "Z65" or "Z66" or "Z67")
+            if (prefix is "PH1" or "PH2" or "QR1" or "QR2" or "QR3" or "QR4" or
+                "Z42" or "Z43" or "Z50" or "Z51" or "Z60" or "Z62" or "Z64" or "Z65" or "Z66" or "Z67")
             {
                 return 3;
             }

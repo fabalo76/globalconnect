@@ -1,0 +1,75 @@
+{
+  "schemaVersion": 1,
+  "catalogId": "global-connect-rhvoice-offline",
+  "displayName": "Global Connect RHVoice English Spanish Mateo",
+  "applicationId": "com.github.olga_yakovleva.rhvoice.android",
+  "versionName": "1.18.4",
+  "versionCode": 1180401,
+  "artifact": {
+    "stage": "nexgo-portal-input",
+    "fileName": "GlobalConnect-RHVoice-English-Spanish-Mateo-1.18.4-release-PreSigned.apk",
+    "sizeBytes": 11845280,
+    "sha256": "46df650ea611e4d81dcfcaf49141379d479c962143eb384c2ff5aa6334194a6f",
+    "signerCertificateSha256": "70dcd59ae328312f2154ef64210d95c437351e847975fb215243217cd6739d50",
+    "signingNote": "Replace size, SHA-256, and signer with the NEXGO production-signed artifact before publishing the production catalog entry."
+  },
+  "compatibility": {
+    "minimumSdk": 26,
+    "targetSdk": 33,
+    "abis": [
+      "armeabi-v7a",
+      "arm64-v8a"
+    ],
+    "terminalModels": [
+      "CT20P",
+      "N82"
+    ]
+  },
+  "providesCapabilities": [
+    "android.tts"
+  ],
+  "dependencies": [],
+  "replaces": [
+    {
+      "applicationId": "com.github.olga_yakovleva.rhvoice.android",
+      "action": "upgrade-in-place"
+    },
+    {
+      "applicationId": "com.github.olga_yakovleva.rhvoice.android.language.spanish",
+      "action": "uninstall-after-unified-engine-is-validated"
+    },
+    {
+      "applicationId": "com.github.olga_yakovleva.rhvoice.android.voice.mateo",
+      "action": "uninstall-after-unified-engine-is-validated"
+    }
+  ],
+  "retiredCapabilityDependencies": [
+    "android.tts.language.es",
+    "android.tts.voice.es.mateo"
+  ],
+  "postInstallValidation": {
+    "serviceAction": "android.intent.action.TTS_SERVICE",
+    "serviceClass": "com.github.olga_yakovleva.rhvoice.android.RHVoiceService",
+    "offlineVoices": [
+      {
+        "name": "Slt",
+        "locale": "en-US"
+      },
+      {
+        "name": "Mateo",
+        "locale": "es-MX"
+      }
+    ],
+    "requiredLanguages": [
+      "en",
+      "en-US",
+      "es",
+      "es-MX"
+    ],
+    "networkRequired": false
+  },
+  "rollback": {
+    "retainPreviousProductionArtifact": true,
+    "note": "Rollback to the previous engine and reinstall its matching language/voice packages as one transaction."
+  }
+}

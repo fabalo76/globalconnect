@@ -1046,7 +1046,7 @@ public sealed partial class PinpadClient(IPinpadTransport transport) : IDisposab
 
     private static readonly HashSet<string> SensitiveTraceCommands = new(StringComparer.Ordinal)
     {
-        "02", "20", "21", "70", "71", "78", "90", "94", "Z60", "Z62",
+        "02", "20", "21", "22", "23", "24", "70", "71", "78", "90", "94", "Z60", "Z62",
     };
 
     private void Log(string message) => Trace?.Invoke($"{DateTime.Now:HH:mm:ss.fff}  {message}");

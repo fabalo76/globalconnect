@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Text;
 
 namespace PinpadMediaManager.Core.Protocol;
@@ -60,20 +61,32 @@ public static class PinpadProtocolText
     {
         var shown = Math.Min(data.Length, Math.Max(1, maximumBytes));
         var output = new StringBuilder(shown + 32);
-        foreach (var value in data[..shown])
+        var index = 0;
+        while (index < shown)
         {
+            var value = data[index];
             var token = Token(value);
             if (token is not null)
             {
                 output.Append(token);
+                index++;
             }
             else if (value is >= 0x20 and <= 0x7E)
             {
                 output.Append((char)value);
+                index++;
+            }
+            else if (value >= 0x80 &&
+                     Rune.DecodeFromUtf8(data.Slice(index, shown - index), out var rune, out var consumed) ==
+                     OperationStatus.Done)
+            {
+                output.Append(rune);
+                index += consumed;
             }
             else
             {
                 output.Append($"<0x{value:X2}>");
+                index++;
             }
         }
         if (shown < data.Length)

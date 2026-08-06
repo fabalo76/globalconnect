@@ -20,6 +20,7 @@ fun termStatusTopic(termId: String) = "tms/device/$termId/status"
 fun termHeartbeatTopic(termId: String) = "tms/device/$termId/heartbeat"
 fun termCmdTopic(termId: String) = "tms/device/$termId/cmd"
 fun termTaskTopic(termId: String) = "tms/device/$termId/task"
+fun termTaskRecoveryTopic(termId: String) = "tms/device/$termId/task/recovery/+"
 fun termEasyTopic(termId: String) = termTaskTopic(termId)
 fun termTaskAckTopic(termId: String) = "tms/device/$termId/task/ack"
 fun termEasyAckTopic(termId: String) = termTaskAckTopic(termId)

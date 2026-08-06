@@ -1,4 +1,5 @@
 ﻿using System.Globalization;
+using System.Security.Cryptography;
 using System.Text;
 using PinpadMediaManager.Core.Models;
 using PinpadMediaManager.Core.Protocol;
@@ -87,17 +88,20 @@ public sealed partial class PinpadClient
         ExecuteA10AckOnlyAsync("Z7", enabled ? "0" : "1", cancellationToken, PinpadFrameType.Transaction);
 
     public Task SetA10IdlePromptAsync(string text, CancellationToken cancellationToken = default) =>
-        ExecuteA10AckOnlyAsync("Z8", ValidateDisplayText(text), cancellationToken, PinpadFrameType.Transaction);
+        ExecuteA10AckOnlyAsync(
+            "Z8", ValidateDisplayText(text), cancellationToken, PinpadFrameType.Transaction, utf8Payload: true);
 
     public Task DisplayA10MessageAsync(string text, CancellationToken cancellationToken = default) =>
-        ExecuteA10AckOnlyAsync("Z2", ValidateDisplayText(text), cancellationToken, PinpadFrameType.Transaction);
+        ExecuteA10AckOnlyAsync(
+            "Z2", ValidateDisplayText(text), cancellationToken, PinpadFrameType.Transaction, utf8Payload: true);
 
     public Task DisplayA10PromptLinesAsync(IEnumerable<string> lines, CancellationToken cancellationToken = default)
     {
         var values = lines.Select(ValidateDisplayText).Where(value => value.Length > 0).Take(7).ToArray();
         if (values.Length == 0) throw new ArgumentException("Enter at least one prompt line.", nameof(lines));
         var payload = $"{values.Length}{PinpadControl.Sub}{string.Join(PinpadControl.Fs, values)}";
-        return ExecuteA10AckOnlyAsync("Z3", payload, cancellationToken, PinpadFrameType.Transaction);
+        return ExecuteA10AckOnlyAsync(
+            "Z3", payload, cancellationToken, PinpadFrameType.Transaction, utf8Payload: true);
     }
 
     public async Task LoadA10ClearMasterKeyAsync(
@@ -123,6 +127,44 @@ public sealed partial class PinpadClient
         var response = await ExecuteA10CommandAsync(PinpadFrameType.Administration, "02", payload, "02", true,
             cancellationToken: cancellationToken);
         if (response.Payload.StartsWith('?')) throw new PinpadProtocolException($"Key injection failed ({response.Payload}).");
+    }
+
+    public async Task LoadA10SecretMasterKeyAsync(
+        int keyOption,
+        string secretMasterKeyHex,
+        CancellationToken cancellationToken = default)
+    {
+        if (keyOption is < 0 or > 1) throw new ArgumentOutOfRangeException(nameof(keyOption));
+        var key = NormalizeSecretKeyHex(secretMasterKeyHex, nameof(secretMasterKeyHex));
+        var payload = keyOption.ToString(CultureInfo.InvariantCulture) + key;
+        await ExecuteA10CommandAsync(
+            PinpadFrameType.Transaction,
+            "20",
+            payload,
+            "20",
+            true,
+            TimeSpan.FromMinutes(2),
+            cancellationToken,
+            expectedResponsePayload: payload);
+    }
+
+    public async Task LoadA10SecretSessionKeyAsync(
+        int keyId,
+        string encryptedSessionKeyHex,
+        CancellationToken cancellationToken = default)
+    {
+        if (keyId is < 0 or > 9) throw new ArgumentOutOfRangeException(nameof(keyId));
+        var key = NormalizeSecretKeyHex(encryptedSessionKeyHex, nameof(encryptedSessionKeyHex));
+        var payload = keyId.ToString(CultureInfo.InvariantCulture) + key;
+        await ExecuteA10CommandAsync(
+            PinpadFrameType.Transaction,
+            "21",
+            payload,
+            "21",
+            true,
+            TimeSpan.FromMinutes(2),
+            cancellationToken,
+            expectedResponsePayload: payload);
     }
 
     public async Task<string> CheckA10MasterKeyAsync(char keyId, CancellationToken cancellationToken = default)
@@ -223,9 +265,83 @@ public sealed partial class PinpadClient
         }
     }
 
-    private async Task ExecuteA10AckOnlyAsync(string command, string payload, CancellationToken cancellationToken, PinpadFrameType type = PinpadFrameType.Administration)
+    public async Task<A10PinEntryResult> StartA10SecretPinEntryAsync(
+        A10SecretPinEntryRequest request,
+        CancellationToken cancellationToken = default)
     {
-        await ExecuteA10CommandAsync(type, command, payload, null, false, cancellationToken: cancellationToken);
+        if (request.SecretSessionKeyId is < 0 or > 9)
+            throw new ArgumentOutOfRangeException(nameof(request.SecretSessionKeyId));
+        var account = new string(request.AccountNumber.Where(char.IsDigit).ToArray());
+        if (account.Length is < 8 or > 19)
+            throw new ArgumentException("Account number must contain 8-19 digits.", nameof(request));
+        var validPinBounds = request.AllowNullPin && request.MinimumLength == 0 && request.MaximumLength == 0 ||
+                             request.MinimumLength is >= 4 and <= 12 &&
+                             request.MaximumLength >= request.MinimumLength && request.MaximumLength <= 12;
+        if (request.PromptMode == A10PinPromptMode.CustomPrompt && !validPinBounds)
+            throw new ArgumentException("PIN length must be 4-12 digits, or 00/00 for a null-only PIN request.", nameof(request));
+
+        var command = request.PromptMode switch
+        {
+            A10PinPromptMode.Standard => "22",
+            A10PinPromptMode.ExternalPrompt => "23",
+            A10PinPromptMode.CustomPrompt => "24",
+            _ => throw new ArgumentOutOfRangeException(nameof(request)),
+        };
+        string payload;
+        if (request.PromptMode == A10PinPromptMode.Standard)
+        {
+            var amount = request.Amount.Trim();
+            if (amount.Length is > 0 and < 4 or > 14)
+                throw new ArgumentException("Amount must be empty or contain 4-14 display characters.", nameof(request));
+            payload = account + PinpadControl.Fs + request.SecretSessionKeyId + amount;
+        }
+        else if (request.PromptMode == A10PinPromptMode.ExternalPrompt)
+        {
+            await DisplayA10MessageAsync(ValidateSecretPinPrompt(request.FirstPrompt, nameof(request.FirstPrompt)), cancellationToken);
+            payload = "." + account + PinpadControl.Fs + request.SecretSessionKeyId;
+        }
+        else
+        {
+            var control = $"{request.MinimumLength:D2}{request.MaximumLength:D2}{(request.AllowNullPin ? 'Y' : 'N')}";
+            payload = "." + account + PinpadControl.Fs + request.SecretSessionKeyId + control +
+                      ValidateSecretPinPrompt(request.FirstPrompt, nameof(request.FirstPrompt)) + PinpadControl.Fs +
+                      ValidateSecretPinPrompt(request.SecondPrompt, nameof(request.SecondPrompt)) + PinpadControl.Fs +
+                      ValidateSecretPinPrompt(request.CompletionPrompt, nameof(request.CompletionPrompt));
+        }
+
+        try
+        {
+            var response = await ExecuteA10CommandAsync(
+                PinpadFrameType.Transaction,
+                command,
+                payload,
+                "71",
+                false,
+                TimeSpan.FromSeconds(75),
+                cancellationToken);
+            return ParseA10PinResult(A10PinKeyScheme.MasterSession, response.Payload);
+        }
+        catch (PinpadProtocolException error) when (error.Message.Contains("0x04", StringComparison.OrdinalIgnoreCase))
+        {
+            return new A10PinEntryResult("Cancelled or timed out", "<EOT>", "", null, null, null);
+        }
+    }
+
+    private async Task ExecuteA10AckOnlyAsync(
+        string command,
+        string payload,
+        CancellationToken cancellationToken,
+        PinpadFrameType type = PinpadFrameType.Administration,
+        bool utf8Payload = false)
+    {
+        await ExecuteA10CommandAsync(
+            type,
+            command,
+            payload,
+            null,
+            false,
+            cancellationToken: cancellationToken,
+            utf8Payload: utf8Payload);
     }
 
     private static string ValidateDisplayText(string text)
@@ -450,7 +566,9 @@ public sealed partial class PinpadClient
         string? expectedResponseCommand,
         bool readFinalEot,
         TimeSpan? responseTimeout = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        string? expectedResponsePayload = null,
+        bool utf8Payload = false)
     {
         await _operationGate.WaitAsync(cancellationToken);
         try
@@ -463,7 +581,9 @@ public sealed partial class PinpadClient
                     expectedResponseCommand,
                     readFinalEot,
                     responseTimeout ?? TimeSpan.FromSeconds(15),
-                    cancellationToken),
+                    cancellationToken,
+                    expectedResponsePayload,
+                    utf8Payload),
                 cancellationToken);
         }
         finally
@@ -479,11 +599,17 @@ public sealed partial class PinpadClient
         string? expectedResponseCommand,
         bool readFinalEot,
         TimeSpan responseTimeout,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? expectedResponsePayload,
+        bool utf8Payload)
     {
         if (!_transport.IsOpen) throw new InvalidOperationException("Connect to a pinpad first.");
         _transport.DiscardInput();
-        var encoded = PinpadFrameCodec.Encode(PinpadFrame.Ascii(type, command, payload));
+        var request = new PinpadFrame(
+            type,
+            command,
+            utf8Payload ? Encoding.UTF8.GetBytes(payload) : Encoding.ASCII.GetBytes(payload));
+        var encoded = PinpadFrameCodec.Encode(request);
         for (var attempt = 1; attempt <= 3; attempt++)
         {
             WriteWithTrace(encoded);
@@ -506,6 +632,12 @@ public sealed partial class PinpadClient
         {
             throw new PinpadProtocolException(
                 $"Expected response {expectedResponseCommand}, received {response.CommandId}.");
+        }
+        if (expectedResponsePayload is not null &&
+            !CryptographicOperations.FixedTimeEquals(response.Payload, Encoding.ASCII.GetBytes(expectedResponsePayload)))
+        {
+            WriteWithTrace([PinpadControl.Eot]);
+            throw new PinpadProtocolException($"The {command} key echo did not match the request; key loading was cancelled.");
         }
         WriteWithTrace([PinpadControl.Ack]);
         if (readFinalEot) ReadExpectedEot(expectedResponseCommand, cancellationToken);
@@ -630,6 +762,22 @@ public sealed partial class PinpadClient
         if (normalized.Length == 0 || normalized.Length % 2 != 0 || !normalized.All(Uri.IsHexDigit))
             throw new ArgumentException("APDU must contain an even number of hexadecimal characters.", nameof(value));
         return normalized;
+    }
+
+    private static string NormalizeSecretKeyHex(string value, string parameterName)
+    {
+        var normalized = string.Concat(value.Where(ch => !char.IsWhiteSpace(ch))).ToUpperInvariant();
+        if (normalized.Length is not (16 or 32) || !normalized.All(Uri.IsHexDigit))
+            throw new ArgumentException("Secret keys must contain 16 or 32 hexadecimal characters.", parameterName);
+        return normalized;
+    }
+
+    private static string ValidateSecretPinPrompt(string value, string parameterName)
+    {
+        value = value.Trim();
+        if (value.Length is < 1 or > 16)
+            throw new ArgumentException("Secret PIN prompts must contain 1-16 characters.", parameterName);
+        return value;
     }
 }
 

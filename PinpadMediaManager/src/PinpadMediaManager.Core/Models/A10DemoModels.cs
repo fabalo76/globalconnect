@@ -92,6 +92,18 @@ public sealed record A10PinEntryRequest(
     string SecondPrompt,
     string CompletionPrompt);
 
+public sealed record A10SecretPinEntryRequest(
+    A10PinPromptMode PromptMode,
+    string AccountNumber,
+    int SecretSessionKeyId,
+    string Amount,
+    int MinimumLength,
+    int MaximumLength,
+    bool AllowNullPin,
+    string FirstPrompt,
+    string SecondPrompt,
+    string CompletionPrompt);
+
 public sealed record A10PinEntryResult(
     string Status,
     string RawResponse,

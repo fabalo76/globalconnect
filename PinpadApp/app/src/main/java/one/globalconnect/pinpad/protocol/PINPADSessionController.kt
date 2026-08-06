@@ -794,8 +794,9 @@ class PINPADSessionController(
                 pendingFinalEot = false
             }
             "Z8" -> {
-                PinpadTraceLog.command("Z8", "set idle prompt chars=${request.payloadAscii.length}")
-                commandDevice?.setIdlePrompt(request.payloadAscii)
+                val prompt = frame.payload.toString(StandardCharsets.UTF_8)
+                PinpadTraceLog.command("Z8", "set idle prompt chars=${prompt.length}")
+                commandDevice?.setIdlePrompt(prompt)
                 pendingFinalEot = false
             }
             "Z42" -> {
@@ -2147,7 +2148,7 @@ class PINPADSessionController(
                 }
             }
         }
-        return out.toByteArray().toAscii().trim()
+        return out.toByteArray().toString(StandardCharsets.UTF_8).trim()
     }
 
     private fun fixedPromptText(id: String, pinPrompt: Boolean): String {

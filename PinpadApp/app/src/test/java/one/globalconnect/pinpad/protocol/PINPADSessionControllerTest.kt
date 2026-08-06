@@ -2,6 +2,7 @@ package one.globalconnect.pinpad.protocol
 
 import one.globalconnect.pinpad.device.PinpadDeviceInfoProvider
 import one.globalconnect.pinpad.security.KeyLoadAuthorizer
+import java.nio.charset.StandardCharsets
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -15,6 +16,20 @@ class PINPADSessionControllerTest {
         deviceInfoProvider = FakeDeviceInfoProvider(),
         codec = codec,
     )
+
+    @Test
+    fun z2PromptTextDecodesUtf8Accents() {
+        val decodePromptText = PINPADSessionController::class.java
+            .getDeclaredMethod("decodePromptText", ByteArray::class.java)
+            .apply { isAccessible = true }
+
+        val decoded = decodePromptText.invoke(
+            controller,
+            "Línea 1".toByteArray(StandardCharsets.UTF_8),
+        )
+
+        assertEquals("Línea 1", decoded)
+    }
 
     @Test
     fun getSerialNumberSendsAckThenResponseThenEotOnHostAck() {

@@ -1,6 +1,7 @@
 package one.globalconnect.pinpad.ui
 
 import android.Manifest
+import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -71,6 +72,7 @@ import com.google.zxing.common.BitMatrix
 import com.google.zxing.common.HybridBinarizer
 import com.google.zxing.qrcode.QRCodeWriter
 import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel
+import one.globalconnect.pinpad.PinpadApplication
 import one.globalconnect.pinpad.R
 import one.globalconnect.pinpad.logging.PinpadTraceLog
 import one.globalconnect.pinpad.protocol.CameraFacing
@@ -374,6 +376,7 @@ fun QrScanPrompt(state: PinpadDisplayState.QrScan) {
                         val result = decodeQrImage(image, reader)
                         if (result != null && completed.compareAndSet(false, true)) {
                             ContextCompat.getMainExecutor(context).execute {
+                                playQrScanSuccessBeep(context)
                                 PinpadDisplayController.completeQrScan(QrScanResult.Scanned(result.text))
                             }
                         }
@@ -602,3 +605,12 @@ private fun decodeQrImage(
         reader.reset()
     }
 }
+
+private fun playQrScanSuccessBeep(context: Context) {
+    val application = context.applicationContext as? PinpadApplication ?: return
+    runCatching { application.deviceEngine.beeper.beep(QR_SCAN_SUCCESS_BEEP_MS) }
+        .onSuccess { PinpadTraceLog.device("QR scan success beep=${QR_SCAN_SUCCESS_BEEP_MS}ms") }
+        .onFailure { PinpadTraceLog.device("QR scan success beep failed=${it.message}") }
+}
+
+private const val QR_SCAN_SUCCESS_BEEP_MS = 120

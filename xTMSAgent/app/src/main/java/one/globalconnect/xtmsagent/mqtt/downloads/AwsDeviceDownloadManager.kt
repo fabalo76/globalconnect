@@ -29,8 +29,6 @@ import java.net.URL
 import java.security.MessageDigest
 import java.time.Instant
 import java.util.concurrent.TimeUnit
-import javax.crypto.Mac
-import javax.crypto.spec.SecretKeySpec
 
 private const val TAG = "AwsDeviceDownload"
 private const val CONNECT_TIMEOUT_MS = 30_000
@@ -39,6 +37,13 @@ private const val INSTALL_TIMEOUT_MS = 180_000L
 private const val INSTALL_POLL_INTERVAL_MS = 1_000L
 private const val INSTALL_RETRY_DELAY_MS = 5_000L
 private const val INSTALL_ATTEMPTS = 2
+
+internal fun isSameApplicationVersion(
+    installedVersionCode: Long?,
+    requestedVersionCode: Long?,
+): Boolean = requestedVersionCode != null &&
+    requestedVersionCode > 0 &&
+    installedVersionCode == requestedVersionCode
 
 object AwsDeviceDownloadManager {
 
@@ -61,10 +66,49 @@ object AwsDeviceDownloadManager {
                 || taskType.equals("UpdateFirmware", ignoreCase = true)
             val isBootAnimation = taskType.equals("BootAnimationDownload", ignoreCase = true)
             val isApplication = !isFirmware && !isBootAnimation
+            val applicationPackage = if (isApplication) ApplicationPackageTask.fromPayload(payload) else null
+            if (applicationPackage != null) {
+                return@withContext executeApplicationPackageTask(
+                    context,
+                    taskId,
+                    taskType,
+                    payload,
+                    applicationPackage,
+                )
+            }
             val payloadPresentation = if (isApplication) {
                 ApplicationPresentation.fromPayload(payload)
             } else {
                 null
+            }
+            val effectiveAt = parseEffectiveAt(payload)
+            val stageOnly = effectiveAt != null && effectiveAt.isAfter(Instant.now())
+            val alreadyInstalled = if (isApplication && !stageOnly) {
+                findMatchingInstalledApplication(context, payload)
+            } else {
+                null
+            }
+            if (alreadyInstalled != null) {
+                val label = payloadPresentation?.label() ?: alreadyInstalled.packageName
+                if (payload?.optBoolean("startAfterInstall", false) == true) {
+                    startApplication(context, alreadyInstalled.packageName, label)
+                }
+                ApplicationRequirementNotifier.notifyInstalled(context, payload)
+                TmsTaskStatus.showTransient(
+                    context.getString(
+                        one.globalconnect.xtmsagent.R.string.task_app_already_installed,
+                        label,
+                    ),
+                )
+                MainActivity.writeLog(
+                    "AWS app download skipped; already installed: ${alreadyInstalled.describe()} " +
+                        "startAfterInstall=${payload?.optBoolean("startAfterInstall", false) == true}",
+                )
+                return@withContext Result(
+                    success = true,
+                    status = "applied",
+                    statusMessage = "Already installed: $label",
+                )
             }
             payloadPresentation?.let {
                 TmsTaskStatus.taskOverride.value = context.getString(
@@ -106,15 +150,15 @@ object AwsDeviceDownloadManager {
             }
 
             ensureNotCancelled(context, taskId)
-            val effectiveAt = parseEffectiveAt(payload)
-            if (effectiveAt != null && effectiveAt.isAfter(Instant.now())) {
+            if (stageOnly) {
                 persistStagedTask(
                     context,
                     taskId,
                     taskType,
-                    effectiveAt,
+                    effectiveAt!!,
                     downloaded,
-                    applicationPresentation
+                    applicationPresentation,
+                    payload,
                 )
                 scheduleApply(context, taskId, effectiveAt)
                 TmsTaskStatus.taskOverride.value = null
@@ -125,7 +169,7 @@ object AwsDeviceDownloadManager {
                 )
             }
 
-            applyDownloadedFiles(
+            val statusMessage = applyDownloadedFiles(
                 context,
                 taskId,
                 taskType,
@@ -144,7 +188,7 @@ object AwsDeviceDownloadManager {
             } else {
                 TmsTaskStatus.taskOverride.value = null
             }
-            Result(success = true, status = "applied")
+            Result(success = true, status = "applied", statusMessage = statusMessage)
         } catch (e: Exception) {
             if (isCancelled(context, taskId)) {
                 Log.i(TAG, "AWS task $taskId cancelled")
@@ -170,6 +214,159 @@ object AwsDeviceDownloadManager {
         }
     }
 
+    private suspend fun executeApplicationPackageTask(
+        context: Context,
+        taskId: String,
+        taskType: String,
+        payload: JSONObject?,
+        applicationPackage: ApplicationPackageTask,
+    ): Result {
+        val effectiveAt = parseEffectiveAt(payload)
+        val stageOnly = effectiveAt != null && effectiveAt.isAfter(Instant.now())
+        val stagedItems = mutableListOf<StagedApplicationPackageItem>()
+        val alreadyInstalledItems = mutableListOf<String>()
+        TmsTaskStatus.taskOverride.value = context.getString(
+            one.globalconnect.xtmsagent.R.string.task_app_preparing,
+            applicationPackage.name,
+        )
+
+        applicationPackage.items.forEachIndexed { index, item ->
+            ensureNotCancelled(context, taskId)
+            val alreadyInstalled = if (stageOnly) {
+                null
+            } else {
+                findMatchingInstalledApplication(context, item.payload)
+            }
+            if (alreadyInstalled != null) {
+                val label = item.presentation.label()
+                if (item.startAfterInstall) {
+                    startApplication(context, alreadyInstalled.packageName, label)
+                }
+                ApplicationRequirementNotifier.notifyInstalled(context, item.payload)
+                alreadyInstalledItems += label
+                MainActivity.writeLog(
+                    "AWS app package item skipped; already installed: ${alreadyInstalled.describe()} " +
+                        "startAfterInstall=${item.startAfterInstall}",
+                )
+                return@forEachIndexed
+            }
+            val response = requestDownload(context, false, false, item.payload)
+            val presentation = ApplicationPresentation.fromResponse(
+                response,
+                item.presentation,
+                context.getString(one.globalconnect.xtmsagent.R.string.task_application),
+            )
+            val files = response.files.ifEmpty {
+                listOf(
+                    DownloadFile(
+                        fileName = response.fileName,
+                        url = response.url,
+                        sha256 = response.sha256,
+                        sizeBytes = response.sizeBytes,
+                    ),
+                )
+            }
+            val downloaded = files.mapIndexed { fileIndex, file ->
+                ensureNotCancelled(context, taskId)
+                val storedFileName = "%02d-%02d-%s".format(index + 1, fileIndex + 1, file.fileName)
+                val localFile = downloadSignedFile(
+                    context,
+                    taskId,
+                    file,
+                    presentation.label(),
+                    storedFileName,
+                )
+                verifyFile(localFile, file)
+                localFile
+            }
+            val apk = downloaded.firstOrNull { it.name.endsWith(".apk", ignoreCase = true) }
+                ?: throw IllegalStateException("Application package item did not include an APK file")
+            val stagedItem = StagedApplicationPackageItem(
+                file = apk,
+                presentation = presentation,
+                startAfterInstall = item.startAfterInstall,
+                payload = item.payload,
+            )
+            if (stageOnly) {
+                stagedItems += stagedItem
+            } else {
+                if (applyApplicationPackageItem(context, taskId, stagedItem)) {
+                    alreadyInstalledItems += presentation.label()
+                }
+            }
+        }
+
+        if (stageOnly) {
+            persistStagedApplicationPackage(
+                context,
+                taskId,
+                taskType,
+                effectiveAt!!,
+                applicationPackage,
+                stagedItems,
+                payload,
+            )
+            scheduleApply(context, taskId, effectiveAt)
+            TmsTaskStatus.taskOverride.value = null
+            return Result(
+                success = true,
+                status = "pendingEffective",
+                statusMessage = "Downloaded; waiting for effective time",
+            )
+        }
+
+        taskDirectory(context, taskId).deleteRecursively()
+        val allAlreadyInstalled = alreadyInstalledItems.size == applicationPackage.items.size
+        TmsTaskStatus.showTransient(
+            context.getString(
+                if (allAlreadyInstalled) {
+                    one.globalconnect.xtmsagent.R.string.task_app_already_installed
+                } else {
+                    one.globalconnect.xtmsagent.R.string.task_app_installed
+                },
+                applicationPackage.name,
+            ),
+        )
+        return Result(
+            success = true,
+            status = "applied",
+            statusMessage = alreadyInstalledItems.takeIf { it.isNotEmpty() }
+                ?.joinToString(prefix = "Already installed: "),
+        )
+    }
+
+    private suspend fun applyApplicationPackageItem(
+        context: Context,
+        taskId: String,
+        item: StagedApplicationPackageItem,
+    ): Boolean {
+        ensureNotCancelled(context, taskId)
+        val alreadyInstalled = findMatchingInstalledApplication(context, item.payload)
+        if (alreadyInstalled != null) {
+            if (item.startAfterInstall) {
+                startApplication(context, alreadyInstalled.packageName, item.presentation.label())
+            }
+            ApplicationRequirementNotifier.notifyInstalled(context, item.payload)
+            item.file.delete()
+            MainActivity.writeLog(
+                "AWS app package item skipped during apply; already installed: " +
+                    "${alreadyInstalled.describe()} startAfterInstall=${item.startAfterInstall}",
+            )
+            return true
+        }
+        val installed = installApk(context, taskId, item.file, item.presentation.label())
+        ensureNotCancelled(context, taskId)
+        ApplicationRequirementNotifier.notifyInstalled(context, item.payload)
+        if (item.startAfterInstall) {
+            startApplication(context, installed.packageName, item.presentation.label())
+        }
+        MainActivity.writeLog(
+            "AWS app package item installed: ${item.presentation.label()} " +
+                "startAfterInstall=${item.startAfterInstall}",
+        )
+        return false
+    }
+
     fun cancelTask(context: Context, taskId: String): Boolean {
         if (taskId.isBlank()) return false
         WorkManager.getInstance(context).cancelUniqueWork(workName(taskId))
@@ -188,18 +385,45 @@ object AwsDeviceDownloadManager {
             if (!metadataFile.isFile) return@withContext Result(false, "Staged task metadata not found")
             val metadata = JSONObject(metadataFile.readText())
             val taskType = metadata.getString("taskType")
+            val packageItems = StagedApplicationPackageItem.fromMetadata(context, taskId, metadata)
+            if (packageItems.isNotEmpty()) {
+                val alreadyInstalledItems = packageItems
+                    .filter { applyApplicationPackageItem(context, taskId, it) }
+                    .map { it.presentation.label() }
+                taskDirectory(context, taskId).deleteRecursively()
+                val packageName = metadata.optString("applicationPackageName")
+                    .takeIf { it.isNotBlank() }
+                    ?: context.getString(one.globalconnect.xtmsagent.R.string.task_application)
+                TmsTaskStatus.showTransient(
+                    context.getString(one.globalconnect.xtmsagent.R.string.task_app_installed, packageName),
+                )
+                return@withContext Result(
+                    true,
+                    status = "applied",
+                    statusMessage = alreadyInstalledItems.takeIf { it.isNotEmpty() }
+                        ?.joinToString(prefix = "Already installed: "),
+                )
+            }
             val names = metadata.getJSONArray("files")
             val files = (0 until names.length()).map { File(taskDirectory(context, taskId), names.getString(it)) }
             if (files.any { !it.isFile }) return@withContext Result(false, "One or more staged task files are missing")
             val presentation = ApplicationPresentation.fromMetadata(metadata)
-            applyDownloadedFiles(context, taskId, taskType, files, presentation = presentation)
+            val payload = metadata.optJSONObject("payload")
+            val statusMessage = applyDownloadedFiles(
+                context,
+                taskId,
+                taskType,
+                files,
+                payload,
+                presentation,
+            )
             taskDirectory(context, taskId).deleteRecursively()
             presentation?.let {
                 TmsTaskStatus.showTransient(
                     context.getString(one.globalconnect.xtmsagent.R.string.task_app_installed, it.label())
                 )
             }
-            Result(true, status = "applied")
+            Result(true, status = "applied", statusMessage = statusMessage)
         } catch (e: Exception) {
             if (isCancelled(context, taskId)) {
                 Result(true, status = "cancelled", statusMessage = "Task cancelled")
@@ -217,7 +441,7 @@ object AwsDeviceDownloadManager {
         downloaded: List<File>,
         payload: JSONObject? = null,
         presentation: ApplicationPresentation? = null,
-    ) {
+    ): String? {
         ensureNotCancelled(context, taskId)
         val isFirmware = taskType.equals("FirmwareDownload", ignoreCase = true)
             || taskType.equals("UpdateFirmware", ignoreCase = true)
@@ -228,12 +452,31 @@ object AwsDeviceDownloadManager {
             installApkFiles(context, taskId, downloaded)
             Log.i(TAG, "Firmware files installed: ${downloaded.joinToString { it.name }}")
         } else {
+            val alreadyInstalled = findMatchingInstalledApplication(context, payload)
+            if (alreadyInstalled != null) {
+                val label = presentation?.label() ?: alreadyInstalled.packageName
+                if (payload?.optBoolean("startAfterInstall", false) == true) {
+                    startApplication(context, alreadyInstalled.packageName, label)
+                }
+                ApplicationRequirementNotifier.notifyInstalled(context, payload)
+                downloaded.forEach { it.delete() }
+                MainActivity.writeLog(
+                    "AWS app apply skipped; already installed: ${alreadyInstalled.describe()} " +
+                        "startAfterInstall=${payload?.optBoolean("startAfterInstall", false) == true}",
+                )
+                return "Already installed: $label"
+            }
             val apk = downloaded.firstOrNull { it.name.endsWith(".apk", ignoreCase = true) }
                 ?: throw IllegalStateException("Application download did not include an APK file")
-            installApk(context, taskId, apk, presentation?.label())
+            val installed = installApk(context, taskId, apk, presentation?.label())
+            ensureNotCancelled(context, taskId)
+            if (payload?.optBoolean("startAfterInstall", false) == true) {
+                startApplication(context, installed.packageName, presentation?.label())
+            }
             MainActivity.writeLog("AWS app download installed: ${apk.name}")
             ApplicationRequirementNotifier.notifyInstalled(context, payload)
         }
+        return null
     }
 
     private fun requestDownload(
@@ -244,7 +487,7 @@ object AwsDeviceDownloadManager {
     ): DownloadResponse {
         val cfg = TMSFunc.tmsCfg
         val serial = cfg.sn.ifBlank { MainActivity.vg_sSN }
-        val token = deviceToken(serial, cfg.download_secret)
+        val token = DeviceApi.deviceToken(serial, cfg.download_secret)
         val endpoint = when {
             isBootAnimation -> "boot-animation"
             isFirmware -> "firmware"
@@ -348,9 +591,10 @@ object AwsDeviceDownloadManager {
         context: Context,
         downloadId: String,
         file: DownloadFile,
-        displayLabel: String? = null
+        displayLabel: String? = null,
+        storedFileName: String? = null,
     ): File {
-        val dest = stagingFile(context, downloadId, file.fileName)
+        val dest = stagingFile(context, downloadId, storedFileName ?: file.fileName)
         dest.parentFile?.mkdirs()
         dest.delete()
 
@@ -412,7 +656,7 @@ object AwsDeviceDownloadManager {
         taskId: String,
         apkFile: File,
         displayLabel: String? = null,
-    ) {
+    ): ApkIdentity {
         val extCache = context.getExternalCacheDir() ?: context.cacheDir
         val installFile = File(extCache, apkFile.name.ensureApkExtension())
         apkFile.copyTo(installFile, overwrite = true)
@@ -435,7 +679,7 @@ object AwsDeviceDownloadManager {
         if (deviceOwnerResult.success || isExpectedPackageInstalled(context, expected)) {
             Log.i(TAG, "Device Owner install succeeded: ${deviceOwnerResult.message}")
             cleanupInstalledApk(installFile, apkFile)
-            return
+            return expected
         }
         if (!deviceOwnerResult.shouldFallback) {
             throw IllegalStateException(deviceOwnerResult.message)
@@ -464,7 +708,7 @@ object AwsDeviceDownloadManager {
                         "${expected.describe()}"
                 )
                 cleanupInstalledApk(installFile, apkFile)
-                return
+                return expected
             }
 
             val result = CompletableDeferred<Boolean>()
@@ -494,7 +738,7 @@ object AwsDeviceDownloadManager {
                         )
                     }
                     cleanupInstalledApk(installFile, apkFile)
-                    return
+                    return expected
                 }
                 lastFailure = if (success == null) {
                     "NEXGO install callback timed out and PackageManager does not report " +
@@ -565,6 +809,21 @@ object AwsDeviceDownloadManager {
         return installed.versionCodeCompat() >= expected.versionCode
     }
 
+    private fun findMatchingInstalledApplication(
+        context: Context,
+        payload: JSONObject?,
+    ): ApkIdentity? {
+        val packageName = payload.readFirstString("packageName", "PackageName") ?: return null
+        val requestedVersionCode = payload.readFirstLong("versionCode", "VersionCode") ?: return null
+        @Suppress("DEPRECATION")
+        val installed = runCatching {
+            context.packageManager.getPackageInfo(packageName, 0)
+        }.getOrNull() ?: return null
+        val installedVersionCode = installed.versionCodeCompat()
+        if (!isSameApplicationVersion(installedVersionCode, requestedVersionCode)) return null
+        return ApkIdentity(packageName, installedVersionCode)
+    }
+
     private fun PackageInfo.versionCodeCompat(): Long =
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             longVersionCode
@@ -576,6 +835,20 @@ object AwsDeviceDownloadManager {
     private fun cleanupInstalledApk(installFile: File, stagedFile: File) {
         installFile.delete()
         stagedFile.delete()
+    }
+
+    private fun startApplication(context: Context, packageName: String, displayLabel: String?) {
+        val launchIntent = context.packageManager.getLaunchIntentForPackage(packageName)
+            ?: throw IllegalStateException(
+                "Installed application ${displayLabel ?: packageName} does not expose a launch activity",
+            )
+        launchIntent.addFlags(
+            android.content.Intent.FLAG_ACTIVITY_NEW_TASK or
+                android.content.Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED,
+        )
+        context.startActivity(launchIntent)
+        Log.i(TAG, "Started installed application $packageName")
+        MainActivity.writeLog("Application started after install: $packageName")
     }
 
     private fun verifyFile(file: File, expected: DownloadFile) {
@@ -602,16 +875,6 @@ object AwsDeviceDownloadManager {
         return digest.digest().joinToString("") { "%02x".format(it) }
     }
 
-    private fun deviceToken(serial: String, secret: String): String {
-        if (secret.isBlank()) {
-            throw IllegalStateException("Device download secret is missing")
-        }
-        val mac = Mac.getInstance("HmacSHA256")
-        mac.init(SecretKeySpec(secret.toByteArray(Charsets.UTF_8), "HmacSHA256"))
-        return mac.doFinal(serial.trim().uppercase().toByteArray(Charsets.UTF_8))
-            .joinToString("") { "%02x".format(it) }
-    }
-
     private fun stagingFile(context: Context, taskId: String, fileName: String): File {
         val safeName = fileName.replace(Regex("""[^A-Za-z0-9._-]"""), "_")
         return File(taskDirectory(context, taskId), safeName)
@@ -623,7 +886,8 @@ object AwsDeviceDownloadManager {
         taskType: String,
         effectiveAt: Instant,
         files: List<File>,
-        presentation: ApplicationPresentation? = null
+        presentation: ApplicationPresentation? = null,
+        payload: JSONObject? = null,
     ) {
         val metadata = JSONObject()
             .put("taskId", taskId)
@@ -634,6 +898,37 @@ object AwsDeviceDownloadManager {
             metadata.put("applicationName", it.name)
             metadata.put("applicationVersion", it.version)
         }
+        payload?.let { metadata.put("payload", it) }
+        metadataFile(context, taskId).writeText(metadata.toString())
+    }
+
+    private fun persistStagedApplicationPackage(
+        context: Context,
+        taskId: String,
+        taskType: String,
+        effectiveAt: Instant,
+        applicationPackage: ApplicationPackageTask,
+        items: List<StagedApplicationPackageItem>,
+        payload: JSONObject?,
+    ) {
+        val applications = JSONArray()
+        items.forEach { item ->
+            applications.put(
+                JSONObject()
+                    .put("fileName", item.file.name)
+                    .put("applicationName", item.presentation.name)
+                    .put("applicationVersion", item.presentation.version)
+                    .put("startAfterInstall", item.startAfterInstall)
+                    .put("payload", item.payload),
+            )
+        }
+        val metadata = JSONObject()
+            .put("taskId", taskId)
+            .put("taskType", taskType)
+            .put("effectiveAt", effectiveAt.toString())
+            .put("applicationPackageName", applicationPackage.name)
+            .put("applications", applications)
+        payload?.let { metadata.put("payload", it) }
         metadataFile(context, taskId).writeText(metadata.toString())
     }
 
@@ -775,6 +1070,79 @@ object AwsDeviceDownloadManager {
         }
     }
 
+    private data class ApplicationPackageTask(
+        val name: String,
+        val items: List<ApplicationPackageTaskItem>,
+    ) {
+        companion object {
+            fun fromPayload(payload: JSONObject?): ApplicationPackageTask? {
+                val applications = payload?.optJSONArray("applications") ?: return null
+                if (applications.length() == 0) return null
+                val items = (0 until applications.length()).mapNotNull { index ->
+                    val itemPayload = applications.optJSONObject(index) ?: return@mapNotNull null
+                    val presentation = ApplicationPresentation.fromPayload(itemPayload)
+                        ?: ApplicationPresentation(
+                            itemPayload.optString("packageName").ifBlank { "Application ${index + 1}" },
+                            itemPayload.optString("version").takeIf { it.isNotBlank() },
+                        )
+                    ApplicationPackageTaskItem(
+                        payload = itemPayload,
+                        presentation = presentation,
+                        startAfterInstall = itemPayload.optBoolean("startAfterInstall", false),
+                        sortOrder = itemPayload.optInt("sortOrder", index),
+                    )
+                }.sortedBy { it.sortOrder }
+                if (items.isEmpty()) return null
+                val name = payload.optString("applicationPackageName")
+                    .takeIf { it.isNotBlank() }
+                    ?: "Application package"
+                return ApplicationPackageTask(name, items)
+            }
+        }
+    }
+
+    private data class ApplicationPackageTaskItem(
+        val payload: JSONObject,
+        val presentation: ApplicationPresentation,
+        val startAfterInstall: Boolean,
+        val sortOrder: Int,
+    )
+
+    private data class StagedApplicationPackageItem(
+        val file: File,
+        val presentation: ApplicationPresentation,
+        val startAfterInstall: Boolean,
+        val payload: JSONObject,
+    ) {
+        companion object {
+            fun fromMetadata(
+                context: Context,
+                taskId: String,
+                metadata: JSONObject,
+            ): List<StagedApplicationPackageItem> {
+                val applications = metadata.optJSONArray("applications") ?: return emptyList()
+                return (0 until applications.length()).mapNotNull { index ->
+                    val item = applications.optJSONObject(index) ?: return@mapNotNull null
+                    val fileName = item.optString("fileName").takeIf { it.isNotBlank() }
+                        ?: return@mapNotNull null
+                    val file = File(taskDirectory(context, taskId), fileName)
+                    if (!file.isFile) {
+                        throw IllegalStateException("Staged application package file is missing: $fileName")
+                    }
+                    val name = item.optString("applicationName").takeIf { it.isNotBlank() }
+                        ?: file.name
+                    val version = item.optString("applicationVersion").takeIf { it.isNotBlank() }
+                    StagedApplicationPackageItem(
+                        file = file,
+                        presentation = ApplicationPresentation(name, version),
+                        startAfterInstall = item.optBoolean("startAfterInstall", false),
+                        payload = item.optJSONObject("payload") ?: JSONObject(),
+                    )
+                }
+            }
+        }
+    }
+
     private data class DownloadFile(
         val fileName: String,
         val url: String,
@@ -796,6 +1164,13 @@ object AwsDeviceDownloadManager {
         if (this == null) return null
         return names.firstNotNullOfOrNull { name ->
             optString(name).trim().takeIf { it.isNotBlank() }
+        }
+    }
+
+    private fun JSONObject?.readFirstLong(vararg names: String): Long? {
+        if (this == null) return null
+        return names.firstNotNullOfOrNull { name ->
+            if (!has(name) || isNull(name)) null else optLong(name).takeIf { it > 0 }
         }
     }
 }

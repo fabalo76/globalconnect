@@ -294,6 +294,53 @@ public sealed class PinpadProtocolTests
     }
 
     [Fact]
+    public async Task A10SecretKeyInjectionUses20And21AndRedactsTrace()
+    {
+        const string masterKey = "0123456789ABCDEFFEDCBA9876543210";
+        const string sessionKey = "89ABCDEF012345670123456789ABCDEF";
+        using var transport = new ScriptedTransport(command => command switch
+        {
+            "20" => PinpadFrame.Ascii(PinpadFrameType.Transaction, "20", $"0{masterKey}"),
+            "21" => PinpadFrame.Ascii(PinpadFrameType.Transaction, "21", $"3{sessionKey}"),
+            _ => throw new InvalidOperationException(command),
+        });
+        transport.Open("TEST", 9_600);
+        using var client = new PinpadClient(transport);
+        var trace = new List<string>();
+        client.Trace += trace.Add;
+
+        await client.LoadA10SecretMasterKeyAsync(0, masterKey);
+        await client.LoadA10SecretSessionKeyAsync(3, sessionKey);
+
+        var requests = transport.Writes
+            .Where(write => write.Length > 1)
+            .Select(write => PinpadFrameCodec.Decode(write))
+            .ToArray();
+        Assert.Equal(["20", "21"], requests.Select(request => request.CommandId));
+        Assert.Equal($"0{masterKey}", requests[0].PayloadAscii);
+        Assert.Equal($"3{sessionKey}", requests[1].PayloadAscii);
+        Assert.DoesNotContain(trace, line => line.Contains(masterKey, StringComparison.Ordinal));
+        Assert.DoesNotContain(trace, line => line.Contains(sessionKey, StringComparison.Ordinal));
+        Assert.Contains(trace, line => line.Contains("<REDACTED:", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task A10SecretKeyInjectionCancelsWhenEchoDoesNotMatch()
+    {
+        const string masterKey = "0123456789ABCDEFFEDCBA9876543210";
+        using var transport = new ScriptedTransport(command => command == "20"
+            ? PinpadFrame.Ascii(PinpadFrameType.Transaction, "20", $"0{masterKey[..^1]}1")
+            : throw new InvalidOperationException(command));
+        transport.Open("TEST", 9_600);
+        using var client = new PinpadClient(transport);
+
+        await Assert.ThrowsAsync<PinpadProtocolException>(() =>
+            client.LoadA10SecretMasterKeyAsync(0, masterKey));
+
+        Assert.Equal(PinpadControl.Eot, Assert.Single(transport.Writes[^1]));
+    }
+
+    [Fact]
     public async Task A10MasterSessionPinEntryBuilds70AndParses71()
     {
         const string sessionKey = "0123456789ABCDEFFEDCBA9876543210";
@@ -319,6 +366,97 @@ public sealed class PinpadProtocolTests
         Assert.Equal("00", result.KeyIdentifier);
         Assert.DoesNotContain(trace, line => line.Contains(sessionKey, StringComparison.Ordinal));
         Assert.DoesNotContain(trace, line => line.Contains(pinBlock, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task A10SecretStandardPinEntryBuilds22AndParses71()
+    {
+        const string pinBlock = "1122334455667788";
+        using var transport = new ScriptedTransport(command => command == "22"
+            ? PinpadFrame.Ascii(PinpadFrameType.Transaction, "71", $".00401{pinBlock}")
+            : throw new InvalidOperationException(command));
+        transport.Open("TEST", 9_600);
+        using var client = new PinpadClient(transport);
+        var trace = new List<string>();
+        client.Trace += trace.Add;
+
+        var result = await client.StartA10SecretPinEntryAsync(new A10SecretPinEntryRequest(
+            A10PinPromptMode.Standard, "4111111111111111", 2, "50.00",
+            4, 12, false, "ENTER PIN", "PRESS ENTER", "PROCESSING"));
+
+        var request = PinpadFrameCodec.Decode(transport.Writes[0]);
+        Assert.Equal("22", request.CommandId);
+        Assert.Equal($"4111111111111111{PinpadControl.Fs}250.00", request.PayloadAscii);
+        Assert.Equal("PIN captured", result.Status);
+        Assert.Equal(pinBlock, result.EncryptedPinBlock);
+        Assert.Equal(4, result.PinLength);
+        Assert.DoesNotContain(trace, line => line.Contains("4111111111111111", StringComparison.Ordinal));
+        Assert.DoesNotContain(trace, line => line.Contains(pinBlock, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task A10SecretCustomPinEntryBuilds24()
+    {
+        const string pinBlock = "8877665544332211";
+        using var transport = new ScriptedTransport(command => command == "24"
+            ? PinpadFrame.Ascii(PinpadFrameType.Transaction, "71", $".00601{pinBlock}")
+            : throw new InvalidOperationException(command));
+        transport.Open("TEST", 9_600);
+        using var client = new PinpadClient(transport);
+
+        await client.StartA10SecretPinEntryAsync(new A10SecretPinEntryRequest(
+            A10PinPromptMode.CustomPrompt, "4111111111111111", 4, "",
+            6, 10, false, "ENTER PIN", "PRESS ENTER", "PROCESSING"));
+
+        var request = PinpadFrameCodec.Decode(transport.Writes[0]);
+        Assert.Equal("24", request.CommandId);
+        Assert.Equal(
+            $".4111111111111111{PinpadControl.Fs}40610NENTER PIN{PinpadControl.Fs}PRESS ENTER{PinpadControl.Fs}PROCESSING",
+            request.PayloadAscii);
+    }
+
+    [Fact]
+    public async Task A10SecretExternalPinEntryDisplaysPromptThenBuilds23()
+    {
+        using var transport = new ScriptedTransport(command => command switch
+        {
+            "Z2" => PinpadFrame.Ascii(PinpadFrameType.Transaction, "Z2"),
+            "23" => PinpadFrame.Ascii(PinpadFrameType.Transaction, "71", ".004011122334455667788"),
+            _ => throw new InvalidOperationException(command),
+        });
+        transport.Open("TEST", 9_600);
+        using var client = new PinpadClient(transport);
+
+        await client.StartA10SecretPinEntryAsync(new A10SecretPinEntryRequest(
+            A10PinPromptMode.ExternalPrompt, "4111111111111111", 7, "",
+            4, 12, false, "ENTER PIN", "PRESS ENTER", "PROCESSING"));
+
+        var requests = transport.Writes
+            .Where(write => write.Length > 1)
+            .Select(write => PinpadFrameCodec.Decode(write))
+            .ToArray();
+        Assert.Equal(["Z2", "23"], requests.Select(request => request.CommandId));
+        Assert.Equal("ENTER PIN", requests[0].PayloadAscii);
+        Assert.Equal($".4111111111111111{PinpadControl.Fs}7", requests[1].PayloadAscii);
+    }
+
+    [Fact]
+    public async Task A10DisplayMessageEncodesUtf8Payload()
+    {
+        using var transport = new ScriptedTransport(command => command == "Z2"
+            ? PinpadFrame.Ascii(PinpadFrameType.Transaction, "Z2")
+            : throw new InvalidOperationException(command));
+        transport.Open("TEST", 9_600);
+        using var client = new PinpadClient(transport);
+
+        await client.DisplayA10MessageAsync("Línea 1");
+
+        var requestBytes = transport.Writes[0];
+        var request = PinpadFrameCodec.Decode(requestBytes);
+        Assert.Equal("Z2", request.CommandId);
+        Assert.Equal(Encoding.UTF8.GetBytes("Línea 1"), request.Payload);
+        Assert.Equal(0x32, requestBytes[^1]);
+        Assert.Equal("<STX>Z2Línea 1<ETX><LRC:32>", PinpadProtocolText.FormatBytes(requestBytes));
     }
 
     [Fact]
@@ -446,6 +584,7 @@ public sealed class PinpadProtocolTests
     {
         private readonly Queue<byte> _incoming = new();
         private PinpadFrameType? _pendingResponseType;
+        private string? _pendingRequestCommand;
         public List<byte[]> Writes { get; } = [];
 
         public bool IsOpen { get; private set; }
@@ -465,14 +604,15 @@ public sealed class PinpadProtocolTests
         {
             var copy = data.ToArray();
             Writes.Add(copy);
-            if (copy.Length == 1 && copy[0] == PinpadControl.Ack)
+            if (copy.Length == 1)
             {
-                if (_pendingResponseType == PinpadFrameType.Administration)
+                if (copy[0] == PinpadControl.Ack &&
+                    (_pendingResponseType == PinpadFrameType.Administration || _pendingRequestCommand is "20" or "21"))
                 {
                     _incoming.Enqueue(PinpadControl.Eot);
                 }
-
                 _pendingResponseType = null;
+                _pendingRequestCommand = null;
                 return;
             }
 
@@ -484,6 +624,7 @@ public sealed class PinpadProtocolTests
                 _incoming.Enqueue(value);
             }
             _pendingResponseType = response.Type;
+            _pendingRequestCommand = request.CommandId;
         }
 
         public int ReadByte(TimeSpan timeout, CancellationToken cancellationToken)
@@ -496,6 +637,7 @@ public sealed class PinpadProtocolTests
 
         public void DiscardInput()
         {
+            _incoming.Clear();
         }
 
         public void ChangeBaudRate(int baudRate) => BaudRate = baudRate;

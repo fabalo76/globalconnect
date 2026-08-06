@@ -17,6 +17,11 @@ into the Global Connect tool without loading its old `UIC.*` assemblies:
   `%LOCALAPPDATA%\Global Connect ONE\Pinpad Media Manager\key-injection-test-settings.json`
   and restored on startup. This file contains clear **test keys** and must be
   protected and excluded from production key-management workflows.
+- **Secret Master/Session keys** covers the separate secret-key protocol family:
+  command `20` loads or rotates the Secret MK, command `21` loads Secret SK slots
+  0-9, and commands `22`, `23`, and `24` request standard, external-prompt, or
+  custom-prompt PIN entry. Echoed keys are verified before acceptance, and secret
+  key material, account data, and PIN blocks are redacted from the protocol trace.
 - **PIN entry** covers Master/Session and DUKPT PIN capture with standard,
   external, and custom prompts while redacting keys and PIN blocks from the
   shared protocol trace.

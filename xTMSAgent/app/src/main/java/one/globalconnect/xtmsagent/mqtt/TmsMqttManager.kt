@@ -41,6 +41,7 @@ import kotlinx.coroutines.*
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.ConcurrentHashMap
 import java.util.zip.GZIPOutputStream
 import kotlin.math.min
 import java.time.Instant
@@ -106,6 +107,7 @@ object TmsMqttManager {
     private val connectionAttemptActive = AtomicBoolean(false)
     @Volatile private var connectGeneration = 0
     private val clientSequence = AtomicLong(0)
+    private val handledDownloadTaskIds = ConcurrentHashMap.newKeySet<String>()
     @Volatile private var activeClientSequence = 0L
 
     /**
@@ -144,6 +146,7 @@ object TmsMqttManager {
                 return
             }
 
+            publishTaskAck(taskId, true, statusOverride = "received")
             handleGlobalConnectTask(taskId, taskType, json.optJSONObject("payload") ?: json.optJSONObject("Payload"))
         } catch (e: Exception) {
             Log.e(TAG, "Failed to parse task message: ${e.message}", e)
@@ -168,6 +171,10 @@ object TmsMqttManager {
                     )
                 }
                 "applicationdownload", "firmwaredownload", "updatefirmware", "bootanimationdownload" -> {
+                    if (!handledDownloadTaskIds.add(taskId)) {
+                        Log.i(TAG, "Ignoring duplicate download task: $taskId")
+                        return
+                    }
                     managerScope.launch(Dispatchers.IO) {
                         val result = AwsDeviceDownloadManager.executeTask(appContext, taskId, taskType, payload)
                         publishTaskAck(taskId, result.success, result.errorMessage, result.status, result.statusMessage)
@@ -830,6 +837,17 @@ object TmsMqttManager {
             .whenComplete { _, err ->
                 if (err != null) Log.e(TAG, "Subscribe $taskTopic failed: ${err.message}")
                 else Log.i(TAG, "Subscribed: $taskTopic (QoS 1)")
+            }
+
+        val taskRecoveryTopic = termTaskRecoveryTopic(termId)
+        client.subscribeWith()
+            .topicFilter(taskRecoveryTopic)
+            .qos(MqttQos.AT_LEAST_ONCE)
+            .callback { message -> handleTaskMessage(message.payloadAsBytes) }
+            .send()
+            .whenComplete { _, err ->
+                if (err != null) Log.e(TAG, "Subscribe $taskRecoveryTopic failed: ${err.message}")
+                else Log.i(TAG, "Subscribed: $taskRecoveryTopic (QoS 1 retained recovery)")
             }
 
         // paramres topic — broker replies {"ok":true} or {"ok":false,"err":"..."} after

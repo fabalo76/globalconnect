@@ -32,6 +32,7 @@ internal sealed partial class A10DemoControl : UserControl
         tabs.TabPages.Add(Page("Device & hardware", BuildDevicePage()));
         tabs.TabPages.Add(Page("Display tests", BuildDisplayPage()));
         tabs.TabPages.Add(Page("Key injection", BuildKeyInjectionPage()));
+        tabs.TabPages.Add(Page("Secret Master/Session keys", BuildSecretKeysPage()));
         tabs.TabPages.Add(Page("PIN entry", BuildPinEntryPage()));
         tabs.TabPages.Add(Page("EMV data setup", BuildConfigurationPage()));
         tabs.TabPages.Add(Page("ICC transaction", BuildTransactionPage(contactless: false)));

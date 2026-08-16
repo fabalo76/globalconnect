@@ -1,6 +1,6 @@
 # xTMSAgent Launcher
 
-Android launcher application for NEXGO SmartPOS devices. It serves as the device home screen and integrates with Global Connect ONE for MQTT telemetry, terminal tasks, parameter/configuration updates, software downloads, transaction reporting, and Kinesis WebRTC remote control.
+Android launcher application for NEXGO SmartPOS devices. It serves as the device home screen and integrates with Global Connect ONE for MQTT telemetry, terminal tasks, parameter/configuration updates, the Global Connect Store, software downloads, transaction reporting, and Kinesis WebRTC remote control.
 
 ---
 
@@ -18,11 +18,12 @@ Global Connect ONE is the active cloud target.
 | Device topics | `tms/device/{serial}/...` |
 | Transactions | AWS IoT Basic Ingest topic `$aws/rules/tms_transaction_ingest_{env}/tms/device/{serial}/transaction` |
 | Downloads | HTTPS signed URLs returned by Global Connect ONE device download endpoints |
+| Global Connect Store | Device-token HTTPS catalog and signed app downloads, scoped by bank/group and filtered by device-model compatibility |
 | Remote control | Kinesis Video Streams WebRTC, device connects as `MASTER` |
 
 The older `tms/terminal/{TermID}/...`, broker-password, TCP/FTP, `easy`, `paramreq`, `verreq`, and binary `notify` flows are legacy compatibility concepts. New work should use the Global Connect ONE device topics and task model described in [MQTT_INTEGRATION.md](MQTT_INTEGRATION.md).
 
-AWS IoT provisioning is device-scoped. A terminal can register its Thing/certificate and exchange MQTT on `tms/device/{serial}/...` as long as it is registered as a Global Connect ONE device with IoT enabled; it does not need to be assigned to a lane. Lane context is only used when resolving payment parameters, downloads that depend on merchant/branch/lane configuration, and operator workflow.
+AWS IoT provisioning is device-scoped. A terminal can register its Thing/certificate and exchange MQTT on `tms/device/{serial}/...` as long as it is registered as a Global Connect ONE device with IoT enabled; it does not need to be assigned to a lane. For banks with Merchant Network enabled, lane context is used when resolving payment parameters and operator workflow. For banks without Merchant Network, parameter values and tree records are assigned directly to the device.
 
 The exported application licensing service is a generic broker for offline application licenses. It verifies the caller UID, package, and installed APK signer, then relays registration over the authenticated device MQTT connection. Licensed applications generate and retain their own Android Keystore private keys; xTMSAgent never receives application private keys.
 
@@ -72,6 +73,9 @@ Key runtime pieces:
 - `mqtt/tls/AwsIotCertificateStore.kt` stores the device certificate/private key under app-private storage.
 - `params/ParamManager.kt` requests and applies effective configuration.
 - `mqtt/downloads/AwsDeviceDownloadManager.kt` handles signed download tasks.
+- `GlobalConnectStoreActivity.kt` renders the bank/group-aware store.
+- `store/GlobalConnectStoreClient.kt` resolves the catalog and verifies signed APK downloads.
+- `store/StoreAppInstaller.kt` installs or updates selected store applications.
 - `transactions/TransactionReportManager.kt` publishes payment-app transaction reports to Basic Ingest.
 
 When xTMSAgent is Device Owner, application tasks use Android `PackageInstaller`
@@ -108,6 +112,21 @@ The launcher publishes:
 | `$aws/rules/tms_transaction_ingest_{env}/tms/device/{serial}/transaction` | Transaction or transaction batch report |
 
 For full payload details see [MQTT_INTEGRATION.md](MQTT_INTEGRATION.md) and the platform repository contract under `docs/API_DESIGN.md`.
+
+---
+
+## Global Connect Store
+
+The launcher adds a **Global Connect Store** entry only when the active launcher profile contains `enableGlobalConnectStore: true`.
+
+1. `GET /v1/devices/{serial}/store` resolves the device catalog with `Authorization: Device <device-token>`.
+2. Devices without a group use the bank-general store; grouped devices use their group store.
+3. The service returns only active application versions compatible with the inventory device model.
+4. If the bank disables device groups, catalog resolution falls back to the bank-general store even when the device still has a group ID.
+5. `POST /v1/devices/{serial}/store/apps/{versionId}/download` authorizes the selected version and returns a signed URL.
+6. xTMSAgent verifies size and SHA-256 before invoking the installer.
+
+Store catalog and download endpoints use the same device token as the other HTTPS device endpoints; they do not use the bank onboarding API key.
 
 ---
 

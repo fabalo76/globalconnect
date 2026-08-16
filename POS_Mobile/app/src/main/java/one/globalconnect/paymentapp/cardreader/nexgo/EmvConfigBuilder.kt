@@ -9,16 +9,27 @@ import one.globalconnect.tms.paymentapp.TMS_EmvCtlsConfig
 internal object EmvConfigBuilder {
     private const val TAG = "EmvConfigBuilder"
 
-    fun buildAidList(aidTab: List<TMS_EmvContactConfig>, pcdApps: List<TMS_EmvCtlsConfig>): List<AidEntity> {
+    fun buildAidList(
+        aidTab: List<TMS_EmvContactConfig>,
+        pcdApps: List<TMS_EmvCtlsConfig>,
+        terminalOnlinePinCap: Boolean = true,
+    ): List<AidEntity> {
         val result = ArrayList<AidEntity>(aidTab.size + pcdApps.size)
-        for (tms in aidTab) result += contactAidEntity(tms)
-        for (pcd in pcdApps) result += contactlessAidEntity(pcd)
-        Log.d(TAG, "buildAidList contact=${aidTab.size} contactless=${pcdApps.size} total=${result.size}")
+        for (tms in aidTab) result += contactAidEntity(tms, terminalOnlinePinCap)
+        for (pcd in pcdApps) result += contactlessAidEntity(pcd, terminalOnlinePinCap)
+        Log.d(
+            TAG,
+            "buildAidList contact=${aidTab.size} contactless=${pcdApps.size} " +
+                "terminalOnlinePinCap=$terminalOnlinePinCap total=${result.size}",
+        )
         for (entity in result) logAidEntity(entity)
         return result
     }
 
-    private fun contactAidEntity(tms: TMS_EmvContactConfig): AidEntity = AidEntity().apply {
+    private fun contactAidEntity(
+        tms: TMS_EmvContactConfig,
+        terminalOnlinePinCap: Boolean,
+    ): AidEntity = AidEntity().apply {
         aid              = tms.AID.lowercase()
         asi              = if (tms.PartSel.toInt() ==1) 0 else 1  // "01"=partial→asi=0, else exact→asi=1
         appVerNum        = tms.AppVerNo
@@ -30,11 +41,14 @@ internal object EmvConfigBuilder {
         tacOnline        = tms.TAC_Online
         setDdol(trimHexField(tms.Default_DDOL, tms.Default_DDOL_Len))
         floorLimit       = tms.Floor_Limit
-        onlinePinCap     = 1
+        onlinePinCap     = effectiveOnlinePinCap(terminalOnlinePinCap, tms.onlinePinCap)
         aidEntryModeEnum = AidEntryModeEnum.AID_ENTRY_CONTACT
     }
 
-    private fun contactlessAidEntity(pcd: TMS_EmvCtlsConfig): AidEntity = AidEntity().apply {
+    private fun contactlessAidEntity(
+        pcd: TMS_EmvCtlsConfig,
+        terminalOnlinePinCap: Boolean,
+    ): AidEntity = AidEntity().apply {
         aid                   = pcd.AID.lowercase()
         asi                   = 0  // no PartSel field in PCDApps — default to partial match
         tacDefault            = pcd.TACDefault
@@ -44,8 +58,12 @@ internal object EmvConfigBuilder {
         contactlessFloorLimit = pcd.FloorLimit
         contactlessTransLimit = pcd.TransactionLimit
         contactlessCvmLimit   = pcd.CVMReqLimit
-        onlinePinCap          = 1
+        onlinePinCap          = effectiveOnlinePinCap(terminalOnlinePinCap, pcd.onlinePinCap)
         aidEntryModeEnum      = AidEntryModeEnum.AID_ENTRY_CONTACTLESS
+    }
+
+    internal fun effectiveOnlinePinCap(terminalOnlinePinCap: Boolean, aidOnlinePinCap: Int): Int {
+        return if (terminalOnlinePinCap && aidOnlinePinCap == 1) 1 else 0
     }
 
     private fun logAidEntity(e: AidEntity) {

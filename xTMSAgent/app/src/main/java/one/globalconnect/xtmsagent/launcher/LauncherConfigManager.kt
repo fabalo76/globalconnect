@@ -304,6 +304,7 @@ object LauncherConfigManager {
         val blockUnknown     = json.optBooleanAny(default = false, "blockUnknownApps", "BlockUnknownApps")
         val enableNavBar     = json.optBooleanAny(default = true, "enableNavigationBar", "EnableNavigationBar")
         val enableControlBar = json.optBooleanAny(default = true, "enableControlBar", "EnableControlBar")
+        val enableStore      = json.optBooleanAny(default = false, "enableGlobalConnectStore", "EnableGlobalConnectStore")
         val statusBarColor   = normalizeSystemBarColor(json.optStringAny("statusBarColor", "StatusBarColor"))
         val navBarColor      = normalizeSystemBarColor(json.optStringAny("navigationBarColor", "NavigationBarColor"))
         val appsArray        = json.optJSONArrayAny("apps", "Apps", "applications", "Applications")
@@ -337,6 +338,7 @@ object LauncherConfigManager {
             .putString("generatedAt", generatedAt)
             .putBoolean("enableNavigationBar", enableNavBar)
             .putBoolean("enableControlBar", enableControlBar)
+            .putBoolean("enableGlobalConnectStore", enableStore)
             .putString("statusBarColor", statusBarColor)
             .putString("navigationBarColor", navBarColor)
             .apply()
@@ -375,7 +377,7 @@ object LauncherConfigManager {
 
         Log.i(TAG, "LauncherConfig applied: ${newAppList.size} app(s), " +
             "blockUnknownApps=$blockUnknown, enableNavBar=$enableNavBar, " +
-            "enableControlBar=$enableControlBar, generatedAt=$generatedAt")
+            "enableControlBar=$enableControlBar, enableStore=$enableStore, generatedAt=$generatedAt")
 
         // Broadcast so MainActivity refreshes its button grid if it is in the foreground
         context.sendBroadcast(

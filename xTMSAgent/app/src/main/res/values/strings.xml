@@ -128,4 +128,18 @@
     <string name="unlock_code_title">Enter Unlock Code</string>
     <string name="unlock_code_hint">10-digit code</string>
     <string name="unlock_code_invalid">Invalid code. Please try again.</string>
+    <string name="store_title">Global Connect Store</string>
+    <string name="store_back">Back</string>
+    <string name="store_bank_scope">Bank store</string>
+    <string name="store_group_scope">Store selected for this device group</string>
+    <string name="store_empty">No applications are available for this device.</string>
+    <string name="store_retry">Retry</string>
+    <string name="store_version">Version %1$s</string>
+    <string name="store_install">Install</string>
+    <string name="store_update">Update</string>
+    <string name="store_open">Open</string>
+    <string name="store_installing">Installing</string>
+    <string name="store_download_progress">Download %1$d%%</string>
+    <string name="store_error_generic">The store is unavailable.</string>
+    <string name="store_install_failed">The application could not be installed.</string>
 </resources>

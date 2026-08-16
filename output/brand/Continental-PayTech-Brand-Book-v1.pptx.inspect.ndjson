@@ -1,0 +1,249 @@
+{"kind":"deck","id":"pr/ehcqva","name":"Deck"}
+{"kind":"layout","layoutId":"b390cb18-1e5f-46d2-aa4b-67b713d337f1","name":"Master","type":"master"}
+{"kind":"layout","layoutId":"9b4ceb47-b17b-4041-ae31-a5cf23945544","name":"Title Slide","type":"title"}
+{"kind":"slide","id":"sl/95ykb5","slide":1,"title":"CONTINENTAL","textShapes":6}
+{"kind":"shape","id":"sh/nmh4zep4","slide":1,"bbox":[0,0,18,720]}
+{"kind":"shape","id":"sh/onqlsjqp","slide":1,"bbox":[18,0,6,720]}
+{"kind":"textbox","id":"sh/eho3m98n","slide":1,"text":"CONTINENTAL","textPreview":"CONTINENTAL","textChars":11,"textLines":1,"bbox":[72,118,640,72]}
+{"kind":"textbox","id":"sh/zix4veps","slide":1,"text":"PAYTECH","textPreview":"PAYTECH","textChars":7,"textLines":1,"bbox":[72,186,430,56]}
+{"kind":"textbox","id":"sh/0j6lojqd","slide":1,"text":"Brand book","textPreview":"Brand book","textChars":10,"textLines":1,"bbox":[72,324,500,56]}
+{"kind":"textbox","id":"sh/1kfmx47y","slide":1,"text":"Continental Payment Technologies, Inc.","textPreview":"Continental Payment Technologies, Inc.","textChars":38,"textLines":1,"bbox":[72,390,590,34]}
+{"kind":"textbox","id":"sh/ydsnyt8r","slide":1,"text":"Payment technology across the Americas","textPreview":"Payment technology across the Americas","textChars":38,"textLines":1,"bbox":[72,520,650,40]}
+{"kind":"textbox","id":"sh/je147ypc","slide":1,"text":"VERSION 1.0  |  AUGUST 2026","textPreview":"VERSION 1.0  |  AUGUST 2026","textChars":27,"textLines":1,"bbox":[72,660,360,20]}
+{"kind":"image","id":"im/obqpw7a5","slide":1,"name":"","alt":"Continental PayTech brand symbol","bbox":[790,100,340,355]}
+{"kind":"notes","id":"nt/95ykb5","slide":1,"text":"[Sources]"}
+{"kind":"slide","id":"sl/8zif4y","slide":2,"title":"BRAND FOUNDATION","textShapes":11}
+{"kind":"textbox","id":"sh/83etsnyt","slide":2,"text":"BRAND FOUNDATION","textPreview":"BRAND FOUNDATION","textChars":16,"textLines":1,"bbox":[72,42,440,24]}
+{"kind":"textbox","id":"sh/725szih8","slide":2,"name":"slide-title","text":"The brand makes complex commerce feel operationally simple","textPreview":"The brand makes complex commerce feel operationally simple","textChars":58,"textLines":1,"bbox":[72,76,1050,64]}
+{"kind":"shape","id":"sh/m1cbqxgn","slide":2,"bbox":[72,148,96,4]}
+{"kind":"textbox","id":"sh/lg3axsz2","slide":2,"text":"02","textPreview":"02","textChars":2,"textLines":1,"bbox":[1162,46,46,22]}
+{"kind":"textbox","id":"sh/0futonyh","slide":2,"text":"PURPOSE","textPreview":"PURPOSE","textChars":7,"textLines":1,"bbox":[72,202,260,22]}
+{"kind":"textbox","id":"sh/zelsvihw","slide":2,"text":"Enable payment and self-service programs to operate confidently across the Americas.","textPreview":"Enable payment and self-service programs to operate confidently across the Americas.","textChars":84,"textLines":1,"bbox":[72,234,480,112]}
+{"kind":"shape","id":"sh/ydcbmdgr","slide":2,"bbox":[622,202,4,344]}
+{"kind":"textbox","id":"sh/dc3at8z6","slide":2,"text":"BRAND PROMISE","textPreview":"BRAND PROMISE","textChars":13,"textLines":1,"bbox":[680,202,470,20]}
+{"kind":"textbox","id":"sh/cbutk3yl","slide":2,"text":"One accountable technology partner - from device choice to fleet visibility.","textPreview":"One accountable technology partner - from device choice to fleet visibility.","textChars":76,"textLines":1,"bbox":[680,228,470,58]}
+{"kind":"textbox","id":"sh/ap8be50j","slide":2,"text":"POSITIONING","textPreview":"POSITIONING","textChars":11,"textLines":1,"bbox":[680,350,470,20]}
+{"kind":"textbox","id":"sh/vq1s7a14","slide":2,"text":"A regional payment technology company combining devices, kiosks and multi-brand management.","textPreview":"A regional payment technology company combining devices, kiosks and multi-brand management.","textChars":91,"textLines":1,"bbox":[680,376,470,58]}
+{"kind":"textbox","id":"sh/wratgfip","slide":2,"text":"NORTH AMERICA    LATIN AMERICA    CARIBBEAN","textPreview":"NORTH AMERICA    LATIN AMERICA    CARIBBEAN","textChars":43,"textLines":1,"bbox":[72,584,690,24]}
+{"kind":"textbox","id":"sh/xsja90ja","slide":2,"text":"CONTINENTAL PAYTECH  |  BRAND BOOK  |  VERSION 1.0","textPreview":"CONTINENTAL PAYTECH  |  BRAND BOOK  |  VERSION 1.0","textChars":50,"textLines":1,"bbox":[72,680,540,18]}
+{"kind":"notes","id":"nt/8zif4y","slide":2,"text":"[Sources]\n- https://www.nexgoglobal.com/\n- https://www.fecpos.com/"}
+{"kind":"slide","id":"sl/m6nfcj","slide":3,"title":"NAMING SYSTEM","textShapes":15}
+{"kind":"textbox","id":"sh/wbq1gby5","slide":3,"text":"NAMING SYSTEM","textPreview":"NAMING SYSTEM","textChars":13,"textLines":1,"bbox":[72,42,440,24]}
+{"kind":"textbox","id":"sh/vahk76xk","slide":3,"name":"slide-title","text":"Use one formal name and one memorable public name","textPreview":"Use one formal name and one memorable public name","textChars":49,"textLines":1,"bbox":[72,76,1050,64]}
+{"kind":"shape","id":"sh/u98je1gz","slide":3,"bbox":[72,148,96,4]}
+{"kind":"textbox","id":"sh/5gj2dgfm","slide":3,"text":"03","textPreview":"03","textChars":2,"textLines":1,"bbox":[1162,46,46,22]}
+{"kind":"textbox","id":"sh/4fq1kbyh","slide":3,"text":"LEGAL ENTITY","textPreview":"LEGAL ENTITY","textChars":12,"textLines":1,"bbox":[72,204,500,20]}
+{"kind":"textbox","id":"sh/jehkbqxw","slide":3,"text":"Continental Payment Technologies, Inc.","textPreview":"Continental Payment Technologies, Inc.","textChars":38,"textLines":1,"bbox":[72,230,500,58]}
+{"kind":"textbox","id":"sh/id8jilgb","slide":3,"text":"PUBLIC BRAND","textPreview":"PUBLIC BRAND","textChars":12,"textLines":1,"bbox":[72,338,500,20]}
+{"kind":"textbox","id":"sh/d4j2h0fy","slide":3,"text":"Continental PayTech","textPreview":"Continental PayTech","textChars":19,"textLines":1,"bbox":[72,364,500,58]}
+{"kind":"shape","id":"sh/sjaloved","slide":3,"bbox":[650,196,490,270]}
+{"kind":"textbox","id":"sh/6dgn65wv","slide":3,"text":"PRIMARY DOMAIN","textPreview":"PRIMARY DOMAIN","textChars":14,"textLines":1,"bbox":[694,236,330,22]}
+{"kind":"textbox","id":"sh/7ep4zadg","slide":3,"text":"continentalpaytech.com","textPreview":"continentalpaytech.com","textChars":22,"textLines":1,"bbox":[694,276,410,52]}
+{"kind":"textbox","id":"sh/8fy58fe1","slide":3,"text":"firstname.lastname@continentalpaytech.com","textPreview":"firstname.lastname@continentalpaytech.com","textChars":41,"textLines":1,"bbox":[694,342,410,32]}
+{"kind":"textbox","id":"sh/tgrm1kv6","slide":3,"text":"Primary enterprise domain. Verisign RDAP returned no registration record on Aug. 10, 2026.","textPreview":"Primary enterprise domain. Verisign RDAP returned no registration record on Aug. 10, 2026.","textChars":90,"textLines":1,"bbox":[694,390,390,42]}
+{"kind":"textbox","id":"sh/uh0napwr","slide":3,"text":"SECONDARY  continentalpay.tech","textPreview":"SECONDARY  continentalpay.tech","textChars":30,"textLines":1,"bbox":[694,442,390,22]}
+{"kind":"textbox","id":"sh/vi943udc","slide":3,"text":"Approved descriptor","textPreview":"Approved descriptor","textChars":19,"textLines":1,"bbox":[72,506,220,24]}
+{"kind":"textbox","id":"sh/gji5czex","slide":3,"text":"Payment devices, kiosks and lifecycle management","textPreview":"Payment devices, kiosks and lifecycle management","textChars":48,"textLines":1,"bbox":[72,540,690,42]}
+{"kind":"textbox","id":"sh/hkrm5kvi","slide":3,"text":"CONTINENTAL PAYTECH  |  BRAND BOOK  |  VERSION 1.0","textPreview":"CONTINENTAL PAYTECH  |  BRAND BOOK  |  VERSION 1.0","textChars":50,"textLines":1,"bbox":[72,680,540,18]}
+{"kind":"notes","id":"nt/m6nfcj","slide":3,"text":"[Sources]\n- https://rdap.verisign.com/com/v1/domain/continentalpaytech.com\n- https://rdap.radix.host/rdap/domain/continentalpay.tech\n- https://www.icann.org/rdap/"}
+{"kind":"slide","id":"sl/vj7uty","slide":4,"title":"LOGO IDEA","textShapes":12}
+{"kind":"textbox","id":"sh/vm90fi10","slide":4,"text":"LOGO IDEA","textPreview":"LOGO IDEA","textChars":9,"textLines":1,"bbox":[72,42,440,24]}
+{"kind":"textbox","id":"sh/wn218nil","slide":4,"name":"slide-title","text":"The symbol expresses connected continental movement","textPreview":"The symbol expresses connected continental movement","textChars":51,"textLines":1,"bbox":[72,76,1050,64]}
+{"kind":"shape","id":"sh/hobihsj6","slide":4,"bbox":[72,148,96,4]}
+{"kind":"textbox","id":"sh/ipkjax0r","slide":4,"text":"04","textPreview":"04","textChars":2,"textLines":1,"bbox":[1162,46,46,22]}
+{"kind":"textbox","id":"sh/4r21c7ih","slide":4,"text":"CONTINENTAL","textPreview":"CONTINENTAL","textChars":11,"textLines":1,"bbox":[253.04,247.08,475.8,58.56]}
+{"kind":"textbox","id":"sh/5cbilcj2","slide":4,"text":"PAYTECH","textPreview":"PAYTECH","textChars":7,"textLines":1,"bbox":[253.04,300.76,366,48.8]}
+{"kind":"textbox","id":"sh/ytgzydk7","slide":4,"text":"An interwoven C","textPreview":"An interwoven C","textChars":15,"textLines":1,"bbox":[742,212,390,36]}
+{"kind":"textbox","id":"sh/zup07y1s","slide":4,"text":"A continuous ribbon creates a distinctive C for continental reach, connected operations and long-term partnership.","textPreview":"A continuous ribbon creates a distinctive C for continental reach, connected operations and long-term partnership.","textChars":114,"textLines":1,"bbox":[742,254,410,92]}
+{"kind":"textbox","id":"sh/vehknyxo","slide":4,"text":"Navy and teal","textPreview":"Navy and teal","textChars":13,"textLines":1,"bbox":[742,382,390,32]}
+{"kind":"textbox","id":"sh/ut83etw3","slide":4,"text":"Navy provides stability; teal carries visible commerce across devices, kiosks and software.","textPreview":"Navy provides stability; teal carries visible commerce across devices, kiosks and software.","textChars":91,"textLines":1,"bbox":[742,420,410,58]}
+{"kind":"textbox","id":"sh/hgz2p8fu","slide":4,"text":"Amber activation","textPreview":"Amber activation","textChars":16,"textLines":1,"bbox":[742,510,390,32]}
+{"kind":"textbox","id":"sh/gfqlg3e9","slide":4,"text":"The small accent marks the moment technology becomes a transaction.","textPreview":"The small accent marks the moment technology becomes a transaction.","textChars":67,"textLines":1,"bbox":[742,548,410,58]}
+{"kind":"textbox","id":"sh/7qxkjexc","slide":4,"text":"CONTINENTAL PAYTECH  |  BRAND BOOK  |  VERSION 1.0","textPreview":"CONTINENTAL PAYTECH  |  BRAND BOOK  |  VERSION 1.0","textChars":50,"textLines":1,"bbox":[72,680,540,18]}
+{"kind":"image","id":"im/ylo7yh8b","slide":4,"name":"","alt":"Continental PayTech brand symbol","bbox":[92,230,136.64,141.52]}
+{"kind":"notes","id":"nt/vj7uty","slide":4,"text":"[Sources]\n- Final flat master derived from the user-supplied interwoven C concept using the built-in image generation workflow."}
+{"kind":"slide","id":"sl/hq35dl","slide":5,"title":"LOGO USE","textShapes":13}
+{"kind":"textbox","id":"sh/3qlo7utk","slide":5,"text":"LOGO USE","textPreview":"LOGO USE","textChars":8,"textLines":1,"bbox":[72,42,440,24]}
+{"kind":"textbox","id":"sh/4rup0zup","slide":5,"name":"slide-title","text":"Keep the lockup disciplined, legible and consistent","textPreview":"Keep the lockup disciplined, legible and consistent","textChars":51,"textLines":1,"bbox":[72,76,1050,64]}
+{"kind":"shape","id":"sh/5s3694ba","slide":5,"bbox":[72,148,96,4]}
+{"kind":"textbox","id":"sh/qdc729cv","slide":5,"text":"05","textPreview":"05","textChars":2,"textLines":1,"bbox":[1162,46,46,22]}
+{"kind":"shape","id":"sh/re58betg","slide":5,"bbox":[72,202,520,210]}
+{"kind":"textbox","id":"sh/dgnqdobm","slide":5,"text":"CONTINENTAL","textPreview":"CONTINENTAL","textChars":11,"textLines":1,"bbox":[230.8,256.6,351,43.2]}
+{"kind":"textbox","id":"sh/6hs765cr","slide":5,"text":"PAYTECH","textPreview":"PAYTECH","textChars":7,"textLines":1,"bbox":[230.8,296.2,270,36]}
+{"kind":"shape","id":"sh/7i1ozatc","slide":5,"bbox":[640,202,520,210]}
+{"kind":"textbox","id":"sh/y547uxwr","slide":5,"text":"CONTINENTAL","textPreview":"CONTINENTAL","textChars":11,"textLines":1,"bbox":[798.8,256.6,351,43.2]}
+{"kind":"textbox","id":"sh/l8vq5svi","slide":5,"text":"PAYTECH","textPreview":"PAYTECH","textChars":7,"textLines":1,"bbox":[798.8,296.2,270,36]}
+{"kind":"textbox","id":"sh/07mpwnex","slide":5,"text":"Clear space","textPreview":"Clear space","textChars":11,"textLines":1,"bbox":[72,460,220,30]}
+{"kind":"textbox","id":"sh/bid8zidg","slide":5,"text":"Keep at least one amber-accent height around every side of the lockup.","textPreview":"Keep at least one amber-accent height around every side of the lockup.","textChars":70,"textLines":1,"bbox":[72,500,480,58]}
+{"kind":"textbox","id":"sh/qh47qdwv","slide":5,"text":"Minimum size","textPreview":"Minimum size","textChars":12,"textLines":1,"bbox":[640,460,220,30]}
+{"kind":"textbox","id":"sh/dkvq1sv6","slide":5,"text":"Full lockup: 140 px digital / 32 mm print\nSymbol only: 24 px digital / 8 mm print","textPreview":"Full lockup: 140 px digital / 32 mm print | Symbol only: 24 px digital / 8 mm print","textChars":81,"textLines":2,"bbox":[640,500,480,64]}
+{"kind":"textbox","id":"sh/cjmpsne1","slide":5,"text":"Do not stretch, recolor, rotate, add effects or separate the amber accent.","textPreview":"Do not stretch, recolor, rotate, add effects or separate the amber accent.","textChars":74,"textLines":1,"bbox":[72,612,980,24]}
+{"kind":"textbox","id":"sh/3et8vix4","slide":5,"text":"CONTINENTAL PAYTECH  |  BRAND BOOK  |  VERSION 1.0","textPreview":"CONTINENTAL PAYTECH  |  BRAND BOOK  |  VERSION 1.0","textChars":50,"textLines":1,"bbox":[72,680,540,18]}
+{"kind":"image","id":"im/xgzudk3a","slide":5,"name":"","alt":"Continental PayTech brand symbol","bbox":[112,244,100.8,104.4]}
+{"kind":"image","id":"im/c7ex0n29","slide":5,"name":"","alt":"Continental PayTech brand symbol","bbox":[680,244,100.8,104.4]}
+{"kind":"notes","id":"nt/hq35dl","slide":5,"text":"[Sources]"}
+{"kind":"slide","id":"sl/v96606","slide":6,"title":"COLOR SYSTEM","textShapes":21}
+{"kind":"textbox","id":"sh/32d8fy90","slide":6,"text":"COLOR SYSTEM","textPreview":"COLOR SYSTEM","textChars":12,"textLines":1,"bbox":[72,42,440,24]}
+{"kind":"textbox","id":"sh/436p83ql","slide":6,"name":"slide-title","text":"Color signals trust, movement and human warmth","textPreview":"Color signals trust, movement and human warmth","textChars":46,"textLines":1,"bbox":[72,76,1050,64]}
+{"kind":"shape","id":"sh/54fqh8r6","slide":6,"bbox":[72,148,96,4]}
+{"kind":"textbox","id":"sh/q5o7ad8r","slide":6,"text":"06","textPreview":"06","textChars":2,"textLines":1,"bbox":[1162,46,46,22]}
+{"kind":"shape","id":"sh/r6x83i9c","slide":6,"bbox":[72,208,205,250]}
+{"kind":"textbox","id":"sh/s76pc3qx","slide":6,"text":"CONTINENTAL NAVY","textPreview":"CONTINENTAL NAVY","textChars":16,"textLines":1,"bbox":[90,334,169,42]}
+{"kind":"textbox","id":"sh/d8fq58ri","slide":6,"text":"#0B1F33","textPreview":"#0B1F33","textChars":7,"textLines":1,"bbox":[90,384,169,26]}
+{"kind":"textbox","id":"sh/69k7y98n","slide":6,"text":"Trust / primary","textPreview":"Trust / primary","textChars":15,"textLines":1,"bbox":[90,420,169,22]}
+{"kind":"shape","id":"sh/7at87e9s","slide":6,"bbox":[296,208,205,250]}
+{"kind":"textbox","id":"sh/fad8zmxs","slide":6,"text":"COMMERCE TEAL","textPreview":"COMMERCE TEAL","textChars":13,"textLines":1,"bbox":[314,334,169,42]}
+{"kind":"textbox","id":"sh/e947qhg7","slide":6,"text":"#00A7A5","textPreview":"#00A7A5","textChars":7,"textLines":1,"bbox":[314,384,169,26]}
+{"kind":"textbox","id":"sh/1cvq1wfy","slide":6,"text":"Movement / digital","textPreview":"Movement / digital","textChars":18,"textLines":1,"bbox":[314,420,169,22]}
+{"kind":"shape","id":"sh/0bmpsred","slide":6,"bbox":[520,208,205,250]}
+{"kind":"textbox","id":"sh/rmdovmxw","slide":6,"text":"ACTIVATION AMBER","textPreview":"ACTIVATION AMBER","textChars":16,"textLines":1,"bbox":[538,334,169,42]}
+{"kind":"textbox","id":"sh/ql47mhgb","slide":6,"text":"#F5A623","textPreview":"#F5A623","textChars":7,"textLines":1,"bbox":[538,384,169,26]}
+{"kind":"textbox","id":"sh/d8vqxcfm","slide":6,"text":"Energy / accent","textPreview":"Energy / accent","textChars":15,"textLines":1,"bbox":[538,420,169,22]}
+{"kind":"shape","id":"sh/s7mpo7yh","slide":6,"bbox":[744,208,205,250]}
+{"kind":"textbox","id":"sh/jitor2xk","slide":6,"text":"OPEN WHITE","textPreview":"OPEN WHITE","textChars":10,"textLines":1,"bbox":[762,334,169,42]}
+{"kind":"textbox","id":"sh/ihk7ixgz","slide":6,"text":"#FFFFFF","textPreview":"#FFFFFF","textChars":7,"textLines":1,"bbox":[762,384,169,26]}
+{"kind":"textbox","id":"sh/md07ax07","slide":6,"text":"Clarity / space","textPreview":"Clarity / space","textChars":15,"textLines":1,"bbox":[762,420,169,22]}
+{"kind":"shape","id":"sh/7et832hs","slide":6,"bbox":[968,208,205,250]}
+{"kind":"textbox","id":"sh/8f29c7ix","slide":6,"text":"OPERATIONS SLATE","textPreview":"OPERATIONS SLATE","textChars":16,"textLines":1,"bbox":[986,334,169,42]}
+{"kind":"textbox","id":"sh/9gbq5czi","slide":6,"text":"#405466","textPreview":"#405466","textChars":7,"textLines":1,"bbox":[986,384,169,26]}
+{"kind":"textbox","id":"sh/uhkreh03","slide":6,"text":"Body / utility","textPreview":"Body / utility","textChars":14,"textLines":1,"bbox":[986,420,169,22]}
+{"kind":"textbox","id":"sh/vit872ho","slide":6,"text":"Recommended balance","textPreview":"Recommended balance","textChars":19,"textLines":1,"bbox":[72,510,250,24]}
+{"kind":"shape","id":"sh/wj29g7i9","slide":6,"bbox":[72,548,620,24]}
+{"kind":"shape","id":"sh/hkbq9czu","slide":6,"bbox":[692,548,280,24]}
+{"kind":"shape","id":"sh/i54rih0f","slide":6,"bbox":[972,548,112,24]}
+{"kind":"shape","id":"sh/36d8bmhk","slide":6,"bbox":[1084,548,124,24]}
+{"kind":"textbox","id":"sh/d0fa1gj2","slide":6,"text":"55% navy   25% teal   10% amber   10% white","textPreview":"55% navy   25% teal   10% amber   10% white","textChars":43,"textLines":1,"bbox":[72,586,700,24]}
+{"kind":"textbox","id":"sh/sz6t8b2h","slide":6,"text":"CONTINENTAL PAYTECH  |  BRAND BOOK  |  VERSION 1.0","textPreview":"CONTINENTAL PAYTECH  |  BRAND BOOK  |  VERSION 1.0","textChars":50,"textLines":1,"bbox":[72,680,540,18]}
+{"kind":"notes","id":"nt/v96606","slide":6,"text":"[Sources]"}
+{"kind":"slide","id":"sl/s5gy92","slide":7,"title":"TYPOGRAPHY","textShapes":12}
+{"kind":"textbox","id":"sh/be14jmx0","slide":7,"text":"TYPOGRAPHY","textPreview":"TYPOGRAPHY","textChars":10,"textLines":1,"bbox":[72,42,440,24]}
+{"kind":"textbox","id":"sh/cfalsrel","slide":7,"name":"slide-title","text":"Typography stays technical without feeling cold","textPreview":"Typography stays technical without feeling cold","textChars":47,"textLines":1,"bbox":[72,76,1050,64]}
+{"kind":"shape","id":"sh/xgjmlwf6","slide":7,"bbox":[72,148,96,4]}
+{"kind":"textbox","id":"sh/2p83mhwj","slide":7,"text":"07","textPreview":"07","textChars":2,"textLines":1,"bbox":[1162,46,46,22]}
+{"kind":"textbox","id":"sh/nah4fmx4","slide":7,"text":"Aptos Display Semibold","textPreview":"Aptos Display Semibold","textChars":22,"textLines":1,"bbox":[72,210,610,50]}
+{"kind":"textbox","id":"sh/obalorep","slide":7,"text":"Headlines should be short, decisive and sentence case.","textPreview":"Headlines should be short, decisive and sentence case.","textChars":54,"textLines":1,"bbox":[72,272,600,36]}
+{"kind":"shape","id":"sh/pcjmhcfa","slide":7,"bbox":[72,328,540,2]}
+{"kind":"textbox","id":"sh/6lc3y1wn","slide":7,"text":"Aptos Regular","textPreview":"Aptos Regular","textChars":13,"textLines":1,"bbox":[72,362,500,44]}
+{"kind":"textbox","id":"sh/76l4r6x8","slide":7,"text":"Use for body copy, proposals, email and product explanations. Favor plain language and generous spacing.","textPreview":"Use for body copy, proposals, email and product explanations. Favor plain language and generous spacing.","textChars":104,"textLines":1,"bbox":[72,418,600,74]}
+{"kind":"shape","id":"sh/v25kbyp8","slide":7,"bbox":[748,210,390,302]}
+{"kind":"textbox","id":"sh/uhw3iton","slide":7,"text":"Aa","textPreview":"Aa","textChars":2,"textLines":1,"bbox":[792,238,180,104]}
+{"kind":"textbox","id":"sh/h4n2do7y","slide":7,"text":"0123456789","textPreview":"0123456789","textChars":10,"textLines":1,"bbox":[792,356,300,38]}
+{"kind":"textbox","id":"sh/g3elk36d","slide":7,"text":"Fallback stack\nArial / Helvetica / sans-serif","textPreview":"Fallback stack | Arial / Helvetica / sans-serif","textChars":45,"textLines":2,"bbox":[792,424,300,62]}
+{"kind":"textbox","id":"sh/365kfyp4","slide":7,"text":"Use Courier New only for device IDs, serials and technical code.","textPreview":"Use Courier New only for device IDs, serials and technical code.","textChars":64,"textLines":1,"bbox":[72,578,820,28]}
+{"kind":"textbox","id":"sh/i5w3mtoj","slide":7,"text":"CONTINENTAL PAYTECH  |  BRAND BOOK  |  VERSION 1.0","textPreview":"CONTINENTAL PAYTECH  |  BRAND BOOK  |  VERSION 1.0","textChars":50,"textLines":1,"bbox":[72,680,540,18]}
+{"kind":"notes","id":"nt/s5gy92","slide":7,"text":"[Sources]"}
+{"kind":"slide","id":"sl/c6x2i4","slide":8,"title":"VOICE AND MESSAGING","textShapes":17}
+{"kind":"textbox","id":"sh/wfud0nqt","slide":8,"text":"VOICE AND MESSAGING","textPreview":"VOICE AND MESSAGING","textChars":19,"textLines":1,"bbox":[72,42,440,24]}
+{"kind":"textbox","id":"sh/velc7i9o","slide":8,"name":"slide-title","text":"A focused voice earns trust in two languages","textPreview":"A focused voice earns trust in two languages","textChars":44,"textLines":1,"bbox":[72,76,1050,64]}
+{"kind":"shape","id":"sh/udcvyd83","slide":8,"bbox":[72,148,96,4]}
+{"kind":"textbox","id":"sh/9c3u5sri","slide":8,"text":"08","textPreview":"08","textChars":2,"textLines":1,"bbox":[1162,46,46,22]}
+{"kind":"textbox","id":"sh/8rudwnqx","slide":8,"text":"DIRECT","textPreview":"DIRECT","textChars":6,"textLines":1,"bbox":[72,204,210,24]}
+{"kind":"textbox","id":"sh/7qlc3i9c","slide":8,"text":"Lead with the outcome.","textPreview":"Lead with the outcome.","textChars":22,"textLines":1,"bbox":[270,202,420,34]}
+{"kind":"textbox","id":"sh/mpsvud8r","slide":8,"text":"CAPABLE","textPreview":"CAPABLE","textChars":7,"textLines":1,"bbox":[72,274,210,24]}
+{"kind":"textbox","id":"sh/t8nehcrm","slide":8,"text":"Explain the operational path.","textPreview":"Explain the operational path.","textChars":29,"textLines":1,"bbox":[270,272,420,34]}
+{"kind":"textbox","id":"sh/sned87q1","slide":8,"text":"REGION-AWARE","textPreview":"REGION-AWARE","textChars":12,"textLines":1,"bbox":[72,344,210,24]}
+{"kind":"textbox","id":"sh/idkvax83","slide":8,"text":"Respect local markets and language.","textPreview":"Respect local markets and language.","textChars":35,"textLines":1,"bbox":[270,342,420,34]}
+{"kind":"textbox","id":"sh/jetcj2po","slide":8,"text":"CALM","textPreview":"CALM","textChars":4,"textLines":1,"bbox":[72,414,210,24]}
+{"kind":"textbox","id":"sh/4z2dc7qt","slide":8,"text":"Never overstate security or performance.","textPreview":"Never overstate security or performance.","textChars":40,"textLines":1,"bbox":[270,412,420,34]}
+{"kind":"shape","id":"sh/50vuls7e","slide":8,"bbox":[744,202,414,300]}
+{"kind":"textbox","id":"sh/u9kv6d8r","slide":8,"text":"CORE LINE","textPreview":"CORE LINE","textChars":9,"textLines":1,"bbox":[786,238,260,22]}
+{"kind":"textbox","id":"sh/vatcfipc","slide":8,"text":"Payment technology\nacross the Americas","textPreview":"Payment technology | across the Americas","textChars":38,"textLines":2,"bbox":[786,278,330,88]}
+{"kind":"textbox","id":"sh/wb2d8nqx","slide":8,"text":"SPANISH","textPreview":"SPANISH","textChars":7,"textLines":1,"bbox":[786,402,260,22]}
+{"kind":"textbox","id":"sh/hcbuhs7i","slide":8,"text":"Tecnología de pagos\npara las Américas","textPreview":"Tecnología de pagos | para las Américas","textChars":37,"textLines":2,"bbox":[786,438,330,66]}
+{"kind":"textbox","id":"sh/e54vih8b","slide":8,"text":"Prefer: connected, reliable, visible, adaptable. Avoid: revolutionary, frictionless, guaranteed, cheapest.","textPreview":"Prefer: connected, reliable, visible, adaptable. Avoid: revolutionary, frictionless, guaranteed, cheapest.","textChars":106,"textLines":1,"bbox":[72,584,1040,44]}
+{"kind":"textbox","id":"sh/f6dwrmpg","slide":8,"text":"CONTINENTAL PAYTECH  |  BRAND BOOK  |  VERSION 1.0","textPreview":"CONTINENTAL PAYTECH  |  BRAND BOOK  |  VERSION 1.0","textChars":50,"textLines":1,"bbox":[72,680,540,18]}
+{"kind":"notes","id":"nt/c6x2i4","slide":8,"text":"[Sources]"}
+{"kind":"slide","id":"sl/1eecur","slide":9,"title":"OFFER ARCHITECTURE","textShapes":19}
+{"kind":"textbox","id":"sh/l4za5onq","slide":9,"text":"OFFER ARCHITECTURE","textPreview":"OFFER ARCHITECTURE","textChars":18,"textLines":1,"bbox":[72,42,440,24]}
+{"kind":"textbox","id":"sh/y18ru94z","slide":9,"name":"slide-title","text":"Organize the offer around customer outcomes","textPreview":"Organize the offer around customer outcomes","textChars":43,"textLines":1,"bbox":[72,76,1050,64]}
+{"kind":"shape","id":"sh/j2hs3e5k","slide":9,"bbox":[72,148,96,4]}
+{"kind":"textbox","id":"sh/87a903m1","slide":9,"text":"09","textPreview":"09","textChars":2,"textLines":1,"bbox":[1162,46,46,22]}
+{"kind":"shape","id":"sh/t8ja9onm","slide":9,"bbox":[72,202,112,82]}
+{"kind":"textbox","id":"sh/658ryt4b","slide":9,"text":"PAY","textPreview":"PAY","textChars":3,"textLines":1,"bbox":[88,229,80,28]}
+{"kind":"textbox","id":"sh/76hs7y5w","slide":9,"text":"Payment devices","textPreview":"Payment devices","textChars":15,"textLines":1,"bbox":[214,215,330,34]}
+{"kind":"textbox","id":"sh/ob69ozmx","slide":9,"text":"Smart POS / PIN pads / unattended","textPreview":"Smart POS / PIN pads / unattended","textChars":33,"textLines":1,"bbox":[214,251,610,26]}
+{"kind":"shape","id":"sh/9cfqx4ni","slide":9,"bbox":[72,300,112,82]}
+{"kind":"textbox","id":"sh/d8fa1gju","slide":9,"text":"SERVE","textPreview":"SERVE","textChars":5,"textLines":1,"bbox":[88,327,80,28]}
+{"kind":"textbox","id":"sh/c76t8bi9","slide":9,"text":"Self-service","textPreview":"Self-service","textChars":12,"textLines":1,"bbox":[214,313,330,34]}
+{"kind":"textbox","id":"sh/r6xsf61o","slide":9,"text":"Kiosks / POS / peripherals","textPreview":"Kiosks / POS / peripherals","textChars":26,"textLines":1,"bbox":[214,349,610,26]}
+{"kind":"shape","id":"sh/q5ob6103","slide":9,"bbox":[72,398,112,82]}
+{"kind":"textbox","id":"sh/1wza5gzq","slide":9,"text":"MANAGE","textPreview":"MANAGE","textChars":6,"textLines":1,"bbox":[88,425,80,28]}
+{"kind":"textbox","id":"sh/0vqtcbi5","slide":9,"text":"Global Connect One","textPreview":"Global Connect One","textChars":18,"textLines":1,"bbox":[214,411,330,34]}
+{"kind":"textbox","id":"sh/zuhs361k","slide":9,"text":"Multi-brand TMS / fleet visibility","textPreview":"Multi-brand TMS / fleet visibility","textChars":34,"textLines":1,"bbox":[214,447,610,26]}
+{"kind":"shape","id":"sh/etobal0f","slide":9,"bbox":[72,496,112,82]}
+{"kind":"textbox","id":"sh/90za90z2","slide":9,"text":"CARE","textPreview":"CARE","textChars":4,"textLines":1,"bbox":[88,523,80,28]}
+{"kind":"textbox","id":"sh/8zqtgvih","slide":9,"text":"Lifecycle services","textPreview":"Lifecycle services","textChars":18,"textLines":1,"bbox":[214,509,330,34]}
+{"kind":"textbox","id":"sh/sfils3up","slide":9,"text":"Deployment / support / renewal","textPreview":"Deployment / support / renewal","textChars":30,"textLines":1,"bbox":[214,545,610,26]}
+{"kind":"textbox","id":"sh/tgrm1oba","slide":9,"text":"Master brand","textPreview":"Master brand","textChars":12,"textLines":1,"bbox":[908,208,220,22]}
+{"kind":"textbox","id":"sh/6d03qtcj","slide":9,"text":"Continental\nPayTech","textPreview":"Continental | PayTech","textChars":19,"textLines":2,"bbox":[908,246,240,76]}
+{"kind":"shape","id":"sh/7e94zyt4","slide":9,"bbox":[908,340,120,4]}
+{"kind":"textbox","id":"sh/gj2lw3u1","slide":9,"text":"One commercial relationship.\nFour clear solution families.","textPreview":"One commercial relationship. | Four clear solution families.","textChars":58,"textLines":2,"bbox":[908,370,250,72]}
+{"kind":"textbox","id":"sh/hkbm58b6","slide":9,"text":"CONTINENTAL PAYTECH  |  BRAND BOOK  |  VERSION 1.0","textPreview":"CONTINENTAL PAYTECH  |  BRAND BOOK  |  VERSION 1.0","textChars":50,"textLines":1,"bbox":[72,680,540,18]}
+{"kind":"notes","id":"nt/1eecur","slide":9,"text":"[Sources]\n- https://www.nexgoglobal.com/\n- https://www.fecpos.com/"}
+{"kind":"slide","id":"sl/8k3mnz","slide":10,"title":"PRODUCT BRAND","textShapes":13}
+{"kind":"textbox","id":"sh/hojapwjm","slide":10,"text":"PRODUCT BRAND","textPreview":"PRODUCT BRAND","textChars":13,"textLines":1,"bbox":[72,42,440,24]}
+{"kind":"textbox","id":"sh/u18rehkb","slide":10,"name":"slide-title","text":"Global Connect One is the signature platform","textPreview":"Global Connect One is the signature platform","textChars":44,"textLines":1,"bbox":[72,76,1050,64]}
+{"kind":"shape","id":"sh/f2h8nm1w","slide":10,"bbox":[72,148,96,4]}
+{"kind":"textbox","id":"sh/4ra9kb2d","slide":10,"text":"10","textPreview":"10","textChars":2,"textLines":1,"bbox":[1162,46,46,22]}
+{"kind":"textbox","id":"sh/psjatwjy","slide":10,"text":"GLOBAL","textPreview":"GLOBAL","textChars":6,"textLines":1,"bbox":[72,228,460,54]}
+{"kind":"textbox","id":"sh/2psri1k7","slide":10,"text":"CONNECT ONE","textPreview":"CONNECT ONE","textChars":11,"textLines":1,"bbox":[72,282,520,62]}
+{"kind":"textbox","id":"sh/3q1sr61s","slide":10,"text":"by Continental PayTech","textPreview":"by Continental PayTech","textChars":22,"textLines":1,"bbox":[72,360,420,30]}
+{"kind":"shape","id":"sh/kv698729","slide":10,"bbox":[650,196,490,414]}
+{"kind":"textbox","id":"sh/5wzqhcju","slide":10,"text":"CATEGORY","textPreview":"CATEGORY","textChars":8,"textLines":1,"bbox":[694,228,390,20]}
+{"kind":"textbox","id":"sh/hsnu1o32","slide":10,"text":"Multi-brand terminal management system","textPreview":"Multi-brand terminal management system","textChars":38,"textLines":1,"bbox":[694,254,390,58]}
+{"kind":"textbox","id":"sh/gredsj2h","slide":10,"text":"PROMISE","textPreview":"PROMISE","textChars":7,"textLines":1,"bbox":[694,346,390,20]}
+{"kind":"textbox","id":"sh/fqlczelw","slide":10,"text":"One operational view across diverse device fleets.","textPreview":"One operational view across diverse device fleets.","textChars":50,"textLines":1,"bbox":[694,372,390,58]}
+{"kind":"textbox","id":"sh/upcbqtkr","slide":10,"text":"Naming rule","textPreview":"Naming rule","textChars":11,"textLines":1,"bbox":[694,472,160,20]}
+{"kind":"textbox","id":"sh/pgnu583e","slide":10,"text":"First mention: Global Connect One by Continental PayTech\nLater mentions: Global Connect One","textPreview":"First mention: Global Connect One by Continental PayTech | Later mentions: Global Connect One","textChars":91,"textLines":2,"bbox":[694,502,400,72]}
+{"kind":"textbox","id":"sh/ofedw32t","slide":10,"text":"CONTINENTAL PAYTECH  |  BRAND BOOK  |  VERSION 1.0","textPreview":"CONTINENTAL PAYTECH  |  BRAND BOOK  |  VERSION 1.0","textChars":50,"textLines":1,"bbox":[72,680,540,18]}
+{"kind":"notes","id":"nt/8k3mnz","slide":10,"text":"[Sources]"}
+{"kind":"slide","id":"sl/fakpxi","slide":11,"title":"BRAND IN USE","textShapes":11}
+{"kind":"textbox","id":"sh/lcj6ps3u","slide":11,"text":"BRAND IN USE","textPreview":"BRAND IN USE","textChars":12,"textLines":1,"bbox":[72,42,440,24]}
+{"kind":"textbox","id":"sh/yp87edk3","slide":11,"name":"slide-title","text":"Applications make the identity tangible","textPreview":"Applications make the identity tangible","textChars":39,"textLines":1,"bbox":[72,76,1050,64]}
+{"kind":"shape","id":"sh/zahonilo","slide":11,"bbox":[72,148,96,4]}
+{"kind":"textbox","id":"sh/8fapk72l","slide":11,"text":"11","textPreview":"11","textChars":2,"textLines":1,"bbox":[1162,46,46,22]}
+{"kind":"shape","id":"sh/9gjqtc3q","slide":11,"bbox":[72,202,540,178]}
+{"kind":"textbox","id":"sh/ne18r2l0","slide":11,"text":"Maria Alvarez","textPreview":"Maria Alvarez","textChars":13,"textLines":1,"bbox":[214,228,250,28]}
+{"kind":"textbox","id":"sh/ojqp8321","slide":11,"text":"Regional Sales Director\nContinental PayTech\n+1 510 555 0142\nmaria.alvarez@continentalpaytech.com","textPreview":"Regional Sales Director | Continental PayTech | +1 510 555 0142 | maria.alvarez@continentalpaytech.com","textChars":96,"textLines":4,"bbox":[214,264,350,96]}
+{"kind":"shape","id":"sh/pkz6h83m","slide":11,"bbox":[650,202,510,178]}
+{"kind":"textbox","id":"sh/hkvuhofi","slide":11,"text":"Payment technology\nacross the Americas","textPreview":"Payment technology | across the Americas","textChars":38,"textLines":2,"bbox":[690,238,380,70]}
+{"kind":"textbox","id":"sh/gjmt8jyx","slide":11,"text":"continentalpaytech.com","textPreview":"continentalpaytech.com","textChars":22,"textLines":1,"bbox":[690,326,290,24]}
+{"kind":"shape","id":"sh/vitcfexc","slide":11,"bbox":[72,420,1088,156]}
+{"kind":"textbox","id":"sh/58vul8fu","slide":11,"text":"GLOBAL CONNECT ONE","textPreview":"GLOBAL CONNECT ONE","textChars":18,"textLines":1,"bbox":[242,448,420,36]}
+{"kind":"textbox","id":"sh/47mtc3y9","slide":11,"text":"Connecting secure device operations","textPreview":"Connecting secure device operations","textChars":35,"textLines":1,"bbox":[242,492,420,28]}
+{"kind":"shape","id":"sh/36dcjyxo","slide":11,"bbox":[930,468,160,12]}
+{"kind":"shape","id":"sh/i54batg3","slide":11,"bbox":[930,468,98,12]}
+{"kind":"textbox","id":"sh/dcfup8fq","slide":11,"text":"DEVICE SPLASH","textPreview":"DEVICE SPLASH","textChars":13,"textLines":1,"bbox":[930,510,160,18]}
+{"kind":"textbox","id":"sh/sb6dg3y5","slide":11,"text":"CONTINENTAL PAYTECH  |  BRAND BOOK  |  VERSION 1.0","textPreview":"CONTINENTAL PAYTECH  |  BRAND BOOK  |  VERSION 1.0","textChars":50,"textLines":1,"bbox":[72,680,540,18]}
+{"kind":"image","id":"im/7m5cbepo","slide":11,"name":"","alt":"Continental PayTech symbol in email signature","bbox":[98,230,92,96]}
+{"kind":"image","id":"im/pkf6lw7a","slide":11,"name":"","alt":"Continental PayTech symbol on a device splash screen","bbox":[102,440,100,104]}
+{"kind":"notes","id":"nt/fakpxi","slide":11,"text":"[Sources]"}
+{"kind":"slide","id":"sl/pkavva","slide":12,"title":"GOVERNANCE","textShapes":18}
+{"kind":"textbox","id":"sh/n2l47mlw","slide":12,"text":"GOVERNANCE","textPreview":"GOVERNANCE","textChars":10,"textLines":1,"bbox":[72,42,440,24]}
+{"kind":"textbox","id":"sh/o3u50rmh","slide":12,"name":"slide-title","text":"Secure the identity before public launch","textPreview":"Secure the identity before public launch","textChars":40,"textLines":1,"bbox":[72,76,1050,64]}
+{"kind":"shape","id":"sh/943m9w32","slide":12,"bbox":[72,148,96,4]}
+{"kind":"textbox","id":"sh/a5cn214n","slide":12,"text":"12","textPreview":"12","textChars":2,"textLines":1,"bbox":[1162,46,46,22]}
+{"kind":"textbox","id":"sh/b6l4b6l8","slide":12,"text":"01","textPreview":"01","textChars":2,"textLines":1,"bbox":[72,196,48,28]}
+{"kind":"textbox","id":"sh/w7e54bmt","slide":12,"text":"Register","textPreview":"Register","textChars":8,"textLines":1,"bbox":[142,194,170,32]}
+{"kind":"textbox","id":"sh/xsnmdg3e","slide":12,"text":"Acquire continentalpaytech.com as primary and continentalpay.tech as a defensive redirect.","textPreview":"Acquire continentalpaytech.com as primary and continentalpay.tech as a defensive redirect.","textChars":90,"textLines":1,"bbox":[330,196,760,44]}
+{"kind":"textbox","id":"sh/q9s3qx4j","slide":12,"text":"02","textPreview":"02","textChars":2,"textLines":1,"bbox":[72,280,48,28]}
+{"kind":"textbox","id":"sh/ra14z2l4","slide":12,"text":"Clear","textPreview":"Clear","textChars":5,"textLines":1,"bbox":[142,278,170,32]}
+{"kind":"textbox","id":"sh/jm9sbm54","slide":12,"text":"Complete California entity, USPTO and international trademark screening.","textPreview":"Complete California entity, USPTO and international trademark screening.","textChars":72,"textLines":1,"bbox":[330,280,760,44]}
+{"kind":"textbox","id":"sh/ilgb2hoj","slide":12,"text":"03","textPreview":"03","textChars":2,"textLines":1,"bbox":[72,364,48,28]}
+{"kind":"textbox","id":"sh/58radwnu","slide":12,"text":"Prepare","textPreview":"Prepare","textChars":7,"textLines":1,"bbox":[142,362,170,32]}
+{"kind":"textbox","id":"sh/knit4r69","slide":12,"text":"Create production SVG and EPS masters, then test accessibility and small-size use.","textPreview":"Create production SVG and EPS masters, then test accessibility and small-size use.","textChars":82,"textLines":1,"bbox":[330,364,760,44]}
+{"kind":"textbox","id":"sh/vips7m5s","slide":12,"text":"04","textPreview":"04","textChars":2,"textLines":1,"bbox":[72,448,48,28]}
+{"kind":"textbox","id":"sh/ahgryho7","slide":12,"text":"Deploy","textPreview":"Deploy","textChars":6,"textLines":1,"bbox":[142,446,170,32]}
+{"kind":"textbox","id":"sh/xk7a9wny","slide":12,"text":"Standardize email, proposals, website, device screens and partner materials.","textPreview":"Standardize email, proposals, website, device screens and partner materials.","textChars":76,"textLines":1,"bbox":[330,448,760,44]}
+{"kind":"shape","id":"sh/wjyt0r6d","slide":12,"bbox":[72,550,1088,78]}
+{"kind":"textbox","id":"sh/ne5s325w","slide":12,"text":"Clearance note","textPreview":"Clearance note","textChars":14,"textLines":1,"bbox":[96,570,150,22]}
+{"kind":"textbox","id":"sh/mdwruxob","slide":12,"text":"A California company named Continental Payment Solutions appears in Euronet's subsidiary list. Counsel should assess similarity risk before filing or spending on launch.","textPreview":"A California company named Continental Payment Solutions appears in Euronet's subsidiary list. Counsel should assess similarity risk befo...","textChars":169,"textLines":1,"bbox":[250,562,870,48]}
+{"kind":"textbox","id":"sh/qpwbmx83","slide":12,"text":"CONTINENTAL PAYTECH  |  BRAND BOOK  |  VERSION 1.0","textPreview":"CONTINENTAL PAYTECH  |  BRAND BOOK  |  VERSION 1.0","textChars":50,"textLines":1,"bbox":[72,680,540,18]}
+{"kind":"notes","id":"nt/pkavva","slide":12,"text":"[Sources]\n- https://www.sec.gov/Archives/edgar/data/1029199/000121390025017068/ex211_2.htm"}
+{"kind":"slide","id":"sl/aphah7","slide":13,"title":"Payment technology across the Americas","textShapes":3}
+{"kind":"textbox","id":"sh/sr6dkfed","slide":13,"text":"Payment technology across the Americas","textPreview":"Payment technology across the Americas","textChars":38,"textLines":1,"bbox":[220,430,840,56]}
+{"kind":"textbox","id":"sh/tsfudkvy","slide":13,"text":"continentalpaytech.com","textPreview":"continentalpaytech.com","textChars":22,"textLines":1,"bbox":[400,516,480,38]}
+{"kind":"shape","id":"sh/ut8vmpwj","slide":13,"bbox":[540,586,200,4]}
+{"kind":"textbox","id":"sh/fuhcfud4","slide":13,"text":"CONTINENTAL PAYMENT TECHNOLOGIES, INC.","textPreview":"CONTINENTAL PAYMENT TECHNOLOGIES, INC.","textChars":38,"textLines":1,"bbox":[370,642,540,20]}
+{"kind":"image","id":"im/ah4vqp47","slide":13,"name":"","alt":"Continental PayTech brand symbol","bbox":[500,92,280,292]}
+{"kind":"notes","id":"nt/aphah7","slide":13,"text":"[Sources]"}

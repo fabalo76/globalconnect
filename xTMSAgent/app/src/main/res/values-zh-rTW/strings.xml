@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="store_title">Global Connect 商店</string>
+    <string name="store_back">返回</string>
+    <string name="store_bank_scope">銀行商店</string>
+    <string name="store_group_scope">此裝置群組所選用的商店</string>
+    <string name="store_empty">此裝置目前沒有可用的應用程式。</string>
+    <string name="store_retry">重試</string>
+    <string name="store_version">版本 %1$s</string>
+    <string name="store_install">安裝</string>
+    <string name="store_update">更新</string>
+    <string name="store_open">開啟</string>
+    <string name="store_installing">安裝中</string>
+    <string name="store_download_progress">下載 %1$d%%</string>
+    <string name="store_error_generic">商店目前無法使用。</string>
+    <string name="store_install_failed">無法安裝應用程式。</string>
+</resources>

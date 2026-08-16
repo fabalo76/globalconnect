@@ -36,7 +36,8 @@ data class TMS_Acquirer(
     var blockFallbackToBins: String = "",
     var emvFeature: Boolean = false,
     var allowFallback: Boolean = false,
-    var enableBalance: Boolean = false
+    var enableBalance: Boolean = false,
+    var pinType: Int = 0,
 ) {
     val AcqID: String get() = acquirer_id
     @get:JvmName("getLegacyAcquirerName")
@@ -73,6 +74,8 @@ data class TMS_Acquirer(
     val EnableCheckin: Boolean get() = enableCheckInOut
     @get:JvmName("getLegacyEnableBalance")
     val EnableBalance: Boolean get() = enableBalance
+    val PINType: Int get() = pinType
+    val supportsDukptOnlinePin: Boolean get() = pinType == PIN_TYPE_DUKPT || pinType == PIN_TYPE_DUKPT_DYNAMIC
 
     companion object {
         fun fromJson(json: JSONObject): TMS_Acquirer {
@@ -108,7 +111,8 @@ data class TMS_Acquirer(
                 blockFallbackToBins = TMS_Json.readString(json, "blockFallbackToBins"),
                 emvFeature = TMS_Json.readBooleanDefault(json, "emvFeature", true),
                 allowFallback = TMS_Json.readBooleanDefault(json, "allowFallback", true),
-                enableBalance = TMS_Json.readBoolean(json, "enableBalance")
+                enableBalance = TMS_Json.readBoolean(json, "enableBalance"),
+                pinType = TMS_Json.readLongAny(json, "pinType", "PINType").toInt(),
             )
         }
 
@@ -121,5 +125,8 @@ data class TMS_Acquirer(
             }
             return items
         }
+
+        private const val PIN_TYPE_DUKPT = 3
+        private const val PIN_TYPE_DUKPT_DYNAMIC = 4
     }
 }

@@ -153,8 +153,14 @@ class GlobalConnectPaymentApplication : Application() {
             // Signal params ready before marking init complete so the UI skips
             // the waiting screen on subsequent launches where params are cached.
             if (tmsDatabase.Terminal.isNotEmpty()) {
-                val aidList = EmvConfigBuilder.buildAidList(tmsDatabase.AIDtab, tmsDatabase.PCDApps)
-                NexgoApi.applyEmvAidList(aidList)
+                val terminalOnlinePinCap = tmsDatabase.Terminal.first().onlinePinCap
+                val aidList = EmvConfigBuilder.buildAidList(
+                    tmsDatabase.AIDtab,
+                    tmsDatabase.PCDApps,
+                    terminalOnlinePinCap,
+                )
+                NexgoApi.applyEmvAidList(aidList, terminalOnlinePinCap)
+                NexgoApi.applyAcquirerPinTypes(tmsDatabase.Acquirer.map { it.PINType })
                 _paramsReadyFlow.value = true
                 launch(Dispatchers.Main) {
                     BrandingAnimationCache.prewarm(this@GlobalConnectPaymentApplication, tmsDatabase)
@@ -287,8 +293,14 @@ class GlobalConnectPaymentApplication : Application() {
             BrandingAnimationCache.prewarm(this@GlobalConnectPaymentApplication, newDatabase)
         }
 
-        val aidList = EmvConfigBuilder.buildAidList(newDatabase.AIDtab, newDatabase.PCDApps)
-        NexgoApi.applyEmvAidList(aidList)
+        val terminalOnlinePinCap = newDatabase.Terminal.firstOrNull()?.onlinePinCap ?: true
+        val aidList = EmvConfigBuilder.buildAidList(
+            newDatabase.AIDtab,
+            newDatabase.PCDApps,
+            terminalOnlinePinCap,
+        )
+        NexgoApi.applyEmvAidList(aidList, terminalOnlinePinCap)
+        NexgoApi.applyAcquirerPinTypes(newDatabase.Acquirer.map { it.PINType })
 
         return true
     }
@@ -325,6 +337,7 @@ class GlobalConnectPaymentApplication : Application() {
                     "sale=${terminal.enableSale} refund=${terminal.enableRefund} cash=${terminal.enableCash} " +
                     "tax1=${terminal.tax1Enabled}/${terminal.tax1Mandatory} tax2=${terminal.tax2Enabled}/${terminal.tax2Mandatory} " +
                     "tipMode=${terminal.tipProcessingMode} capkMode=${terminal.capkMode} " +
+                    "onlinePinCap=${terminal.onlinePinCap} " +
                     "tranReporting=${terminal.tranReportingMethod} batchSize=${terminal.tranReportingBatchSize} " +
                     "intervalSeconds=${terminal.tranReportingIntervalSeconds} acquirers=${terminal.acquirer.size}"
             )

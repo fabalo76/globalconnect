@@ -128,4 +128,18 @@
     <string name="task_application">Aplicación</string>
     <string name="app_update_deferred">Actualización diferida (terminal ocupada): %1$s</string>
     <string name="accessibility_service_description">Permite que el control remoto de TMS envie eventos tactiles y de teclado durante una sesion de soporte remoto.</string>
+    <string name="store_title">Global Connect Store</string>
+    <string name="store_back">Volver</string>
+    <string name="store_bank_scope">Tienda del banco</string>
+    <string name="store_group_scope">Tienda seleccionada para este grupo de dispositivos</string>
+    <string name="store_empty">No hay aplicaciones disponibles para este dispositivo.</string>
+    <string name="store_retry">Reintentar</string>
+    <string name="store_version">Versión %1$s</string>
+    <string name="store_install">Instalar</string>
+    <string name="store_update">Actualizar</string>
+    <string name="store_open">Abrir</string>
+    <string name="store_installing">Instalando</string>
+    <string name="store_download_progress">Descarga %1$d%%</string>
+    <string name="store_error_generic">La tienda no está disponible.</string>
+    <string name="store_install_failed">No se pudo instalar la aplicación.</string>
 </resources>

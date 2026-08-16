@@ -917,6 +917,12 @@
     <string name="pin_entry_cancel">Cancel</string>
     <string name="pin_entry_clear">Clear</string>
     <string name="pin_entry_enter">Enter</string>
+    <string name="pin_entry_secure_keypad_hint">Use the secure keypad below</string>
+    <string name="online_pin_error_no_acquirer_pin_type">Card requested Online PIN, but no supported PIN type is configured for the acquirer.</string>
+    <string name="online_pin_error_no_selected_acquirer_pin_type">Card requested Online PIN, but the selected acquirer has no supported PIN type configured.</string>
+    <string name="online_pin_error_missing_pan">Card requested Online PIN, but the card number was unavailable to the internal PIN pad.</string>
+    <string name="online_pin_error_internal_pinpad">Card requested Online PIN, but there was an error in the internal PIN pad.</string>
+    <string name="offline_pin_error_internal_pinpad">There was an error in the internal PIN pad while obtaining Offline PIN.</string>
     <string name="Tax">Tax</string>
     <string name="Tax_Discount">Tax Discount</string>
     <string name="Tax2">Tax 2</string>

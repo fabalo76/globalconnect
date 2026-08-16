@@ -25,12 +25,12 @@ android {
     namespace = "one.globalconnect.paymentapp"
     compileSdk = 36
     // Define the common version number
-    def baseVersion = "6.15"
+    def baseVersion = "6.16"
     defaultConfig {
         applicationId = "one.globalconnect.paymentapp"
         minSdk = 26
         targetSdk = 36
-        versionCode = 215
+        versionCode = 216
         versionName = "(N)$baseVersion" // Default version name
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"

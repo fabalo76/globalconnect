@@ -19,12 +19,11 @@
 # If you keep the line number information, uncomment this to
 # hide the original source file name.
 #-renamesourcefileattribute SourceFile
+# Keep warning and error diagnostics so release payment failures and declines remain actionable.
 -assumenosideeffects class android.util.Log {
     public static *** d(...);
     public static *** v(...);
-    public static *** w(...);
     public static *** i(...);
-    public static *** e(...);
 }
 
 -keep class com.nexgo.** { *; }

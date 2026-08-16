@@ -18,7 +18,6 @@ import one.globalconnect.paymentapp.cardreader.nexgo.EmvTransactionRequest
 import one.globalconnect.paymentapp.cardreader.nexgo.MagstripeData
 import one.globalconnect.paymentapp.cardreader.nexgo.NexgoApi
 import one.globalconnect.paymentapp.cardreader.nexgo.NexgoSdkResult
-import one.globalconnect.paymentapp.cardreader.nexgo.PinStatus
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -85,9 +84,6 @@ class CardReaderViewModel(
     init {
         Log.d(TAG, "CardReaderViewModel init assigning listeners")
         nexgoApi.transactionListener = transactionListener
-        nexgoApi.pinEntryHandler = { _, _ ->
-            // Intentionally no UI; PIN entry is automatically bypassed for the test flow.
-        }
         Log.d(TAG, "CardReaderViewModel init complete")
     }
 
@@ -215,7 +211,6 @@ class CardReaderViewModel(
             Log.w(TAG, "Failed to cancel card transaction on clear", error)
         }
         nexgoApi.transactionListener = null
-        nexgoApi.pinEntryHandler = null
         Log.d(TAG, "onCleared released Nexgo API listeners")
         super.onCleared()
     }
@@ -250,7 +245,7 @@ class CardReaderViewModel(
     }
 
     private fun parseEmvData(raw: String?): EmvData {
-        Log.d(TAG, "parseEmvData raw=${raw}")
+        Log.d(TAG, "parseEmvData rawLength=${raw?.length}")
         if (raw.isNullOrBlank()) {
             return EmvData()
         }
@@ -431,6 +426,7 @@ class CardReaderViewModel(
             expiryDate = base.expiryDate ?: derived.expiryDate,
             serviceCode = base.serviceCode ?: derived.serviceCode,
             csn = base.csn ?: derived.cardSequenceNumber,
+            onlinePinRequested = NexgoApi.pinData.onlinePinRequested,
         ) ?: CardReadResult(
             returnCode = retCode,
             slotType = slot,
@@ -446,6 +442,7 @@ class CardReaderViewModel(
             csn = derived.cardSequenceNumber,
             emvTags = emvData.tags,
             rawEmvData = emvData.rawTlv,
+            onlinePinRequested = NexgoApi.pinData.onlinePinRequested,
         )
     }
 
@@ -591,7 +588,7 @@ class CardReaderViewModel(
     }
 
     private fun parseTrack2Components(track2: String?): Track2Components {
-        Log.d(TAG, "parseTrack2Components track2=${track2?.take(32)}")
+        Log.d(TAG, "parseTrack2Components track2Length=${track2?.length}")
         if (track2.isNullOrBlank()) {
             return Track2Components()
         }
@@ -679,13 +676,6 @@ class CardReaderViewModel(
 
         override fun onPinRequested(isOnlinePin: Boolean, attemptsRemaining: Int) {
             Log.d(TAG, "onPinRequested online=$isOnlinePin attemptsRemaining=$attemptsRemaining")
-            try {
-                NexgoApi.pinData.status = PinStatus.BYPASSED
-                NexgoApi.pinEntryDone = true
-                NexgoApi.emvHandler?.onSetPinInputResponse(true, true)
-            } catch (error: Throwable) {
-                Log.w(TAG, "Unable to respond to PIN request", error)
-            }
         }
 
         override fun onOnlineProcessing() {
@@ -728,8 +718,11 @@ class CardReaderViewModel(
             val status = if (resultCode == SdkResult.Success) {
                 CardReaderStatus.Success
             } else {
-                Log.w(TAG, "EMV result: $sdkName ($resultCode) — ${NexgoSdkResult.friendlyMessage(resultCode)}")
-                CardReaderStatus.Error(NexgoSdkResult.friendlyMessage(resultCode))
+                val errorMessage = NexgoApi.pinData.errorMessage.ifBlank {
+                    NexgoSdkResult.friendlyMessage(resultCode)
+                }
+                Log.w(TAG, "EMV result: $sdkName ($resultCode) — $errorMessage")
+                CardReaderStatus.Error(errorMessage)
             }
             finishTransaction(status, cardResult)
         }
@@ -821,6 +814,7 @@ data class CardReadResult(
     val csn: String?,
     val emvTags: List<EmvTag> = emptyList(),
     val rawEmvData: String? = null,
+    val onlinePinRequested: Boolean = false,
 )
 
 data class EmvTag(

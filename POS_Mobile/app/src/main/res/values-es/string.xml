@@ -912,6 +912,12 @@
     <string name="pin_entry_cancel">Cancelar</string>
     <string name="pin_entry_clear">Limpiar</string>
     <string name="pin_entry_enter">Ingresar</string>
+    <string name="pin_entry_secure_keypad_hint">Use el teclado seguro que aparece abajo</string>
+    <string name="online_pin_error_no_acquirer_pin_type">La tarjeta solicitó NIP en línea, pero el adquirente no tiene configurado un tipo de NIP compatible.</string>
+    <string name="online_pin_error_no_selected_acquirer_pin_type">La tarjeta solicitó NIP en línea, pero el adquirente seleccionado no tiene configurado un tipo de NIP compatible.</string>
+    <string name="online_pin_error_missing_pan">La tarjeta solicitó NIP en línea, pero el número de tarjeta no estaba disponible para el PIN pad interno.</string>
+    <string name="online_pin_error_internal_pinpad">La tarjeta solicitó NIP en línea, pero ocurrió un error en el PIN pad interno.</string>
+    <string name="offline_pin_error_internal_pinpad">Ocurrió un error en el PIN pad interno al obtener el NIP fuera de línea.</string>
     <string name="Tax">Impuesto</string>
     <string name="Tax_Discount">Desc. Impuesto</string>
     <string name="Tax2">Otros Imp.</string>

@@ -16,10 +16,14 @@ internal data class PinData(
     var status: PinStatus = PinStatus.NA,
     var pinBlock: String = "",
     var ksn: String = "",
+    var onlinePinRequested: Boolean = false,
+    var errorMessage: String = "",
 ) {
     fun clear() {
         status = PinStatus.NA
         pinBlock = ""
         ksn = ""
+        onlinePinRequested = false
+        errorMessage = ""
     }
 }

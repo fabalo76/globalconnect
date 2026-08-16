@@ -15,6 +15,7 @@ This project is an Android Studio Kotlin application. Follow these expectations 
 
 ## Testing & Verification
 - Run `./gradlew lint` and `./gradlew test` when feasible before submitting changes.
+- Install debug variants on development devices unless release behavior is explicitly being validated.
 - Note any skipped checks, emulator limitations, or manual validation steps in the PR description.
 
 ## PR Expectations

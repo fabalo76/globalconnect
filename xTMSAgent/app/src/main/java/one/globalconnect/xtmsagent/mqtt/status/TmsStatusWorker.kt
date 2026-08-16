@@ -14,6 +14,7 @@ import android.os.BatteryManager
 import android.os.Build
 import android.os.Bundle
 import android.os.HandlerThread
+import android.net.TrafficStats
 import android.telephony.SubscriptionManager
 import android.telephony.TelephonyManager
 import android.util.Log
@@ -75,6 +76,7 @@ class TmsStatusWorker(
             // Omit   entirely otherwise.
             readLocalIpAddress()?.let { put("pip", it) }
             put("net", readNetworkMedia(applicationContext))
+            putTrafficCounters(this)
             val store = TmsCredentialStore(applicationContext)
             when {
                 store.isSelfUnlockPending() -> {
@@ -152,6 +154,7 @@ class TmsStatusWorker(
                 }
                 readLocalIpAddress()?.let { put("pip", it) }
                 put("net", readNetworkMedia(context))
+                putTrafficCounters(this)
                 val store = TmsCredentialStore(context)
                 when {
                     store.isSelfUnlockPending() -> {
@@ -258,6 +261,22 @@ class TmsStatusWorker(
                 Log.w(TAG, "Battery level unavailable: ${e.message}")
                 -1
             }
+        }
+
+        private fun putTrafficCounters(json: JSONObject) {
+            val totalRx = TrafficStats.getTotalRxBytes()
+            val totalTx = TrafficStats.getTotalTxBytes()
+            val mobileRx = TrafficStats.getMobileRxBytes()
+            val mobileTx = TrafficStats.getMobileTxBytes()
+            if (totalRx < 0 || totalTx < 0 || mobileRx < 0 || mobileTx < 0) {
+                Log.w(TAG, "Device traffic counters unavailable")
+                return
+            }
+
+            json.put("trx", totalRx)
+            json.put("ttx", totalTx)
+            json.put("mrx", mobileRx)
+            json.put("mtx", mobileTx)
         }
 
         /**

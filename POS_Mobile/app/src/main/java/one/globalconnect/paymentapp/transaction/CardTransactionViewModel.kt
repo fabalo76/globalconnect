@@ -384,6 +384,10 @@ class CardTransactionViewModel(
             TAG,
             "processTransaction option=${option.acquirer.AcqID} maskedPan=${cardData.maskedCardNumber} entry=${cardData.slotType}",
         )
+        if (cardData.onlinePinRequested && !option.acquirer.supportsDukptOnlinePin) {
+            showError(string(R.string.online_pin_error_no_selected_acquirer_pin_type))
+            return
+        }
         viewModelScope.launch {
             Log.d(TAG, "processTransaction coroutine started")
             val isoFactory = IsoMessageFactoryProvider.factoryFor()
@@ -539,7 +543,10 @@ class CardTransactionViewModel(
                     }
                 } else {
                     setProcessingResult(ProcessingStatusStepState.FAILED, responseMessage)
-                    Log.d(TAG, "processTransaction declined responseCode=$responseCode")
+                    Log.w(
+                        TAG,
+                        "Host declined transaction responseCode=$responseCode message=$responseMessage",
+                    )
                     showError(responseMessage)
                 }
 
@@ -1205,7 +1212,7 @@ class CardTransactionViewModel(
     }
 
     private fun showError(message: String) {
-        Log.d(TAG, "showError message=$message")
+        Log.w(TAG, "Transaction failed: $message")
         stopWaitingForResponseCountdown()
         _uiState.update {
             it.copy(

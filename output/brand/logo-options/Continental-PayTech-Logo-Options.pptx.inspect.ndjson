@@ -1,0 +1,37 @@
+{"kind":"deck","id":"pr/byrvrw","name":"Deck"}
+{"kind":"layout","layoutId":"e56e88f3-c052-4874-928f-4dcced462b27","name":"Master","type":"master"}
+{"kind":"layout","layoutId":"29f2796f-cee5-4a37-9f95-7bd26a42a3b2","name":"Title Slide","type":"title"}
+{"kind":"slide","id":"sl/8betlk","slide":1,"title":"LOGO EXPLORATION","textShapes":23}
+{"kind":"textbox","id":"sh/s72h03et","slide":1,"text":"LOGO EXPLORATION","textPreview":"LOGO EXPLORATION","textChars":16,"textLines":1,"bbox":[72,42,320,22]}
+{"kind":"textbox","id":"sh/rm90rid8","slide":1,"text":"Four new directions for Continental PayTech","textPreview":"Four new directions for Continental PayTech","textChars":43,"textLines":1,"bbox":[72,76,980,56]}
+{"kind":"shape","id":"sh/6l0zydwn","slide":1,"bbox":[72,148,96,4]}
+{"kind":"textbox","id":"sh/1cbixsva","slide":1,"text":"Primary domain: continentalpaytech.com","textPreview":"Primary domain: continentalpaytech.com","textChars":38,"textLines":1,"bbox":[780,48,428,22]}
+{"kind":"shape","id":"sh/gb2h4nep","slide":1,"bbox":[72,184,548,234]}
+{"kind":"textbox","id":"sh/e9kz2dwz","slide":1,"text":"OPTION A","textPreview":"OPTION A","textChars":8,"textLines":1,"bbox":[286,212,220,20]}
+{"kind":"textbox","id":"sh/pgvi1svm","slide":1,"text":"CPT Monogram","textPreview":"CPT Monogram","textChars":12,"textLines":1,"bbox":[286,242,300,34]}
+{"kind":"textbox","id":"sh/ofm18ne1","slide":1,"text":"CONTINENTAL","textPreview":"CONTINENTAL","textChars":11,"textLines":1,"bbox":[286,290,300,28]}
+{"kind":"textbox","id":"sh/2p0ze1sr","slide":1,"text":"PAYTECH","textPreview":"PAYTECH","textChars":7,"textLines":1,"bbox":[286,320,220,24]}
+{"kind":"textbox","id":"sh/3q9076tc","slide":1,"text":"Mnemonic / established / formal","textPreview":"Mnemonic / established / formal","textChars":31,"textLines":1,"bbox":[286,360,300,38]}
+{"kind":"shape","id":"sh/4rihgbax","slide":1,"bbox":[660,184,548,234]}
+{"kind":"textbox","id":"sh/qdkzi1s3","slide":1,"text":"OPTION B","textPreview":"OPTION B","textChars":8,"textLines":1,"bbox":[874,212,220,20]}
+{"kind":"textbox","id":"sh/ret0b6t8","slide":1,"text":"Market Columns","textPreview":"Market Columns","textChars":14,"textLines":1,"bbox":[874,242,300,34]}
+{"kind":"textbox","id":"sh/cf2hkbat","slide":1,"text":"CONTINENTAL","textPreview":"CONTINENTAL","textChars":11,"textLines":1,"bbox":[874,290,300,28]}
+{"kind":"textbox","id":"sh/dgbidgbe","slide":1,"text":"PAYTECH","textPreview":"PAYTECH","textChars":7,"textLines":1,"bbox":[874,320,220,24]}
+{"kind":"textbox","id":"sh/6hgz6hcj","slide":1,"text":"Distinctive / engineered / regional","textPreview":"Distinctive / engineered / regional","textChars":35,"textLines":1,"bbox":[874,360,300,38]}
+{"kind":"shape","id":"sh/7ipgzmt4","slide":1,"bbox":[72,446,548,234]}
+{"kind":"textbox","id":"sh/a1cvydsb","slide":1,"text":"OPTION C","textPreview":"OPTION C","textChars":8,"textLines":1,"bbox":[286,474,220,20]}
+{"kind":"textbox","id":"sh/xone9sr2","slide":1,"text":"Commerce Grid","textPreview":"Commerce Grid","textChars":13,"textLines":1,"bbox":[286,504,300,34]}
+{"kind":"textbox","id":"sh/wnex0nah","slide":1,"text":"CONTINENTAL","textPreview":"CONTINENTAL","textChars":11,"textLines":1,"bbox":[286,552,300,28]}
+{"kind":"textbox","id":"sh/nylw3y90","slide":1,"text":"PAYTECH","textPreview":"PAYTECH","textChars":7,"textLines":1,"bbox":[286,582,220,24]}
+{"kind":"textbox","id":"sh/mxcvutsf","slide":1,"text":"Modular / flexible / platform-led","textPreview":"Modular / flexible / platform-led","textChars":33,"textLines":1,"bbox":[286,622,300,38]}
+{"kind":"shape","id":"sh/903e58rq","slide":1,"bbox":[660,446,548,234]}
+{"kind":"textbox","id":"sh/7upwf294","slide":1,"text":"OPTION D","textPreview":"OPTION D","textChars":8,"textLines":1,"bbox":[874,474,220,20]}
+{"kind":"textbox","id":"sh/6twf6x8j","slide":1,"text":"CT Terminal","textPreview":"CT Terminal","textChars":11,"textLines":1,"bbox":[874,504,300,34]}
+{"kind":"textbox","id":"sh/4n6lkvmp","slide":1,"text":"CONTINENTAL","textPreview":"CONTINENTAL","textChars":11,"textLines":1,"bbox":[874,552,300,28]}
+{"kind":"textbox","id":"sh/5of2d03a","slide":1,"text":"PAYTECH","textPreview":"PAYTECH","textChars":7,"textLines":1,"bbox":[874,582,220,24]}
+{"kind":"textbox","id":"sh/i1ojil4z","slide":1,"text":"Compact / technological / device-ready","textPreview":"Compact / technological / device-ready","textChars":38,"textLines":1,"bbox":[874,622,300,38]}
+{"kind":"image","id":"im/6xcnat8z","slide":1,"name":"","alt":"Continental PayTech logo option A","bbox":[96,208,170,170]}
+{"kind":"image","id":"im/e9cz2p03","slide":1,"name":"","alt":"Continental PayTech logo option B","bbox":[684,208,170,170]}
+{"kind":"image","id":"im/gjqt4rup","slide":1,"name":"","alt":"Continental PayTech logo option C","bbox":[96,470,170,170]}
+{"kind":"image","id":"im/7uxsr2t8","slide":1,"name":"","alt":"Continental PayTech logo option D","bbox":[684,470,170,170]}
+{"kind":"notes","id":"nt/8betlk","slide":1,"text":"[Sources]\n- AI-generated logo concepts using the built-in image generation workflow.\n- Prompts specify flat geometric marks in #0B1F33, #00A7A5 and #F5A623 with no financial-service cliches."}

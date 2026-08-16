@@ -14,6 +14,7 @@ import com.nexgo.oaf.apiv3.device.reader.CardInfoEntity
 import com.nexgo.oaf.apiv3.device.reader.CardReader
 import com.nexgo.oaf.apiv3.device.reader.CardSlotTypeEnum
 import com.nexgo.oaf.apiv3.emv.AidEntity
+import com.nexgo.oaf.apiv3.emv.AidEntryModeEnum
 import com.nexgo.oaf.apiv3.emv.CapkEntity
 import com.nexgo.oaf.apiv3.emv.EmvDataSourceEnum
 import com.nexgo.oaf.apiv3.emv.EmvEntryModeEnum
@@ -22,6 +23,7 @@ import com.nexgo.oaf.apiv3.emv.EmvProcessFlowEnum
 import com.nexgo.oaf.apiv3.emv.EmvProcessResultEntity
 import com.nexgo.oaf.apiv3.emv.EmvTransConfigurationEntity
 import one.globalconnect.paymentapp.GlobalConnectPaymentApplication
+import one.globalconnect.paymentapp.R
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import java.util.Locale
@@ -79,6 +81,7 @@ class NexgoApi(
         contactlessDiscoverCard = false
         currentRequest = request
         currentCardInfo = null
+        pinData.clear()
 
         if (!transactionRunning.compareAndSet(false, true)) {
             Log.d(TAG, "startTransaction already running")
@@ -149,7 +152,10 @@ class NexgoApi(
             emvHandler?.onSetSelAppResponse(kernelResponse)
         }
         emvProcessListener.onTransInitBeforeGpo = ::handleTransInitBeforeGpo
-        emvProcessListener.onConfirmCardNo = {
+        emvProcessListener.onConfirmCardNo = { cardInfo ->
+            if (cardInfo != null) {
+                currentCardInfo = cardInfo
+            }
             Log.d(TAG, "emvProcessListener.onConfirmCardNo invoked")
             Log.d(TAG, "EMV_STEP onSetConfirmCardNoResponse confirmed=true")
             emvHandler?.onSetConfirmCardNoResponse(true)
@@ -336,14 +342,15 @@ class NexgoApi(
     }
 
     private fun configureContactlessParameters(handler: EmvHandler2, aid: ByteArray) {
-        Log.d(TAG, "configureContactlessParameters aid=${ByteUtils.byteArray2HexString(aid)}")
         val aidHex = ByteUtils.byteArray2HexString(aid)?.uppercase(Locale.US) ?: return
+        val onlinePinEnabled = isOnlinePinEnabledForContactlessAid(aidHex)
+        Log.d(TAG, "configureContactlessParameters aid=$aidHex onlinePinEnabled=$onlinePinEnabled")
         when {
-            aidHex.contains("A000000004") -> configPaypassParameter(handler, aid)
-            aidHex.contains("A000000003") -> configPaywaveParameters(handler)
+            aidHex.contains("A000000004") -> configPaypassParameter(handler, aid, onlinePinEnabled)
+            aidHex.contains("A000000003") -> configPaywaveParameters(handler, onlinePinEnabled)
             aidHex.contains("A000000025") -> configExpressPayParameter(handler)
             aidHex.contains("A000000152") -> {
-                configDpasParameter(handler)
+                configDpasParameter(handler, onlinePinEnabled)
                 contactlessDiscoverCard = true
             }
             aidHex.contains("A000000541") -> {
@@ -352,6 +359,17 @@ class NexgoApi(
             aidHex.contains("A000000065") -> configJcbContactlessParameter(handler)
             aidHex.contains("A000000333010108") -> configUnionPayParameter(handler)
         }
+    }
+
+    private fun isOnlinePinEnabledForContactlessAid(aidHex: String): Boolean {
+        val selectedAid = configuredAidList
+            .orEmpty()
+            .asSequence()
+            .filter { it.aidEntryModeEnum == AidEntryModeEnum.AID_ENTRY_CONTACTLESS }
+            .filter { aidHex.startsWith(it.aid.uppercase(Locale.US)) }
+            .maxByOrNull { it.aid.length }
+
+        return configuredTerminalOnlinePinCap && (selectedAid?.onlinePinCap ?: 1) == 1
     }
 
     private fun logEmvConfig(label: String, config: EmvTransConfigurationEntity) {
@@ -365,20 +383,23 @@ class NexgoApi(
         )
     }
 
-    private fun configPaywaveParameters(handler: EmvHandler2) {
-        Log.d(TAG, "configPaywaveParameters invoked")
+    private fun configPaywaveParameters(handler: EmvHandler2, onlinePinEnabled: Boolean) {
+        Log.d(TAG, "configPaywaveParameters invoked onlinePinEnabled=$onlinePinEnabled")
         val tag9F33 = byteArrayOf(0x9F.toByte(), 0x33.toByte())
         val tag9F66 = byteArrayOf(0x9F.toByte(), 0x66.toByte())
         val kernel9F33 = handler.getTlv(tag9F33, EmvDataSourceEnum.FROM_KERNEL)
         if (kernel9F33 != null && kernel9F33.size >= 2) {
-            kernel9F33[1] = (kernel9F33[1].toInt() or 0x60).toByte()
+            kernel9F33[1] = applyOnlinePinCvmCapability(
+                kernel9F33[1].toInt() or 0x60,
+                onlinePinEnabled,
+            ).toByte()
             handler.setTlv(tag9F33, kernel9F33)
         }
 
         val kernelTTQ = handler.getTlv(tag9F66, EmvDataSourceEnum.FROM_KERNEL)
         val ttq = ByteUtils.hexString2ByteArray("36004000")
         if (kernelTTQ != null && kernelTTQ.size >= 4 && ttq != null && ttq.size >= 4) {
-            kernelTTQ[0] = ttq[0]
+            kernelTTQ[0] = applyOnlinePinTtqCapability(ttq[0].toInt(), onlinePinEnabled).toByte()
             kernelTTQ[1] = ttq[1]
             kernelTTQ[2] = ttq[2]
             kernelTTQ[3] = ttq[3]
@@ -386,10 +407,15 @@ class NexgoApi(
         }
     }
 
-    private fun configPaypassParameter(handler: EmvHandler2, aid: ByteArray) {
+    private fun configPaypassParameter(
+        handler: EmvHandler2,
+        aid: ByteArray,
+        onlinePinEnabled: Boolean,
+    ) {
         Log.d(
             TAG,
-            "configPaypassParameter aid=${ByteUtils.byteArray2HexString(aid)} transType=${currentRequest?.transactionType}",
+            "configPaypassParameter aid=${ByteUtils.byteArray2HexString(aid)} " +
+                "transType=${currentRequest?.transactionType} onlinePinEnabled=$onlinePinEnabled",
         )
         val tagDf811b = byteArrayOf(0xDF.toByte(), 0x81.toByte(), 0x1B.toByte())
         handler.setTlv(tagDf811b, byteArrayOf(0xB0.toByte()))
@@ -413,7 +439,10 @@ class NexgoApi(
                 ByteUtils.hexString2ByteArray("4C7A800000000000")?.let {
                     handler.setTlv(byteArrayOf(0x9F.toByte(), 0x1D.toByte()), it)
                 }
-                handler.setTlv(byteArrayOf(0xDF.toByte(), 0x81.toByte(), 0x18.toByte()), byteArrayOf(0x40.toByte()))
+                handler.setTlv(
+                    byteArrayOf(0xDF.toByte(), 0x81.toByte(), 0x18.toByte()),
+                    byteArrayOf(applyOnlinePinCvmCapability(0x40, onlinePinEnabled).toByte()),
+                )
                 handler.setTlv(byteArrayOf(0xDF.toByte(), 0x81.toByte(), 0x19.toByte()), byteArrayOf(0x08.toByte()))
                 ByteUtils.hexString2ByteArray("F45004800C")?.let {
                     handler.setTlv(byteArrayOf(0xDF.toByte(), 0x81.toByte(), 0x20.toByte()), it)
@@ -430,7 +459,10 @@ class NexgoApi(
                 ByteUtils.hexString2ByteArray("6C7A800000000000")?.let {
                     handler.setTlv(byteArrayOf(0x9F.toByte(), 0x1D.toByte()), it)
                 }
-                handler.setTlv(byteArrayOf(0xDF.toByte(), 0x81.toByte(), 0x18.toByte()), byteArrayOf(0x60.toByte()))
+                handler.setTlv(
+                    byteArrayOf(0xDF.toByte(), 0x81.toByte(), 0x18.toByte()),
+                    byteArrayOf(applyOnlinePinCvmCapability(0x60, onlinePinEnabled).toByte()),
+                )
                 handler.setTlv(byteArrayOf(0xDF.toByte(), 0x81.toByte(), 0x19.toByte()), byteArrayOf(0x08.toByte()))
                 ByteUtils.hexString2ByteArray("F45084800C")?.let {
                     handler.setTlv(byteArrayOf(0xDF.toByte(), 0x81.toByte(), 0x20.toByte()), it)
@@ -451,7 +483,10 @@ class NexgoApi(
                 ByteUtils.hexString2ByteArray("487A800000000000")?.let {
                     handler.setTlv(byteArrayOf(0x9F.toByte(), 0x1D.toByte()), it)
                 }
-                handler.setTlv(byteArrayOf(0xDF.toByte(), 0x81.toByte(), 0x18.toByte()), byteArrayOf(0x40.toByte()))
+                handler.setTlv(
+                    byteArrayOf(0xDF.toByte(), 0x81.toByte(), 0x18.toByte()),
+                    byteArrayOf(applyOnlinePinCvmCapability(0x40, onlinePinEnabled).toByte()),
+                )
                 handler.setTlv(byteArrayOf(0xDF.toByte(), 0x81.toByte(), 0x19.toByte()), byteArrayOf(0x08.toByte()))
                 ByteUtils.hexString2ByteArray("F45084800C")?.let {
                     handler.setTlv(byteArrayOf(0xDF.toByte(), 0x81.toByte(), 0x20.toByte()), it)
@@ -478,20 +513,23 @@ class NexgoApi(
         }
     }
 
-    private fun configDpasParameter(handler: EmvHandler2) {
-        Log.d(TAG, "configDpasParameter invoked")
+    private fun configDpasParameter(handler: EmvHandler2, onlinePinEnabled: Boolean) {
+        Log.d(TAG, "configDpasParameter invoked onlinePinEnabled=$onlinePinEnabled")
         val tag9F33 = byteArrayOf(0x9F.toByte(), 0x33.toByte())
         val tag9F66 = byteArrayOf(0x9F.toByte(), 0x66.toByte())
         val kernel9F33 = handler.getTlv(tag9F33, EmvDataSourceEnum.FROM_KERNEL)
         if (kernel9F33 != null && kernel9F33.size >= 2) {
-            kernel9F33[1] = (kernel9F33[1].toInt() or 0x60).toByte()
+            kernel9F33[1] = applyOnlinePinCvmCapability(
+                kernel9F33[1].toInt() or 0x60,
+                onlinePinEnabled,
+            ).toByte()
             handler.setTlv(tag9F33, kernel9F33)
         }
 
         val kernelTTQ = handler.getTlv(tag9F66, EmvDataSourceEnum.FROM_KERNEL)
         val ttq = ByteUtils.hexString2ByteArray("36A04000")
         if (kernelTTQ != null && kernelTTQ.size >= 4 && ttq != null && ttq.size >= 4) {
-            kernelTTQ[0] = ttq[0]
+            kernelTTQ[0] = applyOnlinePinTtqCapability(ttq[0].toInt(), onlinePinEnabled).toByte()
             kernelTTQ[2] = ttq[2]
             handler.setTlv(tag9F66, kernelTTQ)
         }
@@ -520,7 +558,28 @@ class NexgoApi(
             "handlePinRequest online=$isOnlinePin attemptsRemaining=$attemptsRemaining pan=${maskPan(currentCardInfo?.cardNo)}",
         )
         transactionListener?.onPinRequested(isOnlinePin, attemptsRemaining)
+        if (isOnlinePin) {
+            pinData.onlinePinRequested = true
+            if (configuredAcquirerPinTypes.none(::supportsOnlinePinType)) {
+                val message = context.getString(R.string.online_pin_error_no_acquirer_pin_type)
+                Log.e(TAG, message)
+                pinData.status = PinStatus.ERROR
+                pinData.errorMessage = message
+                pinEntryDone = true
+                emvHandler?.onSetPinInputResponse(false, false)
+                return
+            }
+        }
         val pan = currentCardInfo?.cardNo ?: ""
+        if (isOnlinePin && pan.isBlank()) {
+            val message = context.getString(R.string.online_pin_error_missing_pan)
+            Log.e(TAG, message)
+            pinData.status = PinStatus.ERROR
+            pinData.errorMessage = message
+            pinEntryDone = true
+            emvHandler?.onSetPinInputResponse(false, false)
+            return
+        }
         val handler = pinEntryHandler
         if (handler != null) {
             Log.d(TAG, "handlePinRequest invoking external handler")
@@ -572,12 +631,31 @@ class NexgoApi(
     companion object {
         private const val TAG = "NexgoApi"
         private const val DEFAULT_KEY_INDEX = 0
+        private const val ONLINE_PIN_CVM_CAPABILITY_MASK = 0x40
+        private const val ONLINE_PIN_TTQ_CAPABILITY_MASK = 0x04
 
         internal val pinData: PinData = PinData()
         @Volatile internal var pinEntryDone: Boolean = true
         @Volatile internal var emvHandler: EmvHandler2? = null
         @Volatile private var configuredAidList: List<AidEntity>? = null
+        @Volatile private var configuredTerminalOnlinePinCap: Boolean = true
         @Volatile private var configuredCapkList: List<CapkEntity>? = null
+        @Volatile private var configuredAcquirerPinTypes: Set<Int> = emptySet()
+
+        internal fun applyOnlinePinCvmCapability(value: Int, onlinePinEnabled: Boolean): Int {
+            return if (onlinePinEnabled) value else value and ONLINE_PIN_CVM_CAPABILITY_MASK.inv()
+        }
+
+        internal fun applyOnlinePinTtqCapability(value: Int, onlinePinEnabled: Boolean): Int {
+            return if (onlinePinEnabled) value else value and ONLINE_PIN_TTQ_CAPABILITY_MASK.inv()
+        }
+
+        internal fun supportsOnlinePinType(pinType: Int): Boolean = pinType == 3 || pinType == 4
+
+        fun applyAcquirerPinTypes(pinTypes: Collection<Int>) {
+            configuredAcquirerPinTypes = pinTypes.toSet()
+            Log.d(TAG, "applyAcquirerPinTypes configured=${configuredAcquirerPinTypes.sorted()}")
+        }
 
         /**
          * Stores the CAPK list loaded from assets and immediately applies it to [emvHandler]
@@ -596,20 +674,26 @@ class NexgoApi(
         }
 
         /**
-         * Stores the TMS-built AID list and immediately applies it to [emvHandler] if one
-         * is already active. Called from [GlobalConnectPaymentApplication.applyTmsUpdate] whenever new TMS
+         * Stores the TMS-built AID list and terminal online PIN capability, then immediately
+         * applies the AIDs to [emvHandler] if one is already active. Called from
+         * [GlobalConnectPaymentApplication.applyTmsUpdate] whenever new TMS
          * parameters are received. If [emvHandler] is null at call time the list is stored
          * and applied the next time a [NexgoApi] instance is initialised.
          */
-        fun applyEmvAidList(aidList: List<AidEntity>) {
+        fun applyEmvAidList(aidList: List<AidEntity>, terminalOnlinePinCap: Boolean = true) {
             configuredAidList = aidList
+            configuredTerminalOnlinePinCap = terminalOnlinePinCap
             val handler = emvHandler ?: run {
                 Log.d(TAG, "applyEmvAidList: handler not ready, list stored for next init")
                 return
             }
             handler.delAllAid()
             handler.setAidParaList(aidList)
-            Log.d(TAG, "applyEmvAidList applied ${aidList.size} AIDs to active handler")
+            Log.d(
+                TAG,
+                "applyEmvAidList applied ${aidList.size} AIDs to active handler " +
+                    "terminalOnlinePinCap=$terminalOnlinePinCap",
+            )
             val loaded = handler.aidList
             if (loaded != null) {
                 Log.d(TAG, "applyEmvAidList verified ${loaded.size} AID(s) confirmed in handler")
@@ -617,7 +701,8 @@ class NexgoApi(
                     Log.d(
                         TAG,
                         "  [VERIFIED] aid=${e.aid} mode=${e.aidEntryModeEnum} asi=${e.asi}" +
-                            " tacDefault=${e.tacDefault} tacOnline=${e.tacOnline}",
+                            " tacDefault=${e.tacDefault} tacOnline=${e.tacOnline}" +
+                            " onlinePinCap=${e.onlinePinCap}",
                     )
                 }
             } else {

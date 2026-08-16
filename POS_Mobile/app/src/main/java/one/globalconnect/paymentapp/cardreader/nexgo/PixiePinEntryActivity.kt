@@ -1,7 +1,6 @@
 package one.globalconnect.paymentapp.cardreader.nexgo
 
 import android.app.KeyguardManager
-import android.graphics.Rect
 import android.os.Build
 import android.os.Bundle
 import android.view.WindowManager
@@ -15,8 +14,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -33,11 +30,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.boundsInWindow
-import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.res.colorResource
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.nexgo.common.ByteUtils
@@ -48,18 +42,15 @@ import com.nexgo.oaf.apiv3.device.pinpad.PinPad
 import com.nexgo.oaf.apiv3.device.pinpad.PinPadKeyCode
 import com.nexgo.oaf.apiv3.device.pinpad.PinPadTypeEnum
 import com.nexgo.oaf.apiv3.device.pinpad.PinKeyboardModeEnum
-import com.nexgo.oaf.apiv3.device.pinpad.PinpadLayoutEntity
+import com.nexgo.oaf.apiv3.device.pinpad.PinKeyboardViewModeEnum
 import one.globalconnect.paymentapp.R
 import one.globalconnect.paymentapp.GlobalConnectPaymentApplication
 import one.globalconnect.paymentapp.ui.theme.GlobalConnectPaymentTheme
-import java.util.EnumMap
-import kotlin.math.roundToInt
 
 /**
  * Activity that mirrors the PIXIE PIN entry workflow that the legacy .NET
- * application relies on. The composable implementation maps the on-screen
- * keypad to the secure PIN pad and forwards all results back to the state held
- * by [NexgoApi].
+ * application relies on. The app renders the PIN status while the NEXGO service
+ * owns the native secure keypad and forwards results back to [NexgoApi].
  */
 class PixiePinEntryActivity : ComponentActivity() {
 
@@ -71,7 +62,6 @@ class PixiePinEntryActivity : ComponentActivity() {
     private var isOnlinePin: Boolean = false
 
     private val maskBuilder = StringBuilder()
-    private val keyBounds = EnumMap<PinKey, Rect>(PinKey::class.java)
 
     private var pinMaskText by mutableStateOf("")
     private var titleText by mutableStateOf("")
@@ -80,26 +70,38 @@ class PixiePinEntryActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         configureWindow()
 
-        configurePinPad()
         readExtras()
         prepareForPinEntry()
+        try {
+            configurePinPad()
+        } catch (error: Throwable) {
+            failPinEntry(error)
+            return
+        }
 
         setContent {
             GlobalConnectPaymentTheme {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
-                    color = MaterialTheme.colorScheme.background,
+                    color = PIN_SCREEN_BACKGROUND,
                 ) {
                     PinEntryScreen(
                         title = titleText,
                         pinMask = pinMaskText,
-                        onKeyPositioned = ::onKeyPositioned,
                     )
                 }
             }
         }
 
-        startPinEntry()
+        window.decorView.post {
+            if (!isFinishing && !isDestroyed) {
+                try {
+                    startPinEntry()
+                } catch (error: Throwable) {
+                    failPinEntry(error)
+                }
+            }
+        }
     }
 
     private fun configureWindow() {
@@ -137,6 +139,7 @@ class PixiePinEntryActivity : ComponentActivity() {
         pinPad.initPinPad(PinPadTypeEnum.INTERNAL)
         pinPad.setAlgorithmMode(AlgorithmModeEnum.DUKPT)
         pinPad.setPinKeyboardMode(PinKeyboardModeEnum.FIXED)
+        pinPad.setPinKeyboardViewMode(PinKeyboardViewModeEnum.DEFAULT)
 
         pinPadListener.onInputResult = ::handleInputResult
         pinPadListener.onSendKey = ::handleSendKey
@@ -158,8 +161,8 @@ class PixiePinEntryActivity : ComponentActivity() {
     private fun prepareForPinEntry() {
         maskBuilder.clear()
         pinMaskText = ""
-        keyBounds.clear()
         NexgoApi.pinData.clear()
+        NexgoApi.pinData.onlinePinRequested = isOnlinePin
         NexgoApi.pinEntryDone = false
     }
 
@@ -190,10 +193,16 @@ class PixiePinEntryActivity : ComponentActivity() {
         runOnUiThread {
             when (retCode) {
                 SdkResult.Success -> {
-                    if (isOnlinePin && data != null) {
+                    if (isOnlinePin) {
+                        val pinBlock = data?.let { ByteUtils.byteArray2HexString(it) }.orEmpty()
+                        val ksn = currentKsn()
+                        if (pinBlock.isBlank() || ksn.isBlank()) {
+                            failPinEntry(retCode = retCode)
+                            return@runOnUiThread
+                        }
                         NexgoApi.pinData.status = PinStatus.ENTERED
-                        NexgoApi.pinData.pinBlock = ByteUtils.byteArray2HexString(data)
-                        NexgoApi.pinData.ksn = currentKsn()
+                        NexgoApi.pinData.pinBlock = pinBlock
+                        NexgoApi.pinData.ksn = ksn
                         increaseKsn()
                     } else {
                         NexgoApi.pinData.status = PinStatus.ENTERED
@@ -210,12 +219,30 @@ class PixiePinEntryActivity : ComponentActivity() {
                     NexgoApi.emvHandler?.onSetPinInputResponse(false, false)
                 }
                 else -> {
-                    NexgoApi.pinData.status = PinStatus.ERROR
-                    NexgoApi.emvHandler?.onSetPinInputResponse(false, false)
+                    failPinEntry(retCode = retCode)
+                    return@runOnUiThread
                 }
             }
             finish()
         }
+    }
+
+    private fun failPinEntry(error: Throwable? = null, retCode: Int? = null) {
+        val message = if (isOnlinePin) {
+            getString(R.string.online_pin_error_internal_pinpad)
+        } else {
+            getString(R.string.offline_pin_error_internal_pinpad)
+        }
+        android.util.Log.e(
+            TAG,
+            "$message${retCode?.let { " (code=$it)" }.orEmpty()}",
+            error,
+        )
+        NexgoApi.pinData.status = PinStatus.ERROR
+        NexgoApi.pinData.errorMessage = message
+        NexgoApi.pinEntryDone = true
+        runCatching { NexgoApi.emvHandler?.onSetPinInputResponse(false, false) }
+        finish()
     }
 
     private fun handleSendKey(keyCode: Byte) {
@@ -244,31 +271,6 @@ class PixiePinEntryActivity : ComponentActivity() {
         runOnUiThread { pinMaskText = text }
     }
 
-    private fun onKeyPositioned(key: PinKey, rect: Rect) {
-        keyBounds[key] = Rect(rect)
-        if (PinKey.entries.all { keyBounds.containsKey(it) }) {
-            applyPinLayout()
-        }
-    }
-
-    private fun applyPinLayout() {
-        val layout = PinpadLayoutEntity()
-        keyBounds[PinKey.KEY_1]?.let(layout::setKey1)
-        keyBounds[PinKey.KEY_2]?.let(layout::setKey2)
-        keyBounds[PinKey.KEY_3]?.let(layout::setKey3)
-        keyBounds[PinKey.KEY_4]?.let(layout::setKey4)
-        keyBounds[PinKey.KEY_5]?.let(layout::setKey5)
-        keyBounds[PinKey.KEY_6]?.let(layout::setKey6)
-        keyBounds[PinKey.KEY_7]?.let(layout::setKey7)
-        keyBounds[PinKey.KEY_8]?.let(layout::setKey8)
-        keyBounds[PinKey.KEY_9]?.let(layout::setKey9)
-        keyBounds[PinKey.KEY_0]?.let(layout::setKey10)
-        keyBounds[PinKey.CANCEL]?.let(layout::setKeyCancel)
-        keyBounds[PinKey.CLEAR]?.let(layout::setKeyClear)
-        keyBounds[PinKey.ENTER]?.let(layout::setKeyConfirm)
-        pinPad.setPinpadLayout(layout)
-    }
-
     private fun increaseKsn() {
         runCatching { pinPad.dukptKsnIncrease(keyIndex) }
     }
@@ -288,241 +290,58 @@ class PixiePinEntryActivity : ComponentActivity() {
         private const val DEFAULT_TIMEOUT_SECONDS = 60
         private const val MASK_TOKEN = "* "
         private const val MASK_TOKEN_LENGTH = 2
+        private const val TAG = "PixiePinEntry"
+        private val PIN_SCREEN_BACKGROUND = Color(0xFF102119)
     }
-}
-
-private enum class PinKey {
-    KEY_1,
-    KEY_2,
-    KEY_3,
-    KEY_4,
-    KEY_5,
-    KEY_6,
-    KEY_7,
-    KEY_8,
-    KEY_9,
-    KEY_0,
-    CANCEL,
-    CLEAR,
-    ENTER,
 }
 
 @Composable
 private fun PinEntryScreen(
     title: String,
     pinMask: String,
-    onKeyPositioned: (PinKey, Rect) -> Unit,
 ) {
     val white = colorResource(id = R.color.white)
-    val keypadBackground = Color(0x33000000)
+    val fieldBackground = Color(0x22FFFFFF)
     val borderColor = Color(0x55FFFFFF)
-    val cancelColor = colorResource(id = R.color.input_pin_red)
-    val clearColor = colorResource(id = R.color.input_pin_yellow)
-    val enterColor = colorResource(id = R.color.input_pin_green)
 
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(16.dp),
+            .padding(horizontal = 32.dp, vertical = 24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Text(
             text = title,
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(top = 24.dp),
+                .padding(top = 40.dp),
             textAlign = TextAlign.Center,
             color = white,
             style = MaterialTheme.typography.titleLarge,
         )
+        Spacer(modifier = Modifier.height(28.dp))
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(56.dp)
-                .padding(top = 16.dp, bottom = 24.dp)
+                .height(96.dp)
                 .border(1.dp, borderColor, RoundedCornerShape(12.dp))
-                .background(keypadBackground, RoundedCornerShape(12.dp)),
+                .background(fieldBackground, RoundedCornerShape(12.dp)),
             contentAlignment = Alignment.Center,
         ) {
             Text(
-                text = pinMask,
+                text = pinMask.ifEmpty { "• • • •" },
                 color = white,
-                style = MaterialTheme.typography.headlineMedium,
+                style = MaterialTheme.typography.headlineLarge,
             )
         }
-        Row(modifier = Modifier.fillMaxWidth()) {
-            PinKeyCell(
-                label = "1",
-                key = PinKey.KEY_1,
-                backgroundColor = keypadBackground,
-                textColor = white,
-                borderColor = borderColor,
-                onKeyPositioned = onKeyPositioned,
-            )
-            PinKeyCell(
-                label = "2",
-                key = PinKey.KEY_2,
-                backgroundColor = keypadBackground,
-                textColor = white,
-                borderColor = borderColor,
-                onKeyPositioned = onKeyPositioned,
-            )
-            PinKeyCell(
-                label = "3",
-                key = PinKey.KEY_3,
-                backgroundColor = keypadBackground,
-                textColor = white,
-                borderColor = borderColor,
-                onKeyPositioned = onKeyPositioned,
-            )
-        }
-        Row(modifier = Modifier.fillMaxWidth()) {
-            PinKeyCell(
-                label = "4",
-                key = PinKey.KEY_4,
-                backgroundColor = keypadBackground,
-                textColor = white,
-                borderColor = borderColor,
-                onKeyPositioned = onKeyPositioned,
-            )
-            PinKeyCell(
-                label = "5",
-                key = PinKey.KEY_5,
-                backgroundColor = keypadBackground,
-                textColor = white,
-                borderColor = borderColor,
-                onKeyPositioned = onKeyPositioned,
-            )
-            PinKeyCell(
-                label = "6",
-                key = PinKey.KEY_6,
-                backgroundColor = keypadBackground,
-                textColor = white,
-                borderColor = borderColor,
-                onKeyPositioned = onKeyPositioned,
-            )
-        }
-        Row(modifier = Modifier.fillMaxWidth()) {
-            PinKeyCell(
-                label = "7",
-                key = PinKey.KEY_7,
-                backgroundColor = keypadBackground,
-                textColor = white,
-                borderColor = borderColor,
-                onKeyPositioned = onKeyPositioned,
-            )
-            PinKeyCell(
-                label = "8",
-                key = PinKey.KEY_8,
-                backgroundColor = keypadBackground,
-                textColor = white,
-                borderColor = borderColor,
-                onKeyPositioned = onKeyPositioned,
-            )
-            PinKeyCell(
-                label = "9",
-                key = PinKey.KEY_9,
-                backgroundColor = keypadBackground,
-                textColor = white,
-                borderColor = borderColor,
-                onKeyPositioned = onKeyPositioned,
-            )
-        }
-        Row(modifier = Modifier.fillMaxWidth()) {
-            EmptyKeySlot()
-            PinKeyCell(
-                label = "0",
-                key = PinKey.KEY_0,
-                backgroundColor = keypadBackground,
-                textColor = white,
-                borderColor = borderColor,
-                onKeyPositioned = onKeyPositioned,
-            )
-            EmptyKeySlot()
-        }
-        Row(modifier = Modifier.fillMaxWidth()) {
-            PinKeyCell(
-                label = stringResource(id = R.string.pin_entry_cancel),
-                key = PinKey.CANCEL,
-                backgroundColor = cancelColor,
-                textColor = white,
-                borderColor = borderColor,
-                onKeyPositioned = onKeyPositioned,
-                textStyle = MaterialTheme.typography.titleMedium,
-            )
-            PinKeyCell(
-                label = stringResource(id = R.string.pin_entry_clear),
-                key = PinKey.CLEAR,
-                backgroundColor = clearColor,
-                textColor = white,
-                borderColor = borderColor,
-                onKeyPositioned = onKeyPositioned,
-                textStyle = MaterialTheme.typography.titleMedium,
-            )
-            PinKeyCell(
-                label = stringResource(id = R.string.pin_entry_enter),
-                key = PinKey.ENTER,
-                backgroundColor = enterColor,
-                textColor = white,
-                borderColor = borderColor,
-                onKeyPositioned = onKeyPositioned,
-                textStyle = MaterialTheme.typography.titleMedium,
-            )
-        }
-    }
-}
-
-@Composable
-private fun RowScope.EmptyKeySlot() {
-    Spacer(
-        modifier = Modifier
-            .weight(1f)
-            .height(64.dp)
-            .padding(4.dp),
-    )
-}
-
-@Composable
-private fun RowScope.PinKeyCell(
-    label: String,
-    key: PinKey,
-    backgroundColor: Color,
-    textColor: Color,
-    borderColor: Color,
-    onKeyPositioned: (PinKey, Rect) -> Unit,
-    textStyle: TextStyle = MaterialTheme.typography.headlineMedium,
-) {
-    Box(
-        modifier = Modifier
-            .weight(1f)
-            .height(64.dp)
-            .padding(4.dp)
-            .recordBounds(key, onKeyPositioned)
-            .border(1.dp, borderColor, RoundedCornerShape(12.dp))
-            .background(backgroundColor, RoundedCornerShape(12.dp)),
-        contentAlignment = Alignment.Center,
-    ) {
+        Spacer(modifier = Modifier.height(20.dp))
         Text(
-            text = label,
-            color = textColor,
-            style = textStyle,
+            text = stringResource(id = R.string.pin_entry_secure_keypad_hint),
+            modifier = Modifier.fillMaxWidth(),
             textAlign = TextAlign.Center,
+            color = white.copy(alpha = 0.8f),
+            style = MaterialTheme.typography.bodyLarge,
         )
+        Spacer(modifier = Modifier.weight(1f))
     }
 }
-
-private fun Modifier.recordBounds(
-    key: PinKey,
-    onKeyPositioned: (PinKey, Rect) -> Unit,
-): Modifier = this.then(
-    Modifier.onGloballyPositioned { coordinates ->
-        val bounds = coordinates.boundsInWindow()
-        val rect = Rect(
-            bounds.left.roundToInt(),
-            bounds.top.roundToInt(),
-            bounds.right.roundToInt(),
-            bounds.bottom.roundToInt(),
-        )
-        onKeyPositioned(key, rect)
-    },
-)

@@ -201,6 +201,7 @@ class MainActivity : AppCompatActivity() {
     private val ChangePassword = "ChangePassword"
     private val Update         = "Update"
     private val ConfigMenu     = "ConfigMenu"
+    private val GlobalConnectStore = "GlobalConnectStore"
 
     private var itemList = ArrayList<GridAdapter.ButtonItem>()
     private var viewPager: ViewPager2? = null
@@ -1030,9 +1031,14 @@ class MainActivity : AppCompatActivity() {
     fun LoadBtn(){
         val blockUnknown = getSharedPreferences("tms_launcher", Context.MODE_PRIVATE)
             .getBoolean("blockUnknownApps", true)
+        val storeEnabled = getSharedPreferences("tms_launcher", Context.MODE_PRIVATE)
+            .getBoolean("enableGlobalConnectStore", false)
 
         val configEntry = appList.filter { it.app_package_name == ConfigMenu || it.app_package_name == Settings.ACTION_SETTINGS }
         val tmsApps     = appList.filter { it.app_package_name != ConfigMenu && it.app_package_name != Settings.ACTION_SETTINGS }
+        val storeEntry = if (storeEnabled) listOf(
+            Companion.AppInfo(getString(R.string.store_title), GlobalConnectStore, stTheme.foreground_color.toColorInt())
+        ) else emptyList()
 
         val displayList: List<Companion.AppInfo> = if (!blockUnknown) {
             val knownPackages = appList.map { it.app_package_name }.toHashSet()
@@ -1048,9 +1054,9 @@ class MainActivity : AppCompatActivity() {
                                   catch (_: Exception) { pkg }
                     Companion.AppInfo(appName, pkg, unknownAppColor(pkg))
                 }
-            tmsApps + unknownApps + configEntry
+            tmsApps + unknownApps + storeEntry + configEntry
         } else {
-            tmsApps + configEntry
+            tmsApps + storeEntry + configEntry
         }
 
         itemList.clear()
@@ -1066,6 +1072,7 @@ class MainActivity : AppCompatActivity() {
                     Settings.ACTION_SETTINGS -> getString(R.string.config_menu_title)  // legacy entries
                     ChangePassword      -> getString(R.string.chg_pwd)
                     Update              -> getString(R.string.update)
+                    GlobalConnectStore  -> getString(R.string.store_title)
                     else -> return@forEach  // Real app package not installed — hide the button
                 }
                 when (it.app_package_name) {
@@ -1073,6 +1080,7 @@ class MainActivity : AppCompatActivity() {
                         ContextCompat.getDrawable(this, R.drawable.settings)
                     ChangePassword -> ContextCompat.getDrawable(this, R.drawable.changepwd)
                     Update         -> ContextCompat.getDrawable(this, R.drawable.update)
+                    GlobalConnectStore -> ContextCompat.getDrawable(this, R.mipmap.ic_launcher)
                     else -> null
                 }
             }
@@ -1090,6 +1098,9 @@ class MainActivity : AppCompatActivity() {
                     }
                     Update -> {
                         ChkVer(true)
+                    }
+                    GlobalConnectStore -> {
+                        startActivity(Intent(this, GlobalConnectStoreActivity::class.java))
                     }
                     else -> {
                         LaunchApp(it.app_package_name)

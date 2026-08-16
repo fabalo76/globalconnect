@@ -436,6 +436,19 @@ This keeps AWS IoT credentials in the launcher/agent instead of duplicating them
 
 ---
 
+## Global Connect Store HTTPS Flow
+
+The Global Connect Store is not an MQTT topic. When `enableGlobalConnectStore` is true in the active launcher configuration, xTMSAgent uses device-token HTTPS:
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/v1/devices/{serial}/store` | Resolve the bank-general or device-group catalog after model compatibility filtering |
+| `POST` | `/v1/devices/{serial}/store/apps/{versionId}/download` | Authorize one catalog version and obtain its signed APK URL |
+
+An ungrouped device uses the bank-general store. A grouped device uses its group store unless the bank has disabled device groups, in which case resolution falls back to the bank-general store. xTMSAgent must verify the returned size and SHA-256 before installation.
+
+---
+
 ## Standalone C++ Client Checklist
 
 A C++ terminal agent that does not run inside xTMSAgent must implement the same responsibilities:

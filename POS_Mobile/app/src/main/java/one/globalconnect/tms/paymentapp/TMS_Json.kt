@@ -22,6 +22,25 @@ object TMS_Json {
         return json.optInt(name, 0)
     }
 
+    fun readIntDefault(json: JSONObject, name: String, defaultValue: Int): Int {
+        if (!json.has(name) || json.isNull(name)) return defaultValue
+        return json.optInt(name, defaultValue)
+    }
+
+    fun readBinaryFlagDefault(json: JSONObject, name: String, defaultValue: Int): Int {
+        if (!json.has(name) || json.isNull(name)) return defaultValue
+        return when (val value = json.opt(name)) {
+            is Boolean -> if (value) 1 else 0
+            is Number -> if (value.toInt() == 0) 0 else 1
+            is String -> when (value.trim().lowercase()) {
+                "true", "1" -> 1
+                "false", "0" -> 0
+                else -> defaultValue
+            }
+            else -> defaultValue
+        }
+    }
+
     fun readLong(json: JSONObject, name: String): Long {
         if (!json.has(name) || json.isNull(name)) return 0L
         return when (val value = json.opt(name)) {

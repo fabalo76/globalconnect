@@ -44,6 +44,11 @@ On startup, `GlobalConnectPaymentApplication.onCreate()` checks whether a valid 
 
 The app uses `packageManager.queryBroadcastReceivers()` to discover all installed variants of xTMSAgent (e.g., `one.globalconnect.xtmsagent.banpais`, `one.globalconnect.xtmsagent.banistmo`, `one.globalconnect.xtmsagent.globalconnect`) and sends one explicit broadcast to each.
 
+Each request includes `applicationId` and `clientPackage`. xTMSAgent validates that
+`clientPackage` declares both `PAY_APP` and the parameter-result receiver, then sends
+the response to that exact package. This avoids arbitrary first-match routing when
+more than one payment-app flavor is installed.
+
 ```kotlin
 // Pseudo-code — GlobalConnectPaymentApplication.requestParamsFromXtmsAgent()
 val receivers = packageManager.queryBroadcastReceivers(
@@ -52,6 +57,8 @@ val receivers = packageManager.queryBroadcastReceivers(
 for (receiver in receivers) {
     val intent = Intent("one.globalconnect.xtmsagent.ACTION_REQUEST_PARAMS")
     intent.setClassName(receiver.activityInfo.packageName, receiver.activityInfo.name)
+    intent.putExtra("applicationId", "PAYMENT_APP")
+    intent.putExtra("clientPackage", context.packageName)
     sendBroadcast(intent)
 }
 ```

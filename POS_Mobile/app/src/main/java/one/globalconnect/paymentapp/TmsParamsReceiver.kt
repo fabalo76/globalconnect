@@ -4,14 +4,15 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
-import android.os.Handler
-import android.os.Looper
 import android.util.Log
 import one.globalconnect.tms.paymentapp.TMSDATA
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 private const val TAG = "TmsParamsReceiver"
 
@@ -20,6 +21,14 @@ private const val ACTION_PARAMS_READY   = "one.globalconnect.xtmsagent.ACTION_PA
 private const val ACTION_PARAMS_FAILED  = "one.globalconnect.xtmsagent.ACTION_PARAMS_FAILED"
 private const val EXTRA_PARAMS_URI      = "params_uri"
 private const val EXTRA_ERROR_MSG       = "error_message"
+
+internal suspend fun awaitTmsApplicationInitialization(
+    appInitialized: StateFlow<Boolean>,
+    timeoutMillis: Long,
+): Boolean = withTimeoutOrNull(timeoutMillis) {
+    appInitialized.first { it }
+    true
+} ?: false
 
 /**
  * Internal broadcast fired when the xTMSAgent param download failed.
@@ -58,9 +67,11 @@ class TmsParamsReceiver : BroadcastReceiver() {
     }
 
     private fun handleParamsReady(context: Context, intent: Intent) {
+        val task = TmsParamTaskReporter.from(intent)
         val uriString = intent.getStringExtra(EXTRA_PARAMS_URI)
         if (uriString.isNullOrBlank()) {
             Log.e(TAG, "ACTION_PARAMS_READY received but '$EXTRA_PARAMS_URI' extra is missing")
+            notifyFailed(context, "Parameter URI is missing", task)
             return
         }
 
@@ -71,13 +82,13 @@ class TmsParamsReceiver : BroadcastReceiver() {
             context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to open params URI $uri: ${e.message}", e)
-            notifyFailed(context, "Could not read params file: ${e.message}")
+            notifyFailed(context, "Could not read params file: ${e.message}", task)
             return
         }
 
         if (jsonText.isNullOrBlank()) {
             Log.e(TAG, "Params content from URI $uri is empty")
-            notifyFailed(context, "Params file is empty")
+            notifyFailed(context, "Params file is empty", task)
             return
         }
 
@@ -85,72 +96,117 @@ class TmsParamsReceiver : BroadcastReceiver() {
             TMSDATA.parse(jsonText)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to parse TMS params JSON: ${e.message}", e)
-            notifyFailed(context, "Invalid params format: ${e.message}")
+            notifyFailed(context, "Invalid params format: ${e.message}", task)
             return
         }
 
         val app = GlobalConnectPaymentApplication.instanceOrNull
         if (app == null) {
             Log.e(TAG, "GlobalConnectPaymentApplication not initialized — cannot apply TMS params")
+            notifyFailed(context, "Payment application is not initialized", task)
             return
         }
 
-        // First install: no params yet means no transactions possible — apply immediately on
-        // main thread so Compose collectAsState() sees the StateFlow update synchronously.
-        if (!app.paramsReadyFlow.value) {
-            applyDatabase(context, app, newDatabase)
-            return
-        }
-
-        // Push update while app is running: check unsettled transactions on IO thread,
-        // but post the actual apply back to main thread to keep Compose recomposition reliable.
+        // A manifest receiver can start this process before Application.onCreate's background
+        // initialization is complete. Wait before inspecting paramsReadyFlow or accessing the
+        // repository; otherwise a normal push can be mistaken for a first-install response and
+        // race startup EMV/PIN-key initialization.
         val pendingResult = goAsync()
         CoroutineScope(Dispatchers.IO).launch {
-            val unsettledCount = try {
-                app.container.transactionRepository
-                    .getOpenAndNeedTipTransactionNumber()
-                    .first()
-            } catch (e: Exception) {
-                Log.e(TAG, "Could not query unsettled transactions: ${e.message}", e)
-                0
-            }
+            try {
+                if (!awaitApplicationInitialization(app)) {
+                    Log.e(TAG, "Application initialization did not complete before the params timeout")
+                    notifyFailed(context, "Payment application initialization timed out", task)
+                    return@launch
+                }
 
-            if (unsettledCount > 0) {
-                Log.i(TAG, "TMS params received but $unsettledCount unsettled transaction(s) pending — deferring")
-                PendingUpdateManager.storePendingParamUpdate(context, jsonText)
-                pendingResult.finish()
-                return@launch
-            }
+                val liveTransactionCount = try {
+                    app.container.transactionRepository
+                        .getTransactionCount()
+                        .first()
+                } catch (e: Exception) {
+                    Log.e(TAG, "Could not verify that the transaction batch is empty: ${e.message}", e)
+                    null
+                }
 
-            Handler(Looper.getMainLooper()).post {
-                applyDatabase(context, app, newDatabase)
+                if (shouldDeferParameterUpdate(
+                        operationInProgress = PendingUpdateManager.isOperationInProgress,
+                        liveTransactionCount = liveTransactionCount,
+                    )
+                ) {
+                    Log.i(
+                        TAG,
+                        "TMS params received but the payment app is not safe to update " +
+                            "(operationInProgress=${PendingUpdateManager.isOperationInProgress} " +
+                            "liveTransactions=$liveTransactionCount) — deferring",
+                    )
+                    PendingUpdateManager.storePendingParamUpdate(context, jsonText, task)
+                    TmsParamTaskReporter.deferred(
+                        context,
+                        task,
+                        "Payment application parameter update pending; settlement required",
+                    )
+                    return@launch
+                }
+
+                withContext(Dispatchers.Main) {
+                    applyDatabase(context, app, newDatabase, task)
+                }
+            } finally {
                 pendingResult.finish()
             }
         }
     }
 
-    private fun applyDatabase(context: Context, app: GlobalConnectPaymentApplication, newDatabase: TMSDATA) {
+    private suspend fun awaitApplicationInitialization(
+        app: GlobalConnectPaymentApplication,
+    ): Boolean {
+        if (!app.appInitialized.value) {
+            Log.i(TAG, "Waiting for payment application initialization before applying params")
+        }
+        return awaitTmsApplicationInitialization(
+            appInitialized = app.appInitialized,
+            timeoutMillis = APPLICATION_INIT_TIMEOUT_MS,
+        )
+    }
+
+    private fun applyDatabase(
+        context: Context,
+        app: GlobalConnectPaymentApplication,
+        newDatabase: TMSDATA,
+        task: TmsParamTaskContext?,
+    ) {
         val applied = app.applyTmsUpdate(newDatabase)
         if (applied) {
             Log.i(TAG, "TMS params applied (${newDatabase.Terminal.size} terminal(s))")
+            TmsParamTaskReporter.completed(context, task)
         } else {
             Log.e(TAG, "applyTmsUpdate() rejected the downloaded params")
-            notifyFailed(context, "Could not apply PAYMENT_APP params")
+            notifyFailed(context, "Could not apply PAYMENT_APP params", task)
         }
     }
 
     private fun handleParamsFailed(context: Context, intent: Intent) {
         val error = intent.getStringExtra(EXTRA_ERROR_MSG) ?: "unknown error"
         Log.e(TAG, "xTMSAgent reported params download failure: $error")
-        notifyFailed(context, error)
+        notifyFailed(context, error, task = null)
     }
 
-    private fun notifyFailed(context: Context, error: String) {
+    private fun notifyFailed(
+        context: Context,
+        error: String,
+        task: TmsParamTaskContext?,
+    ) {
         context.sendBroadcast(
             Intent(ACTION_PARAMS_DOWNLOAD_FAILED).apply {
                 `package` = context.packageName
                 putExtra(EXTRA_ERROR_MSG, error)
             }
         )
+        TmsParamTaskReporter.failed(context, task, error)
+    }
+
+    private companion object {
+        const val APPLICATION_INIT_TIMEOUT_MS = 30_000L
     }
 }

@@ -38,6 +38,11 @@ data class TMS_Acquirer(
     var allowFallback: Boolean = false,
     var enableBalance: Boolean = false,
     var pinType: Int = 0,
+    var masterKeyId: String = "",
+    var sessionKeyA: String = "",
+    var sessionKeyB: String = "",
+    var pinMasterKeyIndex: String = "",
+    var pinStaticSessionKey: String = "",
 ) {
     val AcqID: String get() = acquirer_id
     @get:JvmName("getLegacyAcquirerName")
@@ -75,7 +80,41 @@ data class TMS_Acquirer(
     @get:JvmName("getLegacyEnableBalance")
     val EnableBalance: Boolean get() = enableBalance
     val PINType: Int get() = pinType
+    val MkID: String get() = masterKeyId
+    val pinKeyScheme: TMS_PinKeyScheme get() = when (pinType) {
+        PIN_TYPE_MKSK -> TMS_PinKeyScheme.MKSK
+        PIN_TYPE_DUKPT, PIN_TYPE_DUKPT_DYNAMIC -> TMS_PinKeyScheme.DUKPT
+        else -> TMS_PinKeyScheme.NONE
+    }
+    val supportsOnlinePin: Boolean get() = pinKeyScheme != TMS_PinKeyScheme.NONE
     val supportsDukptOnlinePin: Boolean get() = pinType == PIN_TYPE_DUKPT || pinType == PIN_TYPE_DUKPT_DYNAMIC
+
+    /** New pinMasterKeyIndex is a direct Nexgo slot; legacy MkID 00-09 maps to slots 1-10. */
+    val nexgoPinKeyIndex: Int?
+        get() {
+            val directIndex = pinMasterKeyIndex.trim()
+                .takeIf { it.isNotEmpty() }
+                ?.toIntOrNull(16)
+                ?.takeIf { it in 1..10 }
+            if (directIndex != null) return directIndex
+
+            return masterKeyId.trim()
+                .toIntOrNull(16)
+                ?.plus(1)
+                ?.takeIf { it in 1..10 }
+        }
+
+    /** Encrypted MK/SK PIN session key, or null when the PIN key is already loaded in the slot. */
+    val encryptedPinSessionKey: String?
+        get() {
+            val configuredValue = pinStaticSessionKey.ifBlank { sessionKeyA + sessionKeyB }
+            val value = configuredValue.filterNot(Char::isWhitespace).uppercase()
+            return value.takeUnless {
+                it.isBlank() ||
+                    it.all { character -> character == '0' } ||
+                    it.all { character -> character == 'F' }
+            }
+        }
 
     companion object {
         fun fromJson(json: JSONObject): TMS_Acquirer {
@@ -113,6 +152,11 @@ data class TMS_Acquirer(
                 allowFallback = TMS_Json.readBooleanDefault(json, "allowFallback", true),
                 enableBalance = TMS_Json.readBoolean(json, "enableBalance"),
                 pinType = TMS_Json.readLongAny(json, "pinType", "PINType").toInt(),
+                masterKeyId = TMS_Json.readStringAny(json, "masterKeyId", "MkID"),
+                sessionKeyA = TMS_Json.readStringAny(json, "sessionKeyA", "sessionKey_A"),
+                sessionKeyB = TMS_Json.readStringAny(json, "sessionKeyB", "sessionKey_B"),
+                pinMasterKeyIndex = TMS_Json.readString(json, "pinMasterKeyIndex"),
+                pinStaticSessionKey = TMS_Json.readString(json, "pinStaticSessionKey"),
             )
         }
 
@@ -126,7 +170,14 @@ data class TMS_Acquirer(
             return items
         }
 
+        private const val PIN_TYPE_MKSK = 1
         private const val PIN_TYPE_DUKPT = 3
         private const val PIN_TYPE_DUKPT_DYNAMIC = 4
     }
+}
+
+enum class TMS_PinKeyScheme {
+    NONE,
+    MKSK,
+    DUKPT,
 }

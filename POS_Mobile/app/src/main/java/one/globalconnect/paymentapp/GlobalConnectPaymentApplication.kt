@@ -11,16 +11,20 @@ import com.nexgo.oaf.apiv3.APIProxy
 import com.nexgo.oaf.apiv3.DeviceEngine
 import com.nexgo.oaf.apiv3.platform.Platform
 import one.globalconnect.tms.paymentapp.TMSDATA
+import one.globalconnect.tms.paymentapp.TMS_Terminal
 import one.globalconnect.paymentapp.cardreader.nexgo.EmvConfigBuilder
 import one.globalconnect.paymentapp.cardreader.nexgo.CapkEnvironment
 import one.globalconnect.paymentapp.cardreader.nexgo.EmvUtils
 import one.globalconnect.paymentapp.cardreader.nexgo.NexgoApi
+import one.globalconnect.paymentapp.cardreader.nexgo.NexgoPinKeyManager
+import one.globalconnect.paymentapp.cardreader.nexgo.OnlinePinProfileResolver
 import one.globalconnect.paymentapp.dao.AppContainer
 import one.globalconnect.paymentapp.dao.AppDataContainer
 import one.globalconnect.paymentapp.uicpos.pos.host.AcquirerSslCache
 import one.globalconnect.paymentapp.uicpos.pos.host.BundledCertificates
 import one.globalconnect.paymentapp.uicpos.pos.host.loadCertificatesFromStream
 import one.globalconnect.paymentapp.transaction.BrandingAnimationCache
+import one.globalconnect.paymentapp.transactions.TransactionReportBridge
 import one.globalconnect.paymentapp.utils.SoundManager
 import one.globalconnect.paymentapp.utils.getSavedLanguage
 import kotlinx.coroutines.CoroutineScope
@@ -136,6 +140,7 @@ class GlobalConnectPaymentApplication : Application() {
         applicationScope.launch {
             System.loadLibrary("sqlcipher")
             tmsDatabase = loadTMSDatabase()
+            TransactionReportBridge.onParametersUpdated(this@GlobalConnectPaymentApplication, tmsDatabase)
             PendingUpdateManager.restoreFromPrefs(this@GlobalConnectPaymentApplication)
             loadBundledCaCertificates()
             AcquirerSslCache.build(tmsDatabase.IPTab, BundledCertificates.get())
@@ -153,14 +158,26 @@ class GlobalConnectPaymentApplication : Application() {
             // Signal params ready before marking init complete so the UI skips
             // the waiting screen on subsequent launches where params are cached.
             if (tmsDatabase.Terminal.isNotEmpty()) {
-                val terminalOnlinePinCap = tmsDatabase.Terminal.first().onlinePinCap
+                val terminal = tmsDatabase.Terminal.first()
                 val aidList = EmvConfigBuilder.buildAidList(
                     tmsDatabase.AIDtab,
                     tmsDatabase.PCDApps,
-                    terminalOnlinePinCap,
+                    terminal.onlinePinCap,
                 )
-                NexgoApi.applyEmvAidList(aidList, terminalOnlinePinCap)
+                val capabilityProfiles = EmvConfigBuilder.buildTerminalCapabilityProfiles(
+                    tmsDatabase.AIDtab,
+                    tmsDatabase.PCDApps,
+                    terminal,
+                )
+                NexgoApi.applyEmvAidList(aidList, terminal.onlinePinCap, capabilityProfiles)
                 NexgoApi.applyAcquirerPinTypes(tmsDatabase.Acquirer.map { it.PINType })
+                NexgoApi.applyOnlinePinProfileResolver(OnlinePinProfileResolver.from(tmsDatabase))
+                val pinKeyResult = NexgoPinKeyManager.apply(deviceEngine, tmsDatabase.Acquirer)
+                if (!pinKeyResult.success) {
+                    Log.e("GlobalConnectPaymentApplication", "Startup PIN key validation failed: ${pinKeyResult.message}")
+                } else {
+                    Log.i("GlobalConnectPaymentApplication", pinKeyResult.message)
+                }
                 _paramsReadyFlow.value = true
                 launch(Dispatchers.Main) {
                     BrandingAnimationCache.prewarm(this@GlobalConnectPaymentApplication, tmsDatabase)
@@ -179,9 +196,9 @@ class GlobalConnectPaymentApplication : Application() {
     /**
      * Broadcasts a parameter request to the xTMSAgent application.
      *
-     * xTMSAgent discovers this app via the PAY_APP intent filter, downloads the
-     * parameter JSON from the TMS server over MQTT + HTTP, and replies with
-     * ACTION_PARAMS_READY (received by [TmsParamsReceiver]).
+     * The request identifies this package as the validated callback target. xTMSAgent
+     * downloads the parameter JSON from the TMS server and replies with ACTION_PARAMS_READY
+     * directly to [TmsParamsReceiver] in this package.
      *
      * Safe to call at any time — xTMSAgent guards against concurrent downloads.
      */
@@ -201,6 +218,7 @@ class GlobalConnectPaymentApplication : Application() {
             sendBroadcast(Intent("one.globalconnect.xtmsagent.ACTION_REQUEST_PARAMS").apply {
                 `package` = homePackage
                 putExtra(EXTRA_TMS_APPLICATION_ID, TMS_APPLICATION_ID_PAYMENT_APP)
+                putExtra(EXTRA_TMS_CLIENT_PACKAGE, packageName)
             })
         }
     }
@@ -279,28 +297,41 @@ class GlobalConnectPaymentApplication : Application() {
      * `true` when the update is accepted and applied.
      */
     fun applyTmsUpdate(newDatabase: TMSDATA, persistToDisk: Boolean = true): Boolean {
+        val pinKeyResult = NexgoPinKeyManager.apply(deviceEngine, newDatabase.Acquirer)
+        if (!pinKeyResult.success) {
+            Log.e("GlobalConnectPaymentApplication", "TMS PIN key application failed: ${pinKeyResult.message}")
+            return false
+        }
         if (persistToDisk && !persistTmsDatabase(newDatabase)) {
             return false
         }
 
         tmsDatabase = newDatabase
+        TransactionReportBridge.onParametersUpdated(this, newDatabase)
         logTmsCatalog(newDatabase, "download")
         AcquirerSslCache.build(newDatabase.IPTab, BundledCertificates.get())
         container = AppDataContainer(this, newDatabase, appVersion)
         _paramsReadyFlow.value = true
-        _paramsUpdateEvent.tryEmit(Unit)
         applicationScope.launch(Dispatchers.Main) {
             BrandingAnimationCache.prewarm(this@GlobalConnectPaymentApplication, newDatabase)
         }
 
-        val terminalOnlinePinCap = newDatabase.Terminal.firstOrNull()?.onlinePinCap ?: true
+        val terminal = newDatabase.Terminal.firstOrNull() ?: TMS_Terminal()
         val aidList = EmvConfigBuilder.buildAidList(
             newDatabase.AIDtab,
             newDatabase.PCDApps,
-            terminalOnlinePinCap,
+            terminal.onlinePinCap,
         )
-        NexgoApi.applyEmvAidList(aidList, terminalOnlinePinCap)
+        val capabilityProfiles = EmvConfigBuilder.buildTerminalCapabilityProfiles(
+            newDatabase.AIDtab,
+            newDatabase.PCDApps,
+            terminal,
+        )
+        NexgoApi.applyEmvAidList(aidList, terminal.onlinePinCap, capabilityProfiles)
         NexgoApi.applyAcquirerPinTypes(newDatabase.Acquirer.map { it.PINType })
+        NexgoApi.applyOnlinePinProfileResolver(OnlinePinProfileResolver.from(newDatabase))
+        _paramsUpdateEvent.tryEmit(Unit)
+        TmsParamsUpdateNotifier.notifyWhenMainActivityClosed(this)
 
         return true
     }
@@ -337,7 +368,9 @@ class GlobalConnectPaymentApplication : Application() {
                     "sale=${terminal.enableSale} refund=${terminal.enableRefund} cash=${terminal.enableCash} " +
                     "tax1=${terminal.tax1Enabled}/${terminal.tax1Mandatory} tax2=${terminal.tax2Enabled}/${terminal.tax2Mandatory} " +
                     "tipMode=${terminal.tipProcessingMode} capkMode=${terminal.capkMode} " +
-                    "onlinePinCap=${terminal.onlinePinCap} " +
+                    "cvmCaps=online:${terminal.onlinePinCap},signature:${terminal.signatureCap}," +
+                    "noCvm:${terminal.noCVMCap},offlineEnc:${terminal.offlineEncrPinCap}," +
+                    "offlineClear:${terminal.offlineClearPinCap} " +
                     "tranReporting=${terminal.tranReportingMethod} batchSize=${terminal.tranReportingBatchSize} " +
                     "intervalSeconds=${terminal.tranReportingIntervalSeconds} acquirers=${terminal.acquirer.size}"
             )
@@ -350,7 +383,9 @@ class GlobalConnectPaymentApplication : Application() {
                     "merchantId=${acquirer.MerchID} terminalId=${acquirer.AcqTermID} hostProtocol=${acquirer.hostProtocol} " +
                     "hostRef=${acquirer.hostConnectionInfoRef} nii=${acquirer.NII} currency=${acquirer.CurrencyCode}/${acquirer.Currency} " +
                     "sale=${acquirer.enableSale} refund=${acquirer.enableRefund} cash=${acquirer.enableCash} " +
-                    "fallback=${acquirer.AllowFallBack} issuers=${acquirer.issuer.size}"
+                    "fallback=${acquirer.AllowFallBack} issuers=${acquirer.issuer.size} " +
+                    "pinType=${acquirer.PINType} pinScheme=${acquirer.pinKeyScheme} " +
+                    "pinKeyIndex=${acquirer.nexgoPinKeyIndex} encryptedSessionPresent=${acquirer.encryptedPinSessionKey != null}"
             )
         }
 
@@ -380,6 +415,7 @@ class GlobalConnectPaymentApplication : Application() {
         internal const val PARAMS_FILE_NAME = "tms_params.json"
 
         private const val EXTRA_TMS_APPLICATION_ID = "applicationId"
+        private const val EXTRA_TMS_CLIENT_PACKAGE = "clientPackage"
         private const val TMS_APPLICATION_ID_PAYMENT_APP = "PAYMENT_APP"
 
         val instanceOrNull: GlobalConnectPaymentApplication?

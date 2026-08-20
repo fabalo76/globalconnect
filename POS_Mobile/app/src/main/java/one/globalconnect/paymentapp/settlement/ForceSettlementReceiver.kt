@@ -69,9 +69,10 @@ class ForceSettlementReceiver : BroadcastReceiver() {
                             )
                         }
 
+                    PendingUpdateManager.isOperationInProgress = false
                     if (results.any { it is SettlementResult.Success }) {
                         if (PendingUpdateManager.hasPendingParamUpdate(app.applicationContext)) {
-                            PendingUpdateManager.applyPendingParamUpdate(app.applicationContext)
+                            PendingUpdateManager.applyPendingParamUpdateIfBatchEmpty(app.applicationContext)
                         }
                         if (PendingUpdateManager.hasPendingAppUpdate(app.applicationContext)) {
                             PendingUpdateManager.notifyXtmsAgentCanProceed(app.applicationContext)

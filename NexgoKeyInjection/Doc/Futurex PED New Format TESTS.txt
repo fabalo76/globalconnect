@@ -1,0 +1,155 @@
+KTK     4004A21949A2B679 6B250746C12686B0 KCV: 611F51 //NEXGO WONT USE KTK OR KEK AS IS, WE WILL USE MK 0 as KTK FOR LOADING PEK/DEK/MAC and DUKP KEYS
+
+MK      0123456789ABCDEF 0123456789ABCDEF KCV: D5D44F
+KTK(MK)  960CD1F3C75B0292C1003F357FEDF2C7
+
+PEK KEY 0123456789ABCDEF 0123456789ABCDEF KCV: D5D44F
+KTK_Encrypt(PEK) 4E4EF7BE4F199B144E4EF7BE4F199B14
+
+DUKPT
+BDK 0123456789ABCDEF 0123456789ABCDEF KCV: D5D44F
+KSN: FFFF0121010003400000
+Derived IPEK: FDA51E1A6B62CDE8 53C7BFD8807D4500 KCV: 8787B5
+KTK(IPEK)  FC9FEEC63FBE86B1B956B7E8CF2A94A8
+
+KTK INJECTION CLEAR LOADED IN MK0
+<02>020100000900611F0000000000000000000000000204004A21949A2B6796B250746C12686B0000<03>
+    **++^^**++^^****++++^^^^^^^^^^^^^^^^^^^^+++********************************^^^....
+    1  2 3 4 5 6  7  8           9          10             11                  12  13
+
+1- “02” inject key under KTK command
+2- Version of command for expandability of command in ASCII hex "01"
+3- 2 digit key slot number in ASCII hex , “00” if device has only one key location
+4- 2 digit KTK slot number in ASCII hex , “00” if device has only one key location or if no KTK is sent.
+5- ** 09 DEFAULT KTK Identifier of key type in ASCII hex .
+6- **00 clear key load Identifier if key is clear key load (00), encrypted under a preloaded KTK (01) or clear KTK (02)
+7- 4 digit ASCII hex checksum of incoming key
+8- 4 digit ASCII hex checksum KTK (All zeros if KTK is not used in key transfer)
+9- 20 digit Key Serial Number (KSN) in ASCII hex (All zeros if KSN is not used in key type)
+10- Length of incoming key or key block in ASCII hex (“010”, “020”, “030”, etc)
+11- 16,32, or 48 digit ASCII hex key or TR 31 A key block (Length Determined by Field 10)
+12- Length of KTK in ASCII hex (“010”, “020”, “030”) (All zeros if Field 6 is not 02)
+13- 16, 32, or 48 digit ASCII hex key (Only used if Field 6 is 02) (Length Determined by Field 12)
+
+RESPONSE
+<02>0200611F<03>s
+
+
+
+KTK CLEAR KEY + KTK ENCRYPTED DUKPT IPEK KEY INJECTION CLEAR
+
+<02>0201010008028787611FFFFF0121010003400000020FC9FEEC63FBE86B1B956B7E8CF2A94A80204004A21949A2B6796B250746C12686B0<03>
+    **++^^**++^^****++++^^^^^^^^^^^^^^^^^^^^+++********************************^^^................................
+    1  2 3 4 5 6  7  8           9          10             11                  12  13
+
+1- “02” inject key under KTK command
+2- Version of command for expandability of command in ASCII hex "01"
+3- ** 01 DUKPT SLOT 1. 2 digit key slot number in ASCII hex , “00” if device has only one key location
+4- ** 00 .2 digit KTK slot number in ASCII hex , “00” if device has only one key location or if no KTK is sent.
+5- ** 08 DUKPT 3DES BDK Key Identifier of key type in ASCII hex .
+6- ** 02 encrypted by Clear KTK. if key is clear key load (00), encrypted under a preloaded KTK (01) or clear KTK (02)
+7- ** 4 digit ASCII hex checksum of incoming key
+8- ** 4 digit ASCII hex checksum KTK (All zeros if KTK is not used in key transfer)
+9- 20 digit Key Serial Number (KSN) in ASCII hex (All zeros if KSN is not used in key type)
+10- Length of incoming key or key block in ASCII hex (“010”, “020”, “030”, etc)
+11- 16,32, or 48 digit ASCII hex key or TR 31 A key block (Length Determined by Field 10)
+12- Length of KTK in ASCII hex (“010”, “020”, “030”) (All zeros if Field 6 is not 02)
+13- 16, 32, or 48 digit ASCII hex key (Only used if Field 6 is 02) (Length Determined by Field 12)
+
+
+KTK ENCRYPTED DUKPT IPEK KEY INJECTION CLEAR
+
+<02>0201010008028787611FFFFF0121010003400000020FC9FEEC63FBE86B1B956B7E8CF2A94A8000<03>
+    **++^^**++^^****++++^^^^^^^^^^^^^^^^^^^^+++********************************^^^................................
+    1  2 3 4 5 6  7  8           9          10             11                  12  13
+
+1- “02” inject key under KTK command
+2- Version of command for expandability of command in ASCII hex "01"
+3- ** 01 DUKPT SLOT 1. 2 digit key slot number in ASCII hex , “00” if device has only one key location
+4- ** 00 use TLK .2 digit KTK slot number in ASCII hex , “00” if device has only one key location or if no KTK is sent.
+5- ** 08 DUKPT 3DES BDK Key Identifier of key type in ASCII hex .
+6- ** 01 encrypte by Loaded KTK. if key is clear key load (00), encrypted under a preloaded KTK (01) or clear KTK (02)
+7- ** 4 digit ASCII hex checksum of incoming key
+8- ** 4 digit ASCII hex checksum KTK (All zeros if KTK is not used in key transfer)
+9- 20 digit Key Serial Number (KSN) in ASCII hex (All zeros if KSN is not used in key type)
+10- Length of incoming key or key block in ASCII hex (“010”, “020”, “030”, etc)
+11- 16,32, or 48 digit ASCII hex key or TR 31 A key block (Length Determined by Field 10)
+12- Length of KTK in ASCII hex (“010”, “020”, “030”) (All zeros if Field 6 is not 02)
+13- 16, 32, or 48 digit ASCII hex key (Only used if Field 6 is 02) (Length Determined by Field 12)
+
+
+KTK ENCRYPTED MK KEY INJECTION
+
+<02>020101000101D5D4611F000000000000000000000204E4EF7BE4F199B144E4EF7BE4F199B14000<03>
+    **++^^**++^^****++++^^^^^^^^^^^^^^^^^^^^+++********************************^^^................................
+    1  2 3 4 5 6  7  8           9          10             11                  12  13
+
+1- “02” inject key under KTK command
+2- Version of command for expandability of command in ASCII hex "01"
+3- ** 01 MK SLOT 1. 2 digit key slot number in ASCII hex , “00” if device has only one key location
+4- ** 00 use TLK .2 digit KTK slot number in ASCII hex , “00” if device has only one key location or if no KTK is sent.
+5- ** 01 MK Key.  Identifier of key type in ASCII hex .
+6- ** 01 encrypted by Loaded KTK. if key is clear key load (00), encrypted under a preloaded KTK (01) or clear KTK (02)
+7- ** 4 digit ASCII hex checksum of incoming key
+8- ** 4 digit ASCII hex checksum KTK (All zeros if KTK is not used in key transfer)
+9- 20 digit Key Serial Number (KSN) in ASCII hex (All zeros if KSN is not used in key type)
+10- Length of incoming key or key block in ASCII hex (“010”, “020”, “030”, etc)
+11- 16,32, or 48 digit ASCII hex key or TR 31 A key block (Length Determined by Field 10)
+12- Length of KTK in ASCII hex (“010”, “020”, “030”) (All zeros if Field 6 is not 02)
+13- 16, 32, or 48 digit ASCII hex key (Only used if Field 6 is 02) (Length Determined by Field 12)
+
+
+CLEAR TEXT MK KEY INJECTION
+
+<02>020102000100D5D40000000000000000000000000204E4EF7BE4F199B144E4EF7BE4F199B14000<03>
+    **++^^**++^^****++++^^^^^^^^^^^^^^^^^^^^+++********************************^^^................................
+    1  2 3 4 5 6  7  8           9          10             11                  12  13
+
+1- “02” inject key under KTK command
+2- Version of command for expandability of command in ASCII hex "01"
+3- ** 01 MK SLOT 1. 2 digit key slot number in ASCII hex , “00” if device has only one key location
+4- ** 00 use TLK .2 digit KTK slot number in ASCII hex , “00” if device has only one key location or if no KTK is sent.
+5- ** 01 MK Key.  Identifier of key type in ASCII hex .
+6- ** 00 Clear Text Key. if key is clear key load (00), encrypted under a preloaded KTK (01) or clear KTK (02)
+7- ** 4 digit ASCII hex checksum of incoming key
+8- ** 4 digit ASCII hex checksum KTK (All zeros if KTK is not used in key transfer)
+9- 20 digit Key Serial Number (KSN) in ASCII hex (All zeros if KSN is not used in key type)
+10- Length of incoming key or key block in ASCII hex (“010”, “020”, “030”, etc)
+11- 16,32, or 48 digit ASCII hex key or TR 31 A key block (Length Determined by Field 10)
+12- Length of KTK in ASCII hex (“010”, “020”, “030”) (All zeros if Field 6 is not 02)
+13- 16, 32, or 48 digit ASCII hex key (Only used if Field 6 is 02) (Length Determined by Field 12)
+
+
+CLEAR TEXT DUKPT IPEK KEY INJECTION
+
+<02>02010100080087870000FFFF0121010003400000020FDA51E1A6B62CDE853C7BFD8807D4500000<03>
+    **++^^**++^^****++++^^^^^^^^^^^^^^^^^^^^+++********************************^^^................................
+    1  2 3 4 5 6  7  8           9          10             11                  12  13
+
+1- “02” inject key under KTK command
+2- Version of command for expandability of command in ASCII hex "01"
+3- ** 01 DUKPT SLOT 1. 2 digit key slot number in ASCII hex , “00” if device has only one key location
+4- ** 00 use TLK .2 digit KTK slot number in ASCII hex , “00” if device has only one key location or if no KTK is sent.
+5- ** 08 DUKPT 3DES BDK Key Identifier of key type in ASCII hex .
+6- ** 00 Clear Text. if key is clear key load (00), encrypted under a preloaded KTK (01) or clear KTK (02)
+7- ** 4 digit ASCII hex checksum of incoming key
+8- ** 4 digit ASCII hex checksum KTK (All zeros if KTK is not used in key transfer)
+9- 20 digit Key Serial Number (KSN) in ASCII hex (All zeros if KSN is not used in key type)
+10- Length of incoming key or key block in ASCII hex (“010”, “020”, “030”, etc)
+11- 16,32, or 48 digit ASCII hex key or TR 31 A key block (Length Determined by Field 10)
+12- Length of KTK in ASCII hex (“010”, “020”, “030”) (All zeros if Field 6 is not 02)
+13- 16, 32, or 48 digit ASCII hex key (Only used if Field 6 is 02) (Length Determined by Field 12)
+
+
+Type   Name                        Modifier
+0x01   Master Session Key          0
+0x02   DUKPT Initial Key           8
+0x03   DUKPT BDK Key               8
+0x04   MAC Key                     3
+0x05   PIN Encryption Key          1
+0x06   Key Exchange Key            0
+0x07   Host Verification KTK       0
+0x08   DUKPT 3DES BDK Key          8
+0x09   Default KTK                 0
+0x0A   Balance decryption Key      0
+0x0B   TDR DUKPT BDK               0

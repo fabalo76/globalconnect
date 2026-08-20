@@ -74,6 +74,8 @@ data class TransLog(
     var Track1: String? = "",
     var Track2: String? = "",
     var Track3: String? = "",
+    @Transient var PINBlock: String? = "",
+    @Transient var KSN: String? = "",
 
     // Settle
     var BatchId: String? = "",

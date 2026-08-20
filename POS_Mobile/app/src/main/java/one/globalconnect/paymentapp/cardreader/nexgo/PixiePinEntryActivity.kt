@@ -41,6 +41,7 @@ import com.nexgo.oaf.apiv3.device.pinpad.PinAlgorithmModeEnum
 import com.nexgo.oaf.apiv3.device.pinpad.PinPad
 import com.nexgo.oaf.apiv3.device.pinpad.PinPadKeyCode
 import com.nexgo.oaf.apiv3.device.pinpad.PinPadTypeEnum
+import com.nexgo.oaf.apiv3.device.pinpad.DukptAlgorithmModeEnum
 import com.nexgo.oaf.apiv3.device.pinpad.PinKeyboardModeEnum
 import com.nexgo.oaf.apiv3.device.pinpad.PinKeyboardViewModeEnum
 import one.globalconnect.paymentapp.R
@@ -60,6 +61,8 @@ class PixiePinEntryActivity : ComponentActivity() {
     private var keyIndex: Int = 0
     private var pan: String = ""
     private var isOnlinePin: Boolean = false
+    private var pinScheme: OnlinePinScheme = OnlinePinScheme.DUKPT
+    private var compatibleAcquirerIds: Set<String> = emptySet()
 
     private val maskBuilder = StringBuilder()
 
@@ -137,7 +140,13 @@ class PixiePinEntryActivity : ComponentActivity() {
         val deviceEngine = GlobalConnectPaymentApplication.deviceEngine
         pinPad = deviceEngine.pinPad
         pinPad.initPinPad(PinPadTypeEnum.INTERNAL)
-        pinPad.setAlgorithmMode(AlgorithmModeEnum.DUKPT)
+        when (pinScheme) {
+            OnlinePinScheme.DUKPT -> {
+                pinPad.setAlgorithmMode(AlgorithmModeEnum.DUKPT)
+                pinPad.setDukptAlgorithmMode(DukptAlgorithmModeEnum.DES)
+            }
+            OnlinePinScheme.MKSK -> pinPad.setAlgorithmMode(AlgorithmModeEnum.DES)
+        }
         pinPad.setPinKeyboardMode(PinKeyboardModeEnum.FIXED)
         pinPad.setPinKeyboardViewMode(PinKeyboardViewModeEnum.DEFAULT)
 
@@ -150,6 +159,12 @@ class PixiePinEntryActivity : ComponentActivity() {
             keyIndex = bundle.getInt(EXTRA_KEY_INDEX, 0)
             pan = bundle.getString(EXTRA_PAN, "")
             isOnlinePin = bundle.getBoolean(EXTRA_IS_ONLINE_PIN, false)
+            pinScheme = bundle.getString(EXTRA_PIN_SCHEME)
+                ?.let { runCatching { OnlinePinScheme.valueOf(it) }.getOrNull() }
+                ?: OnlinePinScheme.DUKPT
+            compatibleAcquirerIds = bundle.getStringArrayList(EXTRA_COMPATIBLE_ACQUIRERS)
+                ?.toSet()
+                .orEmpty()
         }
         titleText = if (isOnlinePin) {
             getString(R.string.pin_entry_online)
@@ -163,6 +178,9 @@ class PixiePinEntryActivity : ComponentActivity() {
         pinMaskText = ""
         NexgoApi.pinData.clear()
         NexgoApi.pinData.onlinePinRequested = isOnlinePin
+        NexgoApi.pinData.scheme = pinScheme
+        NexgoApi.pinData.keyIndex = keyIndex
+        NexgoApi.pinData.compatibleAcquirerIds = compatibleAcquirerIds
         NexgoApi.pinEntryDone = false
     }
 
@@ -195,15 +213,15 @@ class PixiePinEntryActivity : ComponentActivity() {
                 SdkResult.Success -> {
                     if (isOnlinePin) {
                         val pinBlock = data?.let { ByteUtils.byteArray2HexString(it) }.orEmpty()
-                        val ksn = currentKsn()
-                        if (pinBlock.isBlank() || ksn.isBlank()) {
+                        val ksn = if (pinScheme == OnlinePinScheme.DUKPT) currentKsn() else ""
+                        if (pinBlock.isBlank() || (pinScheme == OnlinePinScheme.DUKPT && ksn.isBlank())) {
                             failPinEntry(retCode = retCode)
                             return@runOnUiThread
                         }
                         NexgoApi.pinData.status = PinStatus.ENTERED
                         NexgoApi.pinData.pinBlock = pinBlock
                         NexgoApi.pinData.ksn = ksn
-                        increaseKsn()
+                        if (pinScheme == OnlinePinScheme.DUKPT) increaseKsn()
                     } else {
                         NexgoApi.pinData.status = PinStatus.ENTERED
                     }
@@ -286,6 +304,8 @@ class PixiePinEntryActivity : ComponentActivity() {
         const val EXTRA_PAN = "PAN"
         const val EXTRA_IS_ONLINE_PIN = "IsOnlinePIN"
         const val EXTRA_KEY_INDEX = "KeyIndex"
+        const val EXTRA_PIN_SCHEME = "PinScheme"
+        const val EXTRA_COMPATIBLE_ACQUIRERS = "CompatibleAcquirers"
 
         private const val DEFAULT_TIMEOUT_SECONDS = 60
         private const val MASK_TOKEN = "* "

@@ -18,6 +18,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.ConcurrentHashMap
 import java.util.zip.GZIPInputStream
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
@@ -27,11 +28,12 @@ private const val TAG = "ParamManager"
 private const val CONNECT_TIMEOUT_MS = 30_000
 private const val READ_TIMEOUT_MS    = 60_000
 private const val CONFIG_RESPONSE_TIMEOUT_MS = 90_000L
+private const val APPLICATION_RESULT_TIMEOUT_MS = 60_000L
 
 /**
  * Intent action declared in the payment application's MainActivity intent-filter.
- * xTMSAgent uses this to discover the installed payment app at runtime, without
- * depending on the payment app's package name (which varies per deployment).
+ * xTMSAgent uses this to validate an explicit callback package and as a fallback
+ * for unsolicited TMS parameter pushes.
  */
 private const val ACTION_PAY_APP = "android.intent.action.PAY_APP"
 
@@ -48,8 +50,8 @@ private const val ACTION_PAY_APP = "android.intent.action.PAY_APP"
  *   1. Publish paramreq via MQTT (ft=json) to request the server prepare the file.
  *   2. Broker replies on paramres with {"ok":true} or {"ok":false,"err":"..."}.
  *   3. On ok:  HTTP POST to ParamDownload.aspx, decompress .json.gz, save params.json.
- *   4. Discover payment app via PAY_APP intent filter and broadcast ACTION_PARAMS_READY
- *      with a FileProvider content:// URI so the app can read the file.
+ *   4. Broadcast ACTION_PARAMS_READY to the validated requesting package with a
+ *      FileProvider content:// URI so the app can read the file.
  */
 object ParamManager {
 
@@ -63,7 +65,13 @@ object ParamManager {
     @Volatile
     private var requestedApplicationId: String? = null
     @Volatile
+    private var requestedClientPackage: String? = null
+    @Volatile
+    private var requestedTaskId: String? = null
+    @Volatile
     private var timeoutRunnable: Runnable? = null
+    private val applicationResultTimeouts = ConcurrentHashMap<String, Runnable>()
+    private val finalizedTaskIds = ConcurrentHashMap.newKeySet<String>()
     private val configChunkLock = Any()
     private val configChunks = mutableMapOf<String, ConfigChunkAccumulator>()
 
@@ -79,13 +87,50 @@ object ParamManager {
      *
      * @param context Application context.
      */
-    fun requestParamDownload(context: Context, applicationId: String? = null): Boolean {
+    fun requestParamDownload(
+        context: Context,
+        applicationId: String? = null,
+        clientPackage: String? = null,
+        taskId: String? = null,
+    ): Boolean {
+        val normalizedTaskId = taskId?.trim()?.takeIf { it.isNotEmpty() }
+        val normalizedClientPackage = clientPackage?.trim()?.takeIf { it.isNotEmpty() }
+        val validatedClientPackage = normalizedClientPackage?.let {
+            validateParameterClientPackage(context, it)
+        }
+        if (normalizedClientPackage != null && validatedClientPackage == null) {
+            Log.w(TAG, "Rejecting parameter request with invalid clientPackage=$normalizedClientPackage")
+            publishTerminalTaskResult(
+                context,
+                normalizedTaskId,
+                success = false,
+                error = "Invalid parameter client package",
+            )
+            return false
+        }
+
         if (!downloadInProgress.compareAndSet(false, true)) {
+            val normalizedApplicationId = applicationId?.trim()?.takeIf { it.isNotEmpty() }
+            if (
+                validatedClientPackage != null &&
+                normalizedApplicationId.equals(requestedApplicationId, ignoreCase = true)
+            ) {
+                requestedClientPackage = validatedClientPackage
+                Log.d(TAG, "Attached clientPackage=$validatedClientPackage to download already in progress")
+            }
             Log.d(TAG, "Download already in progress — ignoring concurrent request")
+            publishTerminalTaskResult(
+                context,
+                normalizedTaskId,
+                success = false,
+                error = "Another parameter download is already in progress",
+            )
             return false
         }
 
         requestedApplicationId = applicationId?.trim()?.takeIf { it.isNotEmpty() }
+        requestedClientPackage = validatedClientPackage
+        requestedTaskId = normalizedTaskId
         val generation = downloadGeneration.incrementAndGet()
 
         Log.i(TAG, "Requesting parameter download via MQTT config/request applicationId=${requestedApplicationId ?: "(none)"}")
@@ -95,8 +140,8 @@ object ParamManager {
         )
         if (!published) {
             Log.w(TAG, "MQTT not connected — cannot send paramreq")
-            clearDownloadState(generation)
             notifyPaymentAppFailed(context.applicationContext, "MQTT not connected")
+            clearDownloadState(generation)
             return false
         } else {
             scheduleConfigResponseTimeout(context.applicationContext, generation, requestedApplicationId)
@@ -133,11 +178,36 @@ object ParamManager {
      */
     fun onParamFailed(context: Context, error: String?) {
         Log.e(TAG, "Param-ready ack: server reported failure — $error")
-        clearDownloadState(downloadGeneration.get())
         notifyPaymentAppFailed(context.applicationContext, error ?: "server unavailable")
+        clearDownloadState(downloadGeneration.get())
     }
 
     fun isDownloadInProgress(): Boolean = downloadInProgress.get()
+
+    fun onParameterApplicationResult(
+        context: Context,
+        taskId: String,
+        status: String?,
+        error: String?,
+    ) {
+        cancelApplicationResultTimeout(taskId)
+        when (parameterApplicationResult(status)) {
+            ParameterApplicationResult.COMPLETED -> publishTerminalTaskResult(context, taskId, success = true)
+            ParameterApplicationResult.DEFERRED -> TmsMqttManager.publishExternalTaskAck(
+                context = context,
+                taskId = taskId,
+                success = true,
+                status = "deferred",
+                statusMessage = error ?: "Parameter application deferred until settlement",
+            )
+            ParameterApplicationResult.FAILED -> publishTerminalTaskResult(
+                context,
+                taskId,
+                success = false,
+                error = error ?: "Payment application rejected the parameters",
+            )
+        }
+    }
 
     fun onConfigResponse(context: Context, payloadText: String) {
         val generation = downloadGeneration.get()
@@ -168,11 +238,7 @@ object ParamManager {
                     val jsonBytes = selectedConfig.toString().toByteArray(Charsets.UTF_8)
                     val paramsFile = saveParamsFile(context.applicationContext, jsonBytes, applicationId)
                         ?: run {
-                            notifyParameterClientFailed(
-                                context.applicationContext,
-                                applicationId,
-                                "Could not save params file",
-                            )
+                            notifyPaymentAppFailed(context.applicationContext, "Could not save params file")
                             return@forEach
                         }
 
@@ -207,11 +273,22 @@ object ParamManager {
             if (downloadGeneration.get() != generation) return@Runnable
             if (!downloadInProgress.compareAndSet(true, false)) return@Runnable
 
+            val failedApplicationId = requestedApplicationId
+            val failedClientPackage = requestedClientPackage
+            val failedTaskId = requestedTaskId
             requestedApplicationId = null
+            requestedClientPackage = null
+            requestedTaskId = null
             timeoutRunnable = null
             val message = "Timed out waiting for Global Connect config/response after ${CONFIG_RESPONSE_TIMEOUT_MS / 1000}s"
             Log.w(TAG, "$message applicationId=${applicationId ?: "(none)"} generation=$generation")
-            notifyPaymentAppFailed(context.applicationContext, message)
+            notifyParameterClientFailed(
+                context.applicationContext,
+                failedApplicationId,
+                message,
+                failedClientPackage,
+            )
+            publishTerminalTaskResult(context, failedTaskId, success = false, error = message)
         }
 
         timeoutRunnable?.let(timeoutHandler::removeCallbacks)
@@ -225,6 +302,8 @@ object ParamManager {
         timeoutRunnable = null
         downloadInProgress.set(false)
         requestedApplicationId = null
+        requestedClientPackage = null
+        requestedTaskId = null
     }
 
     private fun downloadAndNotify(context: Context) {
@@ -328,9 +407,11 @@ object ParamManager {
         paramsFile: File,
         applicationId: String? = requestedApplicationId,
     ) {
-        val paymentPkg = findParameterClientPackage(context, applicationId)
+        val taskId = requestedTaskId
+        val paymentPkg = findParameterClientPackage(context, applicationId, requestedClientPackage)
         if (paymentPkg == null) {
             Log.w(TAG, "No payment app found (PAY_APP intent filter) — params saved locally but not forwarded")
+            publishTerminalTaskResult(context, taskId, success = false, error = "No matching payment application found")
             return
         }
 
@@ -345,11 +426,14 @@ object ParamManager {
         // Grant read permission before sending the broadcast so the payment app can
         // open the URI immediately in its onReceive() call.
         context.grantUriPermission(paymentPkg, uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        taskId?.let { scheduleApplicationResultTimeout(context, it) }
 
         context.sendBroadcast(
             Intent(ParamConstants.ACTION_PARAMS_READY).apply {
                 `package` = paymentPkg
                 putExtra(ParamConstants.EXTRA_PARAMS_URI, uri.toString())
+                putExtra(ParamConstants.EXTRA_TASK_ID, taskId)
+                putExtra(ParamConstants.EXTRA_RESULT_PACKAGE, context.packageName)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
         )
@@ -358,11 +442,23 @@ object ParamManager {
     }
 
     private fun notifyPaymentAppFailed(context: Context, error: String) {
-        notifyParameterClientFailed(context, requestedApplicationId, error)
+        val taskId = requestedTaskId
+        notifyParameterClientFailed(
+            context,
+            requestedApplicationId,
+            error,
+            requestedClientPackage,
+        )
+        publishTerminalTaskResult(context, taskId, success = false, error = error)
     }
 
-    private fun notifyParameterClientFailed(context: Context, applicationId: String?, error: String) {
-        val paymentPkg = findParameterClientPackage(context, applicationId) ?: return
+    private fun notifyParameterClientFailed(
+        context: Context,
+        applicationId: String?,
+        error: String,
+        clientPackage: String? = requestedClientPackage,
+    ) {
+        val paymentPkg = findParameterClientPackage(context, applicationId, clientPackage) ?: return
         context.sendBroadcast(
             Intent(ParamConstants.ACTION_PARAMS_FAILED).apply {
                 `package` = paymentPkg
@@ -372,13 +468,50 @@ object ParamManager {
         Log.i(TAG, "ACTION_PARAMS_FAILED → $paymentPkg: $error")
     }
 
+    private fun scheduleApplicationResultTimeout(context: Context, taskId: String) {
+        val timeout = Runnable {
+            applicationResultTimeouts.remove(taskId)
+            publishTerminalTaskResult(
+                context = context,
+                taskId = taskId,
+                success = false,
+                error = "Timed out waiting for the payment application to apply parameters",
+            )
+        }
+        applicationResultTimeouts.put(taskId, timeout)?.let(timeoutHandler::removeCallbacks)
+        timeoutHandler.postDelayed(timeout, APPLICATION_RESULT_TIMEOUT_MS)
+    }
+
+    private fun cancelApplicationResultTimeout(taskId: String) {
+        applicationResultTimeouts.remove(taskId)?.let(timeoutHandler::removeCallbacks)
+    }
+
+    private fun publishTerminalTaskResult(
+        context: Context,
+        taskId: String?,
+        success: Boolean,
+        error: String? = null,
+    ) {
+        if (taskId.isNullOrBlank() || !finalizedTaskIds.add(taskId)) return
+        cancelApplicationResultTimeout(taskId)
+        TmsMqttManager.publishExternalTaskAck(
+            context = context,
+            taskId = taskId,
+            success = success,
+            errorMessage = error,
+            status = if (success) "completed" else "failed",
+            statusMessage = if (success) "Parameters applied by payment application" else error,
+        )
+    }
+
     // ── Payment app discovery ─────────────────────────────────────────────────
 
     /**
      * Discovers the installed payment application by querying for activities that
      * declare the [ACTION_PAY_APP] intent filter.
      *
-     * Returns the package name of the first matching app, or null if none is installed.
+     * Prefers the payment-app flavor matching this xTMSAgent flavor. A sole legacy
+     * match is accepted; an ambiguous list is rejected instead of routing arbitrarily.
      * Requires QUERY_ALL_PACKAGES permission (already declared in the manifest).
      */
     @Suppress("DEPRECATION")
@@ -391,13 +524,29 @@ object ParamManager {
         } else {
             context.packageManager.queryIntentActivities(intent, 0)
         }
-        val pkg = matches.firstOrNull()?.activityInfo?.packageName
-        if (pkg == null) Log.d(TAG, "queryIntentActivities(PAY_APP) returned no results")
-        else Log.d(TAG, "Payment app discovered: $pkg")
+        val packages = matches.mapNotNull { it.activityInfo?.packageName }.distinct()
+        val matchingFlavorPackage = context.packageName.replace(
+            "one.globalconnect.xtmsagent",
+            "one.globalconnect.paymentapp",
+        )
+        val pkg = when {
+            matchingFlavorPackage in packages -> matchingFlavorPackage
+            packages.size == 1 -> packages.single()
+            else -> null
+        }
+        when {
+            packages.isEmpty() -> Log.d(TAG, "queryIntentActivities(PAY_APP) returned no results")
+            pkg != null -> Log.d(TAG, "Payment app discovered: $pkg")
+            else -> Log.e(TAG, "Multiple payment apps found and none matches this xTMSAgent flavor: $packages")
+        }
         return pkg
     }
 
-    private fun findParameterClientPackage(context: Context, applicationId: String?): String? {
+    private fun findParameterClientPackage(
+        context: Context,
+        applicationId: String?,
+        clientPackage: String? = requestedClientPackage,
+    ): String? {
         return if (applicationId.equals(PINPAD_APPLICATION_ID, ignoreCase = true)) {
             runCatching {
                 context.packageManager.getApplicationInfo(PINPAD_PACKAGE, 0)
@@ -405,9 +554,47 @@ object ParamManager {
             }.getOrNull().also {
                 if (it == null) Log.w(TAG, "PINPAD_APP requested but $PINPAD_PACKAGE is not installed")
             }
+        } else if (clientPackage != null) {
+            validateParameterClientPackage(context, clientPackage)
         } else {
             findPaymentAppPackage(context)
         }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun validateParameterClientPackage(context: Context, clientPackage: String): String? {
+        val paymentAppMatches = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            context.packageManager.queryIntentActivities(
+                Intent(ACTION_PAY_APP).setPackage(clientPackage),
+                PackageManager.ResolveInfoFlags.of(0L),
+            )
+        } else {
+            context.packageManager.queryIntentActivities(
+                Intent(ACTION_PAY_APP).setPackage(clientPackage),
+                0,
+            )
+        }
+        if (paymentAppMatches.isEmpty()) {
+            Log.w(TAG, "Parameter client does not declare PAY_APP: $clientPackage")
+            return null
+        }
+
+        val receiverMatches = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            context.packageManager.queryBroadcastReceivers(
+                Intent(ParamConstants.ACTION_PARAMS_READY).setPackage(clientPackage),
+                PackageManager.ResolveInfoFlags.of(0L),
+            )
+        } else {
+            context.packageManager.queryBroadcastReceivers(
+                Intent(ParamConstants.ACTION_PARAMS_READY).setPackage(clientPackage),
+                0,
+            )
+        }
+        if (receiverMatches.isEmpty()) {
+            Log.w(TAG, "Parameter client does not declare ACTION_PARAMS_READY: $clientPackage")
+            return null
+        }
+        return clientPackage
     }
 
     private const val PINPAD_APPLICATION_ID = "PINPAD_APP"

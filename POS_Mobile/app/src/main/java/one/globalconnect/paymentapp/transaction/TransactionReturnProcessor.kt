@@ -116,6 +116,7 @@ class TransactionReturnProcessor(
         val requestTimestamp = resolveTimestamp(transaction, messageSpec.action)
         val message = hostMessageBuilder.build(
             acquirer = acquirer,
+            terminal = terminal,
             procInfo = procInfo,
             isoFactory = isoFactory,
             stanSupplier = { stan },

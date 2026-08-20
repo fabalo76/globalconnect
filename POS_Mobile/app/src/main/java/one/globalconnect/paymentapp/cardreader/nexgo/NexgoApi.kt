@@ -52,6 +52,8 @@ class NexgoApi(
     private var currentCardInfo: CardInfoEntity? = null
     private var transactionRunning = AtomicBoolean(false)
     private var contactlessDiscoverCard = false
+    private val applicationSelectionLock = Any()
+    private var pendingApplicationCount = 0
 
     var transactionListener: EmvTransactionListener? = null
     var pinEntryHandler: ((pan: String, isOnlinePin: Boolean) -> Unit)? = null
@@ -81,6 +83,7 @@ class NexgoApi(
         contactlessDiscoverCard = false
         currentRequest = request
         currentCardInfo = null
+        clearPendingApplicationSelection()
         pinData.clear()
 
         if (!transactionRunning.compareAndSet(false, true)) {
@@ -114,10 +117,43 @@ class NexgoApi(
 
     fun cancelTransaction() {
         Log.d(TAG, "cancelTransaction invoked")
+        clearPendingApplicationSelection()
         cardReader.stopSearch()
         emvHandler?.emvProcessCancel()
         transactionRunning.set(false)
         ledController.onTransactionCancelled()
+    }
+
+    fun selectApplication(selectedIndex: Int): Boolean {
+        val kernelResponse = synchronized(applicationSelectionLock) {
+            applicationSelectionResponseIndex(selectedIndex, pendingApplicationCount)?.also {
+                pendingApplicationCount = 0
+            }
+        }
+        if (kernelResponse == null) {
+            Log.w(
+                TAG,
+                "Ignoring invalid or stale application selection index=$selectedIndex",
+            )
+            return false
+        }
+
+        return try {
+            val handler = emvHandler ?: error("EMV handler is unavailable")
+            Log.d(
+                TAG,
+                "EMV_STEP onSetSelAppResponse selectedIndex=$selectedIndex response=$kernelResponse",
+            )
+            handler.onSetSelAppResponse(kernelResponse)
+            true
+        } catch (error: Throwable) {
+            Log.e(TAG, "Unable to submit EMV application selection", error)
+            transactionListener?.onError(
+                context.getString(R.string.card_reader_application_selection_error),
+                error,
+            )
+            false
+        }
     }
 
     fun destroy() {
@@ -142,14 +178,35 @@ class NexgoApi(
         }
 
         emvProcessListener.onSelApp = { labels, _, mandatory ->
-            Log.d(TAG, "emvProcessListener.onSelApp labels=${labels?.size} mandatory=$mandatory")
-            val responseIndex = when {
-                labels.isNullOrEmpty() -> -1
-                else -> 0
+            val appLabels = labels.orEmpty().toList()
+            Log.d(TAG, "emvProcessListener.onSelApp labels=${appLabels.size} mandatory=$mandatory")
+            when {
+                appLabels.isEmpty() -> {
+                    val kernelResponse = if (mandatory) 0 else -1
+                    Log.w(TAG, "EMV application selection has no candidates response=$kernelResponse")
+                    emvHandler?.onSetSelAppResponse(kernelResponse)
+                }
+
+                appLabels.size == 1 -> {
+                    Log.d(TAG, "EMV application selection auto-select response=1 label=${appLabels.first()}")
+                    emvHandler?.onSetSelAppResponse(1)
+                }
+
+                else -> {
+                    synchronized(applicationSelectionLock) {
+                        pendingApplicationCount = appLabels.size
+                    }
+                    Log.d(TAG, "EMV application selection requesting user choice labels=$appLabels")
+                    val listener = transactionListener
+                    if (listener == null) {
+                        Log.e(TAG, "No transaction listener is available for application selection")
+                        clearPendingApplicationSelection()
+                        emvHandler?.onSetSelAppResponse(-1)
+                    } else {
+                        listener.onApplicationSelectionRequested(appLabels, mandatory)
+                    }
+                }
             }
-            val kernelResponse = if (mandatory && responseIndex < 0) 0 else responseIndex
-            Log.d(TAG, "EMV_STEP onSetSelAppResponse index=$kernelResponse")
-            emvHandler?.onSetSelAppResponse(kernelResponse)
         }
         emvProcessListener.onTransInitBeforeGpo = ::handleTransInitBeforeGpo
         emvProcessListener.onConfirmCardNo = { cardInfo ->
@@ -326,8 +383,14 @@ class NexgoApi(
                     "50=${appLabel?.let { ByteUtils.byteArray2HexString(it) }} " +
                     "9F12=${preferredName?.let { ByteUtils.byteArray2HexString(it) }}",
             )
-            if (slot == CardSlotTypeEnum.RF && aid != null && aid.isNotEmpty()) {
-                configureContactlessParameters(handler, aid)
+            currentRequest?.let { request -> configureCountryAndCurrency(handler, request) }
+            val selectedAid = aid?.takeIf { it.isNotEmpty() }
+                ?: dedicatedFileName?.takeIf { it.isNotEmpty() }
+            if (slot == CardSlotTypeEnum.RF && selectedAid != null) {
+                configureContactlessParameters(handler, selectedAid)
+            }
+            if (selectedAid != null) {
+                configureTerminalCapabilities(handler, selectedAid, slot == CardSlotTypeEnum.RF)
             }
         } catch (error: Throwable) {
             Log.w(TAG, "Failed to handle OnTransInitBeforeGPO", error)
@@ -359,6 +422,73 @@ class NexgoApi(
             aidHex.contains("A000000065") -> configJcbContactlessParameter(handler)
             aidHex.contains("A000000333010108") -> configUnionPayParameter(handler)
         }
+    }
+
+    private fun configureCountryAndCurrency(
+        handler: EmvHandler2,
+        request: EmvTransactionRequest,
+    ) {
+        val values = EmvTransactionTags.countryAndCurrency(
+            countryCode = request.countryCode,
+            currencyCode = request.currencyCode,
+        ) ?: run {
+            Log.w(
+                TAG,
+                "Skipping EMV country/currency TLVs because request values are invalid: " +
+                    "country=${request.countryCode} currency=${request.currencyCode}",
+            )
+            return
+        }
+
+        handler.setTlv(TAG_TERMINAL_COUNTRY_CODE, values.countryCode)
+        handler.setTlv(TAG_TRANSACTION_CURRENCY_CODE, values.currencyCode)
+        Log.i(
+            TAG,
+            "EMV_STEP countryCurrency 9F1A=${ByteUtils.byteArray2HexString(values.countryCode)} " +
+                "5F2A=${ByteUtils.byteArray2HexString(values.currencyCode)}",
+        )
+    }
+
+    private fun configureTerminalCapabilities(
+        handler: EmvHandler2,
+        aid: ByteArray,
+        contactless: Boolean,
+    ) {
+        val aidHex = ByteUtils.byteArray2HexString(aid)?.uppercase(Locale.US) ?: return
+        val interfaceType = if (contactless) {
+            EmvCapabilityInterface.CONTACTLESS
+        } else {
+            EmvCapabilityInterface.CONTACT
+        }
+        val profile = EmvTerminalCapabilities.findProfile(
+            configuredTerminalCapabilityProfiles,
+            aidHex,
+            interfaceType,
+        ) ?: run {
+            Log.w(TAG, "No 9F33 capability profile found for interface=$interfaceType aid=$aidHex")
+            return
+        }
+        val tag9F33 = byteArrayOf(0x9F.toByte(), 0x33.toByte())
+        val current = handler.getTlv(tag9F33, EmvDataSourceEnum.FROM_KERNEL)
+        val configured = EmvTerminalCapabilities.apply9F33(current, profile) ?: run {
+            Log.w(
+                TAG,
+                "Unable to configure 9F33 for interface=$interfaceType aid=$aidHex: " +
+                    "kernel value is missing and the profile has no base value",
+            )
+            return
+        }
+        handler.setTlv(tag9F33, configured)
+        Log.i(
+            TAG,
+            "EMV_STEP 9F33 interface=$interfaceType aid=$aidHex " +
+                "before=${current?.let { ByteUtils.byteArray2HexString(it) }} " +
+                "after=${ByteUtils.byteArray2HexString(configured)} " +
+                "controlled=%02X enabled=%02X".format(
+                    profile.controlledCvmMask,
+                    profile.enabledCvmMask,
+                ),
+        )
     }
 
     private fun isOnlinePinEnabledForContactlessAid(aidHex: String): Boolean {
@@ -558,6 +688,7 @@ class NexgoApi(
             "handlePinRequest online=$isOnlinePin attemptsRemaining=$attemptsRemaining pan=${maskPan(currentCardInfo?.cardNo)}",
         )
         transactionListener?.onPinRequested(isOnlinePin, attemptsRemaining)
+        val pan = currentCardInfo?.cardNo ?: ""
         if (isOnlinePin) {
             pinData.onlinePinRequested = true
             if (configuredAcquirerPinTypes.none(::supportsOnlinePinType)) {
@@ -569,16 +700,28 @@ class NexgoApi(
                 emvHandler?.onSetPinInputResponse(false, false)
                 return
             }
-        }
-        val pan = currentCardInfo?.cardNo ?: ""
-        if (isOnlinePin && pan.isBlank()) {
-            val message = context.getString(R.string.online_pin_error_missing_pan)
-            Log.e(TAG, message)
-            pinData.status = PinStatus.ERROR
-            pinData.errorMessage = message
-            pinEntryDone = true
-            emvHandler?.onSetPinInputResponse(false, false)
-            return
+            if (pan.isBlank()) {
+                val message = context.getString(R.string.online_pin_error_missing_pan)
+                Log.e(TAG, message)
+                pinData.status = PinStatus.ERROR
+                pinData.errorMessage = message
+                pinEntryDone = true
+                emvHandler?.onSetPinInputResponse(false, false)
+                return
+            }
+            val selection = configuredOnlinePinResolver?.resolve(pan)
+            if (selection == null) {
+                val message = context.getString(R.string.online_pin_error_ambiguous_key_profile)
+                Log.e(TAG, message)
+                pinData.status = PinStatus.ERROR
+                pinData.errorMessage = message
+                pinEntryDone = true
+                emvHandler?.onSetPinInputResponse(false, false)
+                return
+            }
+            pinData.scheme = selection.scheme
+            pinData.keyIndex = selection.keyIndex
+            pinData.compatibleAcquirerIds = selection.compatibleAcquirerIds
         }
         val handler = pinEntryHandler
         if (handler != null) {
@@ -586,23 +729,35 @@ class NexgoApi(
             handler.invoke(pan, isOnlinePin)
         } else {
             Log.d(TAG, "handlePinRequest launching PixiePinEntryActivity")
-            launchPinEntryActivity(pan, isOnlinePin)
+            launchPinEntryActivity(pan, isOnlinePin, pinData.scheme, pinData.keyIndex, pinData.compatibleAcquirerIds)
         }
     }
 
-    private fun launchPinEntryActivity(pan: String, isOnlinePin: Boolean) {
+    private fun launchPinEntryActivity(
+        pan: String,
+        isOnlinePin: Boolean,
+        scheme: OnlinePinScheme?,
+        keyIndex: Int,
+        compatibleAcquirerIds: Set<String>,
+    ) {
         Log.d(TAG, "launchPinEntryActivity pan=${maskPan(pan)} isOnlinePin=$isOnlinePin")
         val intent = Intent(context, PixiePinEntryActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK
             putExtra(PixiePinEntryActivity.EXTRA_PAN, pan)
             putExtra(PixiePinEntryActivity.EXTRA_IS_ONLINE_PIN, isOnlinePin)
-            putExtra(PixiePinEntryActivity.EXTRA_KEY_INDEX, DEFAULT_KEY_INDEX)
+            putExtra(PixiePinEntryActivity.EXTRA_KEY_INDEX, keyIndex)
+            putExtra(PixiePinEntryActivity.EXTRA_PIN_SCHEME, scheme?.name)
+            putStringArrayListExtra(
+                PixiePinEntryActivity.EXTRA_COMPATIBLE_ACQUIRERS,
+                ArrayList(compatibleAcquirerIds),
+            )
         }
         context.startActivity(intent)
     }
 
     private fun handleEmvFinish(resultCode: Int, result: EmvProcessResultEntity?) {
         Log.d(TAG, "handleEmvFinish resultCode=$resultCode hasResult=${result != null}")
+        clearPendingApplicationSelection()
         transactionRunning.set(false)
         transactionListener?.onTransactionFinished(resultCode, result)
         if (currentCardInfo?.cardExistslot == CardSlotTypeEnum.RF) {
@@ -613,6 +768,12 @@ class NexgoApi(
             }
         }
         ledController.onTransactionFinished()
+    }
+
+    private fun clearPendingApplicationSelection() {
+        synchronized(applicationSelectionLock) {
+            pendingApplicationCount = 0
+        }
     }
 
     private fun maskPan(pan: String?): String? {
@@ -630,17 +791,20 @@ class NexgoApi(
 
     companion object {
         private const val TAG = "NexgoApi"
-        private const val DEFAULT_KEY_INDEX = 0
         private const val ONLINE_PIN_CVM_CAPABILITY_MASK = 0x40
         private const val ONLINE_PIN_TTQ_CAPABILITY_MASK = 0x04
+        private val TAG_TERMINAL_COUNTRY_CODE = byteArrayOf(0x9F.toByte(), 0x1A.toByte())
+        private val TAG_TRANSACTION_CURRENCY_CODE = byteArrayOf(0x5F.toByte(), 0x2A.toByte())
 
         internal val pinData: PinData = PinData()
         @Volatile internal var pinEntryDone: Boolean = true
         @Volatile internal var emvHandler: EmvHandler2? = null
         @Volatile private var configuredAidList: List<AidEntity>? = null
         @Volatile private var configuredTerminalOnlinePinCap: Boolean = true
+        @Volatile private var configuredTerminalCapabilityProfiles: List<EmvTerminalCapabilityProfile> = emptyList()
         @Volatile private var configuredCapkList: List<CapkEntity>? = null
         @Volatile private var configuredAcquirerPinTypes: Set<Int> = emptySet()
+        @Volatile private var configuredOnlinePinResolver: OnlinePinProfileResolver? = null
 
         internal fun applyOnlinePinCvmCapability(value: Int, onlinePinEnabled: Boolean): Int {
             return if (onlinePinEnabled) value else value and ONLINE_PIN_CVM_CAPABILITY_MASK.inv()
@@ -650,11 +814,23 @@ class NexgoApi(
             return if (onlinePinEnabled) value else value and ONLINE_PIN_TTQ_CAPABILITY_MASK.inv()
         }
 
-        internal fun supportsOnlinePinType(pinType: Int): Boolean = pinType == 3 || pinType == 4
+        internal fun supportsOnlinePinType(pinType: Int): Boolean = pinType == 1 || pinType == 3 || pinType == 4
+
+        internal fun applicationSelectionResponseIndex(
+            selectedIndex: Int,
+            applicationCount: Int,
+        ): Int? = selectedIndex
+            .takeIf { it in 0 until applicationCount }
+            ?.plus(1)
 
         fun applyAcquirerPinTypes(pinTypes: Collection<Int>) {
             configuredAcquirerPinTypes = pinTypes.toSet()
             Log.d(TAG, "applyAcquirerPinTypes configured=${configuredAcquirerPinTypes.sorted()}")
+        }
+
+        internal fun applyOnlinePinProfileResolver(resolver: OnlinePinProfileResolver) {
+            configuredOnlinePinResolver = resolver
+            Log.d(TAG, "Online PIN profile resolver updated")
         }
 
         /**
@@ -680,9 +856,14 @@ class NexgoApi(
          * parameters are received. If [emvHandler] is null at call time the list is stored
          * and applied the next time a [NexgoApi] instance is initialised.
          */
-        fun applyEmvAidList(aidList: List<AidEntity>, terminalOnlinePinCap: Boolean = true) {
+        internal fun applyEmvAidList(
+            aidList: List<AidEntity>,
+            terminalOnlinePinCap: Boolean = true,
+            terminalCapabilityProfiles: List<EmvTerminalCapabilityProfile> = emptyList(),
+        ) {
             configuredAidList = aidList
             configuredTerminalOnlinePinCap = terminalOnlinePinCap
+            configuredTerminalCapabilityProfiles = terminalCapabilityProfiles
             val handler = emvHandler ?: run {
                 Log.d(TAG, "applyEmvAidList: handler not ready, list stored for next init")
                 return
@@ -692,7 +873,8 @@ class NexgoApi(
             Log.d(
                 TAG,
                 "applyEmvAidList applied ${aidList.size} AIDs to active handler " +
-                    "terminalOnlinePinCap=$terminalOnlinePinCap",
+                    "terminalOnlinePinCap=$terminalOnlinePinCap " +
+                    "9F33Profiles=${terminalCapabilityProfiles.size}",
             )
             val loaded = handler.aidList
             if (loaded != null) {

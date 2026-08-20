@@ -410,7 +410,11 @@ object dst_ReportTotals : UICDestination {
         return context.getString(R.string.totals_report)
     }
     val screen: @Composable (() -> Unit) -> Unit = { onBack ->
-        TotalsReportScreen(onBack = onBack)
+        ReportsScreen(
+            titleResId = R.string.totals_report,
+            onBack = onBack,
+            printTransactions = false,
+        )
     }
 }
 
@@ -424,8 +428,7 @@ object dst_ReportAudit : UICDestination {
         ReportsScreen(
             titleResId = R.string.audit_report,
             onBack = onBack,
-            showPrintDialogOnStart = true,
-            defaultPrintTransactions = true,
+            printTransactions = true,
         )
     }
 }

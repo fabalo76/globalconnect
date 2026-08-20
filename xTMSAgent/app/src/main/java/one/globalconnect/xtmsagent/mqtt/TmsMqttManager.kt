@@ -163,12 +163,19 @@ object TmsMqttManager {
                         "applicationId",
                         "ApplicationId",
                     )
-                    val started = ParamManager.requestParamDownload(appContext, applicationId)
-                    publishTaskAck(
-                        taskId,
-                        started,
-                        if (started) null else "Configuration request could not be started",
+                    val started = ParamManager.requestParamDownload(
+                        context = appContext,
+                        applicationId = applicationId,
+                        taskId = taskId,
                     )
+                    if (started) {
+                        publishTaskAck(
+                            taskId = taskId,
+                            success = true,
+                            statusOverride = "running",
+                            statusMessage = "Downloading and applying parameters",
+                        )
+                    }
                 }
                 "applicationdownload", "firmwaredownload", "updatefirmware", "bootanimationdownload" -> {
                     if (!handledDownloadTaskIds.add(taskId)) {
@@ -1390,8 +1397,12 @@ object TmsMqttManager {
         val now = Instant.now().toString()
         val status = statusOverride ?: if (success) "completed" else "failed"
         val result = org.json.JSONObject().apply {
-            if (success) put("message", "Task completed")
-            else if (!errorMessage.isNullOrBlank()) put("message", errorMessage)
+            when {
+                !errorMessage.isNullOrBlank() -> put("message", errorMessage)
+                !statusMessage.isNullOrBlank() -> put("message", statusMessage)
+                success && status == "completed" -> put("message", "Task completed")
+                success -> put("message", "Task $status")
+            }
         }
         val payload = org.json.JSONObject()
             .put("taskId", taskId)

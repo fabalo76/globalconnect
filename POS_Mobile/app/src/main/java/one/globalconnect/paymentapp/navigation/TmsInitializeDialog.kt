@@ -29,6 +29,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import one.globalconnect.paymentapp.R
 import one.globalconnect.paymentapp.GlobalConnectPaymentApplication
+import one.globalconnect.paymentapp.ParameterRequestReadiness
+import one.globalconnect.paymentapp.PendingUpdateManager
+import one.globalconnect.paymentapp.checkParameterRequestReadiness
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -39,7 +42,6 @@ private const val TIMEOUT_MS = 60_000L
 private sealed class InitDialogState {
     object Checking   : InitDialogState()
     object Requesting : InitDialogState()
-    object Success    : InitDialogState()
     object TimedOut   : InitDialogState()
     data class Error(val message: String) : InitDialogState()
 }
@@ -52,24 +54,33 @@ fun TmsInitializeDialog(onDismiss: () -> Unit) {
     LaunchedEffect(Unit) {
         val app = GlobalConnectPaymentApplication.instance
 
-        // Batch check
-        val count = try {
-            app.container.transactionRepository
-                .getTransactionCount()
-                .first()
-        } catch (e: Exception) {
-            Log.e(TAG, "Batch check failed", e)
-            state = InitDialogState.Error(
-                app.getString(R.string.setting_initialize_err_generic)
-            )
-            return@LaunchedEffect
-        }
-
-        if (count > 0) {
-            state = InitDialogState.Error(
-                app.getString(R.string.setting_initialize_err_batch_not_empty)
-            )
-            return@LaunchedEffect
+        val readiness = checkParameterRequestReadiness(
+            operationInProgress = { PendingUpdateManager.isOperationInProgress },
+            transactionCount = {
+                app.container.transactionRepository.getTransactionCount().first()
+            },
+        )
+        when (readiness) {
+            ParameterRequestReadiness.Ready -> Unit
+            ParameterRequestReadiness.OperationInProgress -> {
+                state = InitDialogState.Error(
+                    app.getString(R.string.setting_initialize_err_operation_in_progress),
+                )
+                return@LaunchedEffect
+            }
+            is ParameterRequestReadiness.LiveTransactions -> {
+                state = InitDialogState.Error(
+                    app.getString(R.string.setting_initialize_err_batch_not_empty, readiness.count),
+                )
+                return@LaunchedEffect
+            }
+            ParameterRequestReadiness.UnableToVerify -> {
+                Log.e(TAG, "Could not prove that the application is idle and the batch is empty")
+                state = InitDialogState.Error(
+                    app.getString(R.string.setting_initialize_err_generic),
+                )
+                return@LaunchedEffect
+            }
         }
 
         // Send request and start timeout race
@@ -80,7 +91,7 @@ fun TmsInitializeDialog(onDismiss: () -> Unit) {
         val successJob = launch {
             app.paramsUpdateEvent.first()
             Log.i(TAG, "paramsUpdateEvent received — success")
-            state = InitDialogState.Success
+            onDismiss()
         }
 
         delay(TIMEOUT_MS)
@@ -117,7 +128,6 @@ fun TmsInitializeDialog(onDismiss: () -> Unit) {
                     modifier = Modifier.fillMaxWidth(),
                     colors = CardDefaults.cardColors(
                         containerColor = when (state) {
-                            is InitDialogState.Success    -> MaterialTheme.colorScheme.secondaryContainer
                             is InitDialogState.Requesting,
                             is InitDialogState.Checking   -> MaterialTheme.colorScheme.secondaryContainer
                             else                          -> MaterialTheme.colorScheme.errorContainer
@@ -153,21 +163,6 @@ fun TmsInitializeDialog(onDismiss: () -> Unit) {
                                 Text(
                                     text = stringResource(R.string.setting_initialize_requesting),
                                     style = MaterialTheme.typography.bodyMedium,
-                                    textAlign = TextAlign.Center,
-                                    color = MaterialTheme.colorScheme.onSecondaryContainer
-                                )
-                            }
-
-                            is InitDialogState.Success -> {
-                                Text(
-                                    text = stringResource(R.string.setting_initialize_success_title),
-                                    style = MaterialTheme.typography.titleMedium,
-                                    textAlign = TextAlign.Center,
-                                    color = MaterialTheme.colorScheme.onSecondaryContainer
-                                )
-                                Text(
-                                    text = stringResource(R.string.setting_initialize_success_body),
-                                    style = MaterialTheme.typography.bodySmall,
                                     textAlign = TextAlign.Center,
                                     color = MaterialTheme.colorScheme.onSecondaryContainer
                                 )

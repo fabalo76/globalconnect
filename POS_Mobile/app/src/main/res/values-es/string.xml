@@ -529,6 +529,17 @@
     <!-- Pantalla de contraseña -->
     <string name="password">Contraseña</string>
     <string name="enter_password">Ingrese la contraseña:</string>
+    <string name="enter_action_password">Ingrese contraseña de %1$s:</string>
+    <string name="password_action_bank">banco</string>
+    <string name="password_action_configuration">configuración</string>
+    <string name="password_action_void">anulación</string>
+    <string name="password_action_clear">limpieza</string>
+    <string name="password_action_adjust">ajuste</string>
+    <string name="password_action_refund">reembolso</string>
+    <string name="password_action_report">reportes</string>
+    <string name="password_action_offline">operación fuera de línea</string>
+    <string name="password_action_settlement">cierre</string>
+    <string name="password_action_cash_advance">avance de efectivo</string>
     <string name="confirm_password">Confirmar contraseña</string>
     <string name="incorrect_password">Contraseña incorrecta</string>
     <string name="incorrect_password_msg">La contraseña ingresada no coincide con los registros. Inténtelo nuevamente.</string>
@@ -726,6 +737,7 @@
     <string name="report_window_range">Reporte: %1$s - %2$s</string>
     <string name="report_window_one_day">Reporte: %1$s</string>
     <string name="report_export">Exportar</string>
+    <string name="report_current_batch">Lote actual</string>
     <string name="report_window_options">Selección de ventana de reporte</string>
     <string name="report_window_options_transactions">Transacciones</string>
     <string name="report_window_options_print_transactions">¿Imprimir transacciones?</string>
@@ -915,6 +927,7 @@
     <string name="pin_entry_secure_keypad_hint">Use el teclado seguro que aparece abajo</string>
     <string name="online_pin_error_no_acquirer_pin_type">La tarjeta solicitó NIP en línea, pero el adquirente no tiene configurado un tipo de NIP compatible.</string>
     <string name="online_pin_error_no_selected_acquirer_pin_type">La tarjeta solicitó NIP en línea, pero el adquirente seleccionado no tiene configurado un tipo de NIP compatible.</string>
+    <string name="online_pin_error_ambiguous_key_profile">No se pudo seleccionar un perfil único de llave NIP MK/SK o DUKPT para esta tarjeta.</string>
     <string name="online_pin_error_missing_pan">La tarjeta solicitó NIP en línea, pero el número de tarjeta no estaba disponible para el PIN pad interno.</string>
     <string name="online_pin_error_internal_pinpad">La tarjeta solicitó NIP en línea, pero ocurrió un error en el PIN pad interno.</string>
     <string name="offline_pin_error_internal_pinpad">Ocurrió un error en el PIN pad interno al obtener el NIP fuera de línea.</string>
@@ -942,6 +955,7 @@
     <string name="card_reader_success">Tarjeta detectada</string>
     <string name="card_reader_error">Error del lector de tarjetas: %1$s</string>
     <string name="card_reader_error_exception">Error inesperado (%1$s)</string>
+    <string name="card_reader_application_selection_error">No se pudo seleccionar la aplicación de pago</string>
     <string name="card_reader_error_start">No se pudo iniciar el escaneo de tarjeta (código %1$d)</string>
     <string name="card_reader_error_code">Código de estado SDK %1$d</string>
     <string name="card_reader_slot_swipe">Deslizar</string>
@@ -1134,9 +1148,16 @@
     <string name="setting_initialize_requested">Solicitado</string>
     <string name="setting_initialize_err_batch_not_empty">Lote no vacío (%1$d transacción(es))</string>
     <string name="setting_initialize_err_generic">No se pudo verificar el estado del lote</string>
+    <string name="setting_initialize_err_operation_in_progress">Hay una transacción o cierre en proceso. Intente nuevamente cuando el terminal esté inactivo.</string>
     <string name="setting_initialize_requesting">Solicitando parámetros al servidor…</string>
-    <string name="setting_initialize_success_title">Parámetros Actualizados</string>
-    <string name="setting_initialize_success_body">La configuración del terminal fue descargada y aplicada correctamente.</string>
+    <string name="pending_param_update_title">Actualización de Parámetros pendiente</string>
+    <string name="pending_param_update_msg">Por favor realice cierre.</string>
+    <string name="pending_param_update_settlement">Realizar Cierre</string>
+    <string name="pending_param_update_dismiss">Posponer</string>
+    <string name="setting_initialize_success_title">Parámetros de la aplicación de pagos actualizados</string>
+    <string name="setting_initialize_success_body">Los parámetros de la aplicación de pagos se descargaron y aplicaron correctamente.</string>
+    <string name="tms_parameter_updates_channel_name">Actualizaciones de parámetros de la aplicación de pagos</string>
+    <string name="tms_parameter_updates_channel_description">Notificaciones de actualizaciones de parámetros de la aplicación de pagos</string>
     <string name="setting_initialize_timeout_title">Tiempo de Espera Agotado</string>
     <string name="setting_initialize_timeout_body">No se recibió respuesta del gestor de terminales.\nAsegúrese de que xTMSAgent esté en ejecución y el terminal tenga acceso a la red.</string>
     <string name="setting_initialize_error_title">Solicitud Fallida</string>

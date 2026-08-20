@@ -4,6 +4,7 @@ import android.util.Log
 import androidx.annotation.StringRes
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.nexgo.common.ByteUtils
 import com.nexgo.oaf.apiv3.SdkResult
 import com.nexgo.oaf.apiv3.device.reader.CardInfoEntity
 import com.nexgo.oaf.apiv3.device.reader.CardSlotTypeEnum
@@ -18,9 +19,14 @@ import one.globalconnect.paymentapp.cardreader.nexgo.EmvTransactionRequest
 import one.globalconnect.paymentapp.cardreader.nexgo.MagstripeData
 import one.globalconnect.paymentapp.cardreader.nexgo.NexgoApi
 import one.globalconnect.paymentapp.cardreader.nexgo.NexgoSdkResult
+import one.globalconnect.paymentapp.cardreader.nexgo.OnlinePinScheme
+import one.globalconnect.paymentapp.cardreader.nexgo.PinStatus
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.math.BigDecimal
@@ -29,7 +35,7 @@ import java.util.Locale
 
 private const val TAG = "CardReaderViewModel"
 
-private val EMV_TAG_WHITELIST = arrayOf(
+internal val EMV_TAG_WHITELIST = arrayOf(
     "9f26",
     "9f27",
     "9f10",
@@ -45,6 +51,7 @@ private val EMV_TAG_WHITELIST = arrayOf(
     "9f03",
     "9f33",
     "9f34",
+    "9b",
     "9f35",
     "9f1e",
     "9f09",
@@ -72,6 +79,9 @@ class CardReaderViewModel(
 
     private val _uiState = MutableStateFlow(CardReaderUiState())
     val uiState: StateFlow<CardReaderUiState> = _uiState.asStateFlow()
+
+    private val onlineCompletionChannel = Channel<EmvKernelCompletion>(Channel.BUFFERED)
+    val onlineCompletions: Flow<EmvKernelCompletion> = onlineCompletionChannel.receiveAsFlow()
 
     private val stateLock = Any()
     @Volatile
@@ -119,6 +129,8 @@ class CardReaderViewModel(
                 isSearching = true,
                 status = CardReaderStatus.Waiting,
                 cardData = null,
+                onlineAuthorizationPending = false,
+                applicationSelection = null,
             )
         }
 
@@ -198,8 +210,25 @@ class CardReaderViewModel(
                 isSearching = false,
                 status = CardReaderStatus.Idle,
                 cardData = null,
+                onlineAuthorizationPending = false,
+                applicationSelection = null,
             )
         }
+    }
+
+    fun selectApplication(selectedIndex: Int) {
+        val selection = _uiState.value.applicationSelection
+        if (selection == null || selectedIndex !in selection.labels.indices) {
+            Log.w(TAG, "Ignoring invalid application selection index=$selectedIndex")
+            return
+        }
+
+        Log.d(
+            TAG,
+            "selectApplication index=$selectedIndex label=${selection.labels[selectedIndex]}",
+        )
+        _uiState.update { state -> state.copy(applicationSelection = null) }
+        nexgoApi.selectApplication(selectedIndex)
     }
 
     override fun onCleared() {
@@ -215,20 +244,36 @@ class CardReaderViewModel(
         super.onCleared()
     }
 
-    private fun respondToOnlineProcessing() {
-        Log.d(TAG, "respondToOnlineProcessing invoked")
+    fun completeOnlineAuthorization(response: EmvOnlineAuthorizationResponse) {
+        Log.d(
+            TAG,
+            "completeOnlineAuthorization hostReachable=${response.hostReachable} " +
+                "responseCode=${response.responseCode} field55Length=${response.field55?.length ?: 0}",
+        )
         val handler = NexgoApi.emvHandler ?: return
         try {
             val onlineResult = EmvOnlineResultEntity().apply {
-                rejCode = "00"
-                authCode = "000000"
-                recvField55 = null
+                rejCode = response.responseCode.ifBlank { "96" }
+                authCode = response.authorizationCode.orEmpty()
+                recvField55 = decodeField55(response.field55)
             }
-            handler.onSetOnlineProcResponse(SdkResult.Success, onlineResult)
-            Log.d(TAG, "respondToOnlineProcessing acknowledged with success")
+            val sdkResult = if (response.hostReachable) SdkResult.Success else SdkResult.Fail
+            handler.onSetOnlineProcResponse(sdkResult, onlineResult)
+            Log.d(TAG, "completeOnlineAuthorization submitted sdkResult=$sdkResult")
         } catch (error: Throwable) {
-            Log.w(TAG, "Failed to acknowledge EMV online processing", error)
+            Log.w(TAG, "Failed to submit EMV online authorization result", error)
         }
+    }
+
+    private fun decodeField55(field55: String?): ByteArray? {
+        val normalized = field55
+            ?.replace("\\s+".toRegex(), "")
+            ?.takeIf {
+                it.isNotBlank() && it.length % 2 == 0 &&
+                    it.all { character -> character.digitToIntOrNull(16) != null }
+            }
+            ?: return null
+        return ByteUtils.hexString2ByteArray(normalized)
     }
 
     private fun gatherEmvData(): EmvData {
@@ -365,6 +410,8 @@ class CardReaderViewModel(
                 isSearching = false,
                 status = status,
                 cardData = if (status is CardReaderStatus.Success) result else null,
+                onlineAuthorizationPending = false,
+                applicationSelection = null,
             )
         }
     }
@@ -416,6 +463,13 @@ class CardReaderViewModel(
         val slot = info?.cardExistslot ?: activeSlot
         val derived = deriveCardData(trackData, emvData)
         val base = info?.toResult(retCode, trackData, emvData.tags, emvData.rawTlv)
+        val onlinePinEntered = NexgoApi.pinData.status == PinStatus.ENTERED &&
+            NexgoApi.pinData.onlinePinRequested
+        val pinBlock = NexgoApi.pinData.pinBlock.takeIf { onlinePinEntered && it.isNotBlank() }
+        val ksn = NexgoApi.pinData.ksn.takeIf { onlinePinEntered && it.isNotBlank() }
+        val onlinePinScheme = NexgoApi.pinData.scheme.takeIf { onlinePinEntered }
+        val onlinePinKeyIndex = NexgoApi.pinData.keyIndex.takeIf { onlinePinEntered }
+        val compatibleAcquirerIds = NexgoApi.pinData.compatibleAcquirerIds.takeIf { onlinePinEntered }.orEmpty()
 
         return base?.copy(
             maskedCardNumber = base.maskedCardNumber ?: derived.maskedPan,
@@ -427,6 +481,11 @@ class CardReaderViewModel(
             serviceCode = base.serviceCode ?: derived.serviceCode,
             csn = base.csn ?: derived.cardSequenceNumber,
             onlinePinRequested = NexgoApi.pinData.onlinePinRequested,
+            pinBlock = pinBlock,
+            ksn = ksn,
+            onlinePinScheme = onlinePinScheme,
+            onlinePinKeyIndex = onlinePinKeyIndex,
+            onlinePinAcquirerIds = compatibleAcquirerIds,
         ) ?: CardReadResult(
             returnCode = retCode,
             slotType = slot,
@@ -443,6 +502,11 @@ class CardReaderViewModel(
             emvTags = emvData.tags,
             rawEmvData = emvData.rawTlv,
             onlinePinRequested = NexgoApi.pinData.onlinePinRequested,
+            pinBlock = pinBlock,
+            ksn = ksn,
+            onlinePinScheme = onlinePinScheme,
+            onlinePinKeyIndex = onlinePinKeyIndex,
+            onlinePinAcquirerIds = compatibleAcquirerIds,
         )
     }
 
@@ -665,6 +729,25 @@ class CardReaderViewModel(
             finishTransaction(CardReaderStatus.Success, result)
         }
 
+        override fun onApplicationSelectionRequested(
+            appLabels: List<String>,
+            isMandatory: Boolean,
+        ) {
+            Log.d(
+                TAG,
+                "onApplicationSelectionRequested labels=$appLabels mandatory=$isMandatory",
+            )
+            postState {
+                it.copy(
+                    status = CardReaderStatus.ProcessingEmv,
+                    applicationSelection = EmvApplicationSelection(
+                        labels = appLabels,
+                        isMandatory = isMandatory,
+                    ),
+                )
+            }
+        }
+
         override fun onPrompt(prompt: PromptEnum?) {
             Log.d(TAG, "onPrompt prompt=${prompt?.name}")
             try {
@@ -680,10 +763,24 @@ class CardReaderViewModel(
 
         override fun onOnlineProcessing() {
             Log.d(TAG, "onOnlineProcessing callback")
-            postState {
-                it.copy(status = CardReaderStatus.ProcessingEmv)
+            if (_uiState.value.onlineAuthorizationPending) {
+                Log.w(TAG, "Ignoring duplicate online processing callback")
+                return
             }
-            respondToOnlineProcessing()
+            val emvData = gatherEmvData()
+            val onlineRequest = createCardResult(SdkResult.Success, activeCardInfo, null, emvData)
+            postState {
+                it.copy(
+                    status = CardReaderStatus.ProcessingEmv,
+                    cardData = onlineRequest,
+                    onlineAuthorizationPending = true,
+                )
+            }
+            Log.d(
+                TAG,
+                "onOnlineProcessing exposed authorization request maskedPan=${onlineRequest.maskedCardNumber} " +
+                    "field55Length=${onlineRequest.rawEmvData?.length ?: 0}",
+            )
         }
 
         override fun onContactlessRetryRequired() {
@@ -713,6 +810,7 @@ class CardReaderViewModel(
         override fun onTransactionFinished(resultCode: Int, result: EmvProcessResultEntity?) {
             val sdkName = NexgoSdkResult.sdkName(resultCode)
             Log.d(TAG, "onTransactionFinished resultCode=$resultCode ($sdkName)")
+            val wasOnlineAuthorizationPending = _uiState.value.onlineAuthorizationPending
             val emvData = gatherEmvData()
             val cardResult = createCardResult(resultCode, activeCardInfo, null, emvData)
             val status = if (resultCode == SdkResult.Success) {
@@ -725,12 +823,33 @@ class CardReaderViewModel(
                 CardReaderStatus.Error(errorMessage)
             }
             finishTransaction(status, cardResult)
+            if (wasOnlineAuthorizationPending) {
+                val message = (status as? CardReaderStatus.Error)?.reason.orEmpty()
+                onlineCompletionChannel.trySend(
+                    EmvKernelCompletion(
+                        resultCode = resultCode,
+                        message = message,
+                        cardData = cardResult,
+                    )
+                )
+                Log.d(TAG, "onTransactionFinished emitted online completion resultCode=$resultCode")
+            }
         }
 
         override fun onError(message: String, throwable: Throwable?) {
             Log.d(TAG, "onError message=$message throwable=${throwable?.javaClass?.simpleName}")
             Log.e(TAG, "Card reader error: $message", throwable)
+            val wasOnlineAuthorizationPending = _uiState.value.onlineAuthorizationPending
             finishTransaction(CardReaderStatus.Error(message), null)
+            if (wasOnlineAuthorizationPending) {
+                onlineCompletionChannel.trySend(
+                    EmvKernelCompletion(
+                        resultCode = SdkResult.Fail,
+                        message = message,
+                        cardData = null,
+                    )
+                )
+            }
         }
 
         override fun onMultipleCardsDetected() {
@@ -787,6 +906,13 @@ data class CardReaderUiState(
     val isSearching: Boolean = false,
     val status: CardReaderStatus = CardReaderStatus.Idle,
     val cardData: CardReadResult? = null,
+    val onlineAuthorizationPending: Boolean = false,
+    val applicationSelection: EmvApplicationSelection? = null,
+)
+
+data class EmvApplicationSelection(
+    val labels: List<String>,
+    val isMandatory: Boolean,
 )
 
 sealed class CardReaderStatus {
@@ -815,9 +941,27 @@ data class CardReadResult(
     val emvTags: List<EmvTag> = emptyList(),
     val rawEmvData: String? = null,
     val onlinePinRequested: Boolean = false,
+    val pinBlock: String? = null,
+    val ksn: String? = null,
+    val onlinePinScheme: OnlinePinScheme? = null,
+    val onlinePinKeyIndex: Int? = null,
+    val onlinePinAcquirerIds: Set<String> = emptySet(),
 )
 
 data class EmvTag(
     val tag: String,
     val value: String,
+)
+
+data class EmvOnlineAuthorizationResponse(
+    val hostReachable: Boolean,
+    val responseCode: String,
+    val authorizationCode: String? = null,
+    val field55: String? = null,
+)
+
+data class EmvKernelCompletion(
+    val resultCode: Int,
+    val message: String,
+    val cardData: CardReadResult?,
 )

@@ -5,10 +5,13 @@ import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import one.globalconnect.paymentapp.navigation.DESTINATION_KEY
-import one.globalconnect.paymentapp.uicpos.pos.model.SysParam
+import one.globalconnect.paymentapp.security.TerminalPasswordAction
+import one.globalconnect.paymentapp.security.TerminalPasswordPolicy
+import one.globalconnect.tms.paymentapp.TMS_Terminal
 
 class PasswordViewModel(
     savedStateHandle: SavedStateHandle,
+    terminal: TMS_Terminal?,
 ) : ViewModel() {
 
     private val userInput: MutableLiveData<String> by lazy {
@@ -20,14 +23,15 @@ class PasswordViewModel(
     }
 
     val destination: String = Uri.decode(checkNotNull(savedStateHandle[DESTINATION_KEY]))
+    val action: TerminalPasswordAction = TerminalPasswordPolicy.actionForDestination(destination)
+    private val expectedPassword = TerminalPasswordPolicy.passwordFor(terminal, action)
 
     fun checkPassword(): Boolean {
         val input = userInput.value
         if (input.isNullOrEmpty()) {
             return false
         }
-        val sysParam = SysParam.getInstance()
-        return input == sysParam.EmployeePassword || input == sysParam.AdminPassword
+        return input == expectedPassword
     }
 
     fun clearInputs() {

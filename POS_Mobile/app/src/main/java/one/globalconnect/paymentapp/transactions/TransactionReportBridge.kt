@@ -32,6 +32,7 @@ private const val PREFS_NAME = "transaction_reporting"
 private const val KEY_QUEUE = "pending_transactions"
 private const val KEY_OLDEST_AT = "oldest_pending_at"
 private const val METHOD_BATCHING = "Batching"
+private const val METHOD_DISABLED = "Disabled"
 private const val DEFAULT_BATCH_SIZE = 5
 private const val DEFAULT_INTERVAL_SECONDS = 300L
 private val localDateTimeFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
@@ -61,6 +62,10 @@ object TransactionReportBridge {
     ) {
         val appContext = context.applicationContext
         val policy = TransactionReportingPolicy.from(tmsDatabase)
+        if (!policy.isEnabled) {
+            Log.i(TAG, "Transaction reporting is disabled; skipping transaction report")
+            return
+        }
         val payload = transaction.toReportJson(event, tmsDatabase)
         if (!policy.isBatching) {
             sendPayload(appContext, payload, payload.optString("transactionId"), null)
@@ -91,12 +96,28 @@ object TransactionReportBridge {
         acquirer: TMS_Acquirer,
         batchNumber: String?,
         responseCode: String?,
+        tmsDatabase: TMSDATA,
     ) {
+        if (!TransactionReportingPolicy.from(tmsDatabase).isEnabled) {
+            Log.i(TAG, "Transaction reporting is disabled; skipping settlement report")
+            return
+        }
         val appContext = context.applicationContext
         scope.launch {
             val payload = target.toSettlementReportJson(acquirer, batchNumber, responseCode)
             sendPayload(appContext, payload, null, payload.optString("batchId").takeIf { it.isNotBlank() })
         }
+    }
+
+    fun onParametersUpdated(context: Context, tmsDatabase: TMSDATA) {
+        val policy = TransactionReportingPolicy.from(tmsDatabase)
+        if (policy.isEnabled) return
+
+        flushRunnable?.let(handler::removeCallbacks)
+        flushRunnable = null
+        val pendingCount = readQueue(context.applicationContext).length()
+        clearQueue(context.applicationContext)
+        Log.i(TAG, "Transaction reporting disabled by parameters; cleared $pendingCount pending report(s)")
     }
 
     private fun flushInternal(context: Context, policy: TransactionReportingPolicy) {
@@ -199,13 +220,14 @@ data class TransactionReportingPolicy(
     val batchSize: Int,
     val intervalSeconds: Long,
 ) {
+    val isEnabled: Boolean get() = !method.equals(METHOD_DISABLED, ignoreCase = true)
     val isBatching: Boolean get() = method.equals(METHOD_BATCHING, ignoreCase = true)
 
     companion object {
         fun from(tmsDatabase: TMSDATA): TransactionReportingPolicy {
             val terminal = tmsDatabase.Terminal.firstOrNull()
             return TransactionReportingPolicy(
-                method = terminal?.tranReportingMethod?.ifBlank { "Online" } ?: "Online",
+                method = terminal?.tranReportingMethod?.trim()?.ifBlank { "Online" } ?: "Online",
                 batchSize = terminal?.tranReportingBatchSize?.toInt()?.takeIf { it > 0 } ?: DEFAULT_BATCH_SIZE,
                 intervalSeconds = terminal?.tranReportingIntervalSeconds?.toLong()?.takeIf { it > 0L }
                     ?: DEFAULT_INTERVAL_SECONDS,

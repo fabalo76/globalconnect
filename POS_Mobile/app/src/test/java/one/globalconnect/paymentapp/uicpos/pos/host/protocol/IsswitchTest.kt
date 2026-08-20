@@ -2,6 +2,7 @@ package one.globalconnect.paymentapp.uicpos.pos.host.protocol
 
 import com.uic.pos.iso8583.config.IsoConfigParser
 import one.globalconnect.tms.paymentapp.TMS_Acquirer
+import one.globalconnect.tms.paymentapp.TMS_Terminal
 import one.globalconnect.paymentapp.uicpos.pos.errcode.Constants
 import one.globalconnect.paymentapp.uicpos.pos.host.HostProtocolContext
 import one.globalconnect.paymentapp.uicpos.pos.model.ProcInfo
@@ -33,7 +34,9 @@ class IsswitchTest {
             CVV = "123",
             PaymentPlan = "PLN1",
             Track2 = ";4111111111111111=30122010000000000000?",
-            Field55 = "9F2608ABCDEF123456789F3602001A950500000000009A03123456"
+            Field55 = "9F2608ABCDEF123456789F3602001A950500000000009A03123456",
+            PINBlock = "50E55547A5027551",
+            KSN = "FFFF9876543210E00008"
         )
 
         val procInfo = ProcInfo(TransLog = transLog)
@@ -41,6 +44,7 @@ class IsswitchTest {
         val context = HostProtocolContext(
             procInfo = procInfo,
             acquirer = acquirer,
+            terminal = createTerminal(onlinePinCap = true),
             isoFactory = isoFactory,
             stanSupplier = { "000123" },
             timestampSupplier = { LocalDateTime.of(2024, 1, 2, 3, 4, 5) }
@@ -54,7 +58,7 @@ class IsswitchTest {
         assertEquals("000123", message.getFieldValue(11))
         assertEquals("030405", message.getFieldValue(12))
         assertEquals("0102", message.getFieldValue(13))
-        assertEquals("0050", message.getFieldValue(22))
+        assertEquals("0051", message.getFieldValue(22))
         assertEquals("005", message.getFieldValue(24))
         assertEquals("00000001", message.getFieldValue(41)?.trim())
         assertEquals("000000000000001", message.getFieldValue(42)?.trim())
@@ -63,6 +67,7 @@ class IsswitchTest {
         assertEquals("4111111111111111", message.getFieldValue(2))
         assertEquals("3012", message.getFieldValue(14))
         assertEquals("4111111111111111D30122010000000000000", message.getFieldValue(35))
+        assertEquals("50E55547A5027551", message.getFieldValue(52))
         assertEquals("9F2608ABCDEF123456789F3602001A950500000000009A03123456", message.getFieldValue(55))
 
         val field62 = message.getFieldValue(62)
@@ -76,6 +81,7 @@ class IsswitchTest {
         assertEquals("000000000100", tags["39"])
         assertEquals("000000001000", tags["41"])
         assertEquals("PLN1", tags["45"])
+        assertEquals("FFFF9876543210E00008", tags["33"])
         assertEquals("000000000150", tags["82"])
         assertEquals("E0", tags["1C"])
     }
@@ -99,6 +105,7 @@ class IsswitchTest {
         val context = HostProtocolContext(
             procInfo = procInfo,
             acquirer = acquirer,
+            terminal = createTerminal(onlinePinCap = true),
             isoFactory = isoFactory,
             stanSupplier = { "000123" },
             timestampSupplier = { LocalDateTime.of(2024, 2, 3, 4, 5, 6) }
@@ -128,6 +135,7 @@ class IsswitchTest {
             HostProtocolContext(
                 procInfo = ProcInfo(TransLog = transLog),
                 acquirer = acquirer,
+                terminal = createTerminal(onlinePinCap = true),
                 isoFactory = isoFactory,
                 stanSupplier = { "000124" },
                 timestampSupplier = { LocalDateTime.of(2024, 2, 3, 4, 5, 6) },
@@ -154,6 +162,16 @@ class IsswitchTest {
         nii = 5,
         sendAqEntryCap = sendAqEntryCap,
         acqEntryCap = acqEntryCap,
+    )
+
+    /**
+     * Creates terminal configuration for host protocol tests.
+     *
+     * @param onlinePinCap whether the test terminal advertises online PIN capability.
+     * @return terminal configuration containing the requested capability.
+     */
+    private fun createTerminal(onlinePinCap: Boolean): TMS_Terminal = TMS_Terminal(
+        onlinePinCap = onlinePinCap,
     )
 
     private fun isoConfigFile(): File {

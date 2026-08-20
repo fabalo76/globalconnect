@@ -1,5 +1,6 @@
 package one.globalconnect.paymentapp.navigation
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -50,21 +51,22 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.runtime.remember
-import one.globalconnect.paymentapp.BuildConfig
 import one.globalconnect.paymentapp.R
 import one.globalconnect.paymentapp.GlobalConnectPaymentApplication
 import one.globalconnect.paymentapp.admin.AdminRequestBridge
 import one.globalconnect.paymentapp.printer.NexGoPaymentPrinter
 import one.globalconnect.paymentapp.printer.PaymentPrinter
-import one.globalconnect.paymentapp.transaction.Numpad
+import one.globalconnect.paymentapp.security.TerminalPasswordAction
+import one.globalconnect.paymentapp.security.TerminalPasswordPolicy
+import one.globalconnect.paymentapp.transaction.DialogNumpad
 import one.globalconnect.paymentapp.ui.theme.color_primaryBrand
 import one.globalconnect.paymentapp.ui.theme.color_secondaryFive
 import one.globalconnect.paymentapp.ui.theme.color_secondaryThree
 import one.globalconnect.paymentapp.ui.theme.color_white
 import one.globalconnect.paymentapp.ui.theme.menuButtonShape
 import one.globalconnect.paymentapp.ui.theme.GlobalConnectPaymentTheme
-import one.globalconnect.paymentapp.uicpos.pos.model.SysParam
 import one.globalconnect.paymentapp.utils.SoundEffect
 import one.globalconnect.paymentapp.utils.SoundManager
 import one.globalconnect.paymentapp.navigation.dst_AppConfig
@@ -96,8 +98,17 @@ fun MoreMenuScreen(
     var currentMenuId by rememberSaveable { mutableStateOf("main") }
     var showInitializeDialog by rememberSaveable { mutableStateOf(false) }
     var showConfigPasswordDialog by rememberSaveable { mutableStateOf(false) }
+    var pendingBankProtectedAction by remember { mutableStateOf<(() -> Unit)?>(null) }
     val context = LocalContext.current
     val terminal = GlobalConnectPaymentApplication.instance.tmsDatabase.Terminal.firstOrNull()
+
+    fun runWithBankPassword(action: () -> Unit) {
+        if (TerminalPasswordPolicy.requiresPassword(terminal, TerminalPasswordAction.BANK)) {
+            pendingBankProtectedAction = action
+        } else {
+            action()
+        }
+    }
     val adminRequestButtons = if (terminal?.adminMessagesEnabled == true) {
         listOfNotNull(
             if (terminal.adminMessagesRequestPaper) {
@@ -138,7 +149,15 @@ fun MoreMenuScreen(
                 ButtonConfig(stringResource(id = R.string.trans_settlement), Icons.Filled.MonetizationOn) { onDestinationSelected(dst_EndOfDay) },
                 ButtonConfig(stringResource(id = R.string.function_menu), Icons.Filled.AdminPanelSettings) { currentMenuId = "functions" },
                 ButtonConfig(stringResource(id = R.string.config_menu), Icons.Filled.Tune) {
-                    if (BuildConfig.DEBUG) currentMenuId = "config" else showConfigPasswordDialog = true
+                    val requiresPassword = TerminalPasswordPolicy.requiresPassword(
+                        terminal,
+                        TerminalPasswordAction.CONFIGURATION,
+                    )
+                    if (!requiresPassword) {
+                        currentMenuId = "config"
+                    } else {
+                        showConfigPasswordDialog = true
+                    }
                 },
             )
         ),
@@ -190,17 +209,29 @@ fun MoreMenuScreen(
             id = "config",
             title = stringResource(id = R.string.config_menu),
             buttons = listOf(
-                ButtonConfig(stringResource(id = R.string.terminal_counters), Icons.Filled.Numbers) { onDestinationSelected(dst_TerminalCounters) },
+                ButtonConfig(stringResource(id = R.string.terminal_counters), Icons.Filled.Numbers) {
+                    runWithBankPassword { onDestinationSelected(dst_TerminalCounters) }
+                },
                 ButtonConfig(stringResource(id = R.string.setting_initialize), Icons.Filled.CloudDownload) {
                     showInitializeDialog = true
                 },
                 ButtonConfig(stringResource(id = R.string.print_configuration), Icons.Filled.Print) {
-                    val paymentPrinter: PaymentPrinter = NexGoPaymentPrinter
-                    val tmsDatabase = GlobalConnectPaymentApplication.instance.tmsDatabase
-                    paymentPrinter.printConfigReport(context, tmsDatabase)
+                    runWithBankPassword {
+                        val paymentPrinter: PaymentPrinter = NexGoPaymentPrinter
+                        val tmsDatabase = GlobalConnectPaymentApplication.instance.tmsDatabase
+                        paymentPrinter.printConfigReport(context, tmsDatabase)
+                    }
                 },
-                ButtonConfig(stringResource(id = R.string.print_pinpadkeys), Icons.Filled.VpnKey) { /* Handle printing PIN pad keys */ },
-                ButtonConfig(stringResource(id = R.string.app_config), Icons.Filled.PhoneAndroid) { onDestinationSelected(dst_AppConfig) },
+                ButtonConfig(stringResource(id = R.string.print_pinpadkeys), Icons.Filled.VpnKey) {
+                    runWithBankPassword {
+                        val paymentPrinter: PaymentPrinter = NexGoPaymentPrinter
+                        val tmsDatabase = GlobalConnectPaymentApplication.instance.tmsDatabase
+                        paymentPrinter.printPinPadKeysReport(context, tmsDatabase)
+                    }
+                },
+                ButtonConfig(stringResource(id = R.string.app_config), Icons.Filled.PhoneAndroid) {
+                    runWithBankPassword { onDestinationSelected(dst_AppConfig) }
+                },
                 ButtonConfig(stringResource(id = R.string.back), Icons.AutoMirrored.Filled.ArrowBack) { currentMenuId = "main" }
             )
         )
@@ -343,11 +374,23 @@ fun MoreMenuScreen(
 
     if (showConfigPasswordDialog) {
         ConfigPasswordDialog(
+            action = TerminalPasswordAction.CONFIGURATION,
             onAuthenticated = {
                 showConfigPasswordDialog = false
                 currentMenuId = "config"
             },
             onDismiss = { showConfigPasswordDialog = false }
+        )
+    }
+
+    pendingBankProtectedAction?.let { protectedAction ->
+        ConfigPasswordDialog(
+            action = TerminalPasswordAction.BANK,
+            onAuthenticated = {
+                pendingBankProtectedAction = null
+                protectedAction()
+            },
+            onDismiss = { pendingBankProtectedAction = null },
         )
     }
 }
@@ -365,16 +408,20 @@ private fun menuTitleFontSize(title: String): TextUnit {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ConfigPasswordDialog(
+    action: TerminalPasswordAction,
     onAuthenticated: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     var input by remember { mutableStateOf("") }
     var showError by remember { mutableStateOf(false) }
+    val expectedPassword = remember(action) {
+        val terminal = GlobalConnectPaymentApplication.instance.tmsDatabase.Terminal.firstOrNull()
+        TerminalPasswordPolicy.passwordFor(terminal, action)
+    }
 
     fun checkAndSubmit() {
         if (input.isEmpty()) return
-        val sysParam = SysParam.getInstance()
-        if (input == sysParam.EmployeePassword || input == sysParam.AdminPassword) {
+        if (input == expectedPassword) {
             onAuthenticated()
         } else {
             input = ""
@@ -394,7 +441,16 @@ private fun ConfigPasswordDialog(
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 Text(
-                    text = stringResource(R.string.enter_password),
+                    text = stringResource(
+                        R.string.enter_action_password,
+                        stringResource(
+                            if (action == TerminalPasswordAction.BANK) {
+                                R.string.password_action_bank
+                            } else {
+                                R.string.password_action_configuration
+                            },
+                        ),
+                    ),
                     style = MaterialTheme.typography.titleLarge,
                     textAlign = TextAlign.Center,
                 )
@@ -412,7 +468,7 @@ private fun ConfigPasswordDialog(
                         textAlign = TextAlign.Center,
                     )
                 }
-                Numpad(
+                DialogNumpad(
                     onSelected = { key ->
                         showError = false
                         when (key) {
@@ -423,6 +479,34 @@ private fun ConfigPasswordDialog(
                     onEnterPressed = { checkAndSubmit() },
                     onCancelPressed = onDismiss,
                 )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    OutlinedButton(
+                        onClick = onDismiss,
+                        modifier = Modifier.weight(1f).height(50.dp),
+                        shape = RoundedCornerShape(24.dp),
+                        border = BorderStroke(1.dp, color_primaryBrand),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = color_primaryBrand,
+                        ),
+                    ) {
+                        Text(stringResource(R.string.cancel))
+                    }
+                    Button(
+                        onClick = ::checkAndSubmit,
+                        enabled = input.isNotEmpty(),
+                        modifier = Modifier.weight(1f).height(50.dp),
+                        shape = RoundedCornerShape(24.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = color_primaryBrand,
+                            contentColor = color_secondaryFive,
+                        ),
+                    ) {
+                        Text(stringResource(R.string.ok))
+                    }
+                }
             }
         }
     }

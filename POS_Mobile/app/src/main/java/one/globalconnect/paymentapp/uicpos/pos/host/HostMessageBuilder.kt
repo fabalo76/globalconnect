@@ -4,6 +4,7 @@ import android.util.Log
 import com.uic.pos.iso8583.IsoMessage
 import com.uic.pos.iso8583.IsoMessageFactory
 import one.globalconnect.tms.paymentapp.TMS_Acquirer
+import one.globalconnect.tms.paymentapp.TMS_Terminal
 import one.globalconnect.paymentapp.uicpos.pos.model.ProcInfo
 import one.globalconnect.paymentapp.util.LogSanitizer
 
@@ -18,6 +19,7 @@ class HostMessageBuilder(
     @Throws(HostProtocolException::class)
     fun build(
         acquirer: TMS_Acquirer,
+        terminal: TMS_Terminal,
         procInfo: ProcInfo,
         isoFactory: IsoMessageFactory? = null,
         stanSupplier: () -> String = { StanProvider.nextStan() },
@@ -37,6 +39,7 @@ class HostMessageBuilder(
         val context = HostProtocolContext(
             procInfo = procInfo,
             acquirer = acquirer,
+            terminal = terminal,
             isoFactory = isoFactory,
             stanSupplier = stanSupplier,
             timestampSupplier = timestampSupplier,

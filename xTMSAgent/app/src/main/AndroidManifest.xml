@@ -2,6 +2,10 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
+    <permission
+        android:name="one.globalconnect.permission.PARAMETER_TASK_RESULT"
+        android:protectionLevel="signature" />
+
     <uses-permission
         android:name="android.permission.QUERY_ALL_PACKAGES"
         tools:ignore="QueryAllPackagesPermission" />
@@ -164,6 +168,15 @@
             android:exported="true">
             <intent-filter>
                 <action android:name="one.globalconnect.xtmsagent.ACTION_REQUEST_PARAMS" />
+            </intent-filter>
+        </receiver>
+
+        <receiver
+            android:name=".ParameterTaskResultReceiver"
+            android:exported="true"
+            android:permission="one.globalconnect.permission.PARAMETER_TASK_RESULT">
+            <intent-filter>
+                <action android:name="one.globalconnect.paymentapp.ACTION_PARAMS_RESULT" />
             </intent-filter>
         </receiver>
 

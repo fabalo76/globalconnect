@@ -154,16 +154,34 @@ fun SaleScreen(
     var tipZeroPressed by rememberSaveable { mutableStateOf(false) }
     var totalAmount by rememberSaveable { mutableStateOf(initialBaseAmount) }
 
+    fun resetAmountEntries() {
+        baseAmountState = AmountEntryState()
+        taxAmountState = AmountEntryState()
+        tax2AmountState = AmountEntryState()
+        tipAmountState = AmountEntryState()
+        totalAmount = "0.00"
+        stepIndex = 0
+        step = stepSequence.getOrNull(stepIndex) ?: "none"
+        taxZeroPressed = false
+        tipZeroPressed = false
+    }
+
     LaunchedEffect(stepSequence) {
         if (stepSequence.isEmpty() && !saleInProgress) {
+            val baseAmount = baseAmountState.transactionValue
+            val tax1Amount = taxAmountState.transactionValue
+            val tax2Amount = tax2AmountState.transactionValue
+            val tipAmount = tipAmountState.transactionValue
+            val supplementaryValue = collectSupplementaryValue()
             saleInProgress = true
+            resetAmountEntries()
             onChargeClick(
                 transactionType.toTransactionString(),
-                baseAmountState.transactionValue,
-                taxAmountState.transactionValue,
-                tax2AmountState.transactionValue,
-                tipAmountState.transactionValue,
-                collectSupplementaryValue(),
+                baseAmount,
+                tax1Amount,
+                tax2Amount,
+                tipAmount,
+                supplementaryValue,
             )
         } else if (stepSequence.isNotEmpty()) {
             stepIndex = 0
@@ -319,15 +337,21 @@ fun SaleScreen(
                             return
                         }
                         // Execute transaction
+                        val baseAmount = baseAmountState.transactionValue
+                        val tax1Amount = taxAmountState.transactionValue
+                        val tax2Amount = tax2AmountState.transactionValue
+                        val tipAmount = tipAmountState.transactionValue
+                        val supplementaryValue = collectSupplementaryValue()
                         saleInProgress = true
                         Log.d("SaleScreen", "Transaction Started: $transactionType, Amount: ${confirmationSummary.totalAmountText}")
+                        resetAmountEntries()
                         onChargeClick(
                             transactionType.toTransactionString(),
-                            baseAmountState.transactionValue,
-                            taxAmountState.transactionValue,
-                            tax2AmountState.transactionValue,
-                            tipAmountState.transactionValue,
-                            collectSupplementaryValue(),
+                            baseAmount,
+                            tax1Amount,
+                            tax2Amount,
+                            tipAmount,
+                            supplementaryValue,
                         )
                     } else {
                         when (step) {
@@ -377,22 +401,10 @@ fun SaleScreen(
                 }
             }
 
-            fun performFullReset() {
-                baseAmountState = AmountEntryState()
-                taxAmountState = AmountEntryState()
-                tax2AmountState = AmountEntryState()
-                tipAmountState = AmountEntryState()
-                totalAmount = "0.00"
-                stepIndex = 0
-                step = stepSequence.getOrNull(stepIndex) ?: "none"
-                taxZeroPressed = false
-                tipZeroPressed = false
-            }
-
             LaunchedEffect(step, saleInProgress) {
                 if (step == "confirmamount" && !saleInProgress) {
                     delay(TransactionTimeouts.AMOUNT_CONFIRMATION_TIMEOUT_MS)
-                    performFullReset()
+                    resetAmountEntries()
                 }
             }
 
@@ -414,7 +426,7 @@ fun SaleScreen(
             if (promptConfig.requiresAmountEntry) {
                 if (step == "confirmamount") {
                     AmountConfirmationActions(
-                        onCancelPressed = { performFullReset() },
+                        onCancelPressed = { resetAmountEntries() },
                         onConfirmPressed = { if (enterEnabled) handlePrimaryAction() },
                     )
                 } else {
@@ -447,7 +459,7 @@ fun SaleScreen(
                         onReset = when (step) {
                             "amount", "none" -> null
                             else -> {
-                                { performFullReset() }
+                                { resetAmountEntries() }
                             }
                         },
                         percentageOptions = percentageOptions,

@@ -1,0 +1,22 @@
+MASTER KEY INJECTION COMMAND
+<02>01010123456789ABCDEF0123456789ABCDEF<03><LRC>
+++++**--++++++++++++++++++++++++++++++++****-----
+ |  |  |   |                             |   |
+ |  |  |   |                             |   |-> LRC After STX Including ETX
+ |  |  |   |                             |-> ETX char 0x03
+ |  |  |   |-> TRIPLE DES DOUBLE LENGTH KEY 32 hex chars
+ |  |  |-> KEY Slot
+ |  |-> Command 01 Inject Master Key
+ |-> STX char 0x02
+
+MASTER KEY INJECTION RESPONSE
+
+<02>0100D5D4<03><LRC>
+++++**--++++****-----
+ |  | | |   |   |
+ |  | | |   |   |-> LRC After STX Including ETX
+ |  | | |   |-> ETX char 0x03
+ |  | | |-> Success: VISA KCV of the Injected Key 4 Hex chars , Failed FFFF
+ |  | |-> Response Code 00 = Success
+ |  |-> Command 01 Inject Master Key
+ |-> STX char 0x02

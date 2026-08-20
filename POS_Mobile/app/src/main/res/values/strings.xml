@@ -492,6 +492,17 @@
     <!--password screen -->
     <string name="password">Password</string>
     <string name="enter_password">Enter password:</string>
+    <string name="enter_action_password">Enter %1$s password:</string>
+    <string name="password_action_bank">Bank</string>
+    <string name="password_action_configuration">Configuration</string>
+    <string name="password_action_void">Void</string>
+    <string name="password_action_clear">Clear</string>
+    <string name="password_action_adjust">Adjustment</string>
+    <string name="password_action_refund">Refund</string>
+    <string name="password_action_report">Report</string>
+    <string name="password_action_offline">Offline</string>
+    <string name="password_action_settlement">Settlement</string>
+    <string name="password_action_cash_advance">Cash advance</string>
     <string name="confirm_password">Confirm password</string>
     <string name="incorrect_password">Incorrect password</string>
     <string name="incorrect_password_msg">Inputted password did not match records. Please try again.</string>
@@ -688,6 +699,7 @@
     <string name="report_window_range">Report: %1$s - %2$s</string>
     <string name="report_window_one_day">Report: %1$s</string>
     <string name="report_export">Export</string>
+    <string name="report_current_batch">Current batch</string>
     <string name="report_window_options">Report Window Selection</string>
     <string name="report_window_options_transactions">Transactions</string>
     <string name="report_window_options_print_transactions">Print Transactions?</string>
@@ -920,6 +932,7 @@
     <string name="pin_entry_secure_keypad_hint">Use the secure keypad below</string>
     <string name="online_pin_error_no_acquirer_pin_type">Card requested Online PIN, but no supported PIN type is configured for the acquirer.</string>
     <string name="online_pin_error_no_selected_acquirer_pin_type">Card requested Online PIN, but the selected acquirer has no supported PIN type configured.</string>
+    <string name="online_pin_error_ambiguous_key_profile">Unable to select a unique MK/SK or DUKPT PIN key profile for this card.</string>
     <string name="online_pin_error_missing_pan">Card requested Online PIN, but the card number was unavailable to the internal PIN pad.</string>
     <string name="online_pin_error_internal_pinpad">Card requested Online PIN, but there was an error in the internal PIN pad.</string>
     <string name="offline_pin_error_internal_pinpad">There was an error in the internal PIN pad while obtaining Offline PIN.</string>
@@ -947,6 +960,7 @@
     <string name="card_reader_success">Card detected</string>
     <string name="card_reader_error">Card reader error: %1$s</string>
     <string name="card_reader_error_exception">Unexpected error (%1$s)</string>
+    <string name="card_reader_application_selection_error">Unable to select payment application</string>
     <string name="card_reader_error_start">Failed to start card scan (code %1$d)</string>
     <string name="card_reader_error_code">SDK status code %1$d</string>
     <string name="card_reader_slot_swipe">Swipe</string>
@@ -1144,7 +1158,9 @@
     <string name="transaction_receipt_tran_sessiontokenrequest">SESSION KEY REQ.</string>
     <!-- Pending TMS parameter update reminder -->
     <string name="pending_param_update_title">Parameters Update Pending</string>
-    <string name="pending_param_update_msg">A TMS parameters update is waiting to be applied. Please process the settlement to activate the new parameters.</string>
+    <string name="pending_param_update_msg">Please perform settlement.</string>
+    <string name="pending_param_update_settlement">Settlement</string>
+    <string name="pending_param_update_dismiss">Dismiss</string>
 
     <!-- TMS Initialize -->
     <string name="setting_tms">TMS</string>
@@ -1153,9 +1169,12 @@
     <string name="setting_initialize_requested">Requested</string>
     <string name="setting_initialize_err_batch_not_empty">Batch with Active Transactions.\nMust perform settlement before Initialize.</string>
     <string name="setting_initialize_err_generic">Could not check batch status</string>
+    <string name="setting_initialize_err_operation_in_progress">A transaction or settlement is currently in progress. Try again when the terminal is idle.</string>
     <string name="setting_initialize_requesting">Requesting parameters from the server…</string>
-    <string name="setting_initialize_success_title">Parameters Updated</string>
-    <string name="setting_initialize_success_body">Terminal configuration was downloaded and applied successfully.</string>
+    <string name="setting_initialize_success_title">Payment Application Parameters Updated</string>
+    <string name="setting_initialize_success_body">The payment application parameters were downloaded and applied successfully.</string>
+    <string name="tms_parameter_updates_channel_name">Payment application parameter updates</string>
+    <string name="tms_parameter_updates_channel_description">Notifications for downloaded payment application parameter updates</string>
     <string name="setting_initialize_timeout_title">Request Timed Out</string>
     <string name="setting_initialize_timeout_body">No response received from the terminal manager.\nEnsure xTMSAgent is running and the terminal has network access.</string>
     <string name="setting_initialize_error_title">Request Failed</string>

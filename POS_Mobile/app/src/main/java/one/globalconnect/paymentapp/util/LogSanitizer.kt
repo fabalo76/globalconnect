@@ -72,7 +72,9 @@ object LogSanitizer {
 
     /** Sanitises ISO8583 field values based on their field number. */
     fun sanitizeIsoField(field: Int, value: String): String {
-        if (!shouldMaskSensitiveData()) return value
+        if (!shouldMaskSensitiveData()) {
+            return if (field == 52 || field == 53) maskAlphaNumeric(value) else value
+        }
 
         val sanitized = when (field) {
             2 -> maskCardNumber(value)
@@ -91,7 +93,12 @@ object LogSanitizer {
 
     /** Sanitises the contents of [transLog] for logging purposes. */
     fun sanitizeTransLog(transLog: TransLog): String {
-        if (!shouldMaskSensitiveData()) return transLog.toString()
+        if (!shouldMaskSensitiveData()) {
+            return transLog.copy(
+                PINBlock = maskAlphaNumericOptional(transLog.PINBlock),
+                KSN = maskAlphaNumericOptional(transLog.KSN),
+            ).toString()
+        }
 
         val sanitized = transLog.copy(
             CardNbr = maskCardNumber(transLog.CardNbr),
@@ -103,7 +110,9 @@ object LogSanitizer {
             Track1 = maskAlphaNumericOptional(transLog.Track1),
             Track2 = maskAlphaNumericOptional(transLog.Track2),
             Track3 = maskAlphaNumericOptional(transLog.Track3),
-            Field55 = maskAlphaNumericOptional(transLog.Field55)
+            Field55 = maskAlphaNumericOptional(transLog.Field55),
+            PINBlock = maskAlphaNumericOptional(transLog.PINBlock),
+            KSN = maskAlphaNumericOptional(transLog.KSN)
         )
         return sanitized.toString()
     }

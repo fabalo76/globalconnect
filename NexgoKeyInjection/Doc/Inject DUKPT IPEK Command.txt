@@ -1,0 +1,24 @@
+DUKPT IPEK KEY INJECTION COMMAND
+<02>0001FFFF0121010002000000A43A88EFB570513B6F3791FF94184AB0<03>|
+++++**--********************++++++++++++++++++++++++++++++++****-----
+ |  |  |        |                       |                     |   |
+ |  |  |        |                       |                     |   |-> LRC After STX Including ETX
+ |  |  |        |                       |                     |-> ETX char 0x03
+ |  |  |        |                       |->TRIPLE DES DOUBLE LENGTH KEY 32 hex chars
+ |  |  |        |-> Initial Key Serial Number iKSN
+ |  |  |-> KEY Slot
+ |  |-> Command 00 Inject Dukpt Ipek Key
+ |-> STX char 0x02
+
+DUKPT IPEK KEY INJECTION RESPONSE
+
+<02>000000D766<03><LRC>
+++++**--**++++****-----
+ |  |  | | |   |   |
+ |  |  | | |   |   |-> LRC After STX Including ETX
+ |  |  | | |   |-> ETX char 0x03
+ |  |  | | |-> Success: VISA KCV of the Injected Key 4 Hex chars , Failed FFFF
+ |  |  | |-> IPEK Response Code 00 = Success
+ |  |  |-> KSN Response Code 00 = Success
+ |  |-> Command 00 Inject DUKPT IPEK Key
+ |-> STX char 0x02

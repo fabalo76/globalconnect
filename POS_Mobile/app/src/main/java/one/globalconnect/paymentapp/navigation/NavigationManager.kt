@@ -8,6 +8,8 @@ import androidx.compose.runtime.setValue
 import androidx.navigation.NavDestination
 import androidx.navigation.NavHostController
 import one.globalconnect.paymentapp.BuildConfig
+import one.globalconnect.paymentapp.GlobalConnectPaymentApplication
+import one.globalconnect.paymentapp.security.TerminalPasswordPolicy
 
 /**
  * Centralizes navigation rules that were previously hard coded inside [UICApp].
@@ -78,7 +80,15 @@ class NavigationManager(
     }
 
     private fun buildTargetRoute(destination: UICDestination): String {
-        return if (destination in passwordProtectedDestinations) {
+        val terminal = GlobalConnectPaymentApplication.instanceOrNull
+            ?.tmsDatabase
+            ?.Terminal
+            ?.firstOrNull()
+        val action = TerminalPasswordPolicy.actionForDestination(destination.route)
+        return if (
+            destination in passwordProtectedDestinations &&
+            TerminalPasswordPolicy.requiresPassword(terminal, action)
+        ) {
             PASSWORD_ROUTE_PREFIX + Uri.encode(destination.route)
         } else {
             destination.route

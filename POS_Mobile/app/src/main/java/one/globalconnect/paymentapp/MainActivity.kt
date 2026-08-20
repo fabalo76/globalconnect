@@ -103,6 +103,8 @@ import one.globalconnect.paymentapp.navigation.TAX2_KEY
 import one.globalconnect.paymentapp.navigation.TIP_KEY
 import one.globalconnect.paymentapp.navigation.TRANSACTION_ID_KEY
 import one.globalconnect.paymentapp.navigation.TRANSACTION_TYPE_KEY
+import one.globalconnect.paymentapp.navigation.TmsParametersPendingDialog
+import one.globalconnect.paymentapp.navigation.TmsParametersUpdatedDialog
 import one.globalconnect.paymentapp.navigation.dst_TipScreen
 import one.globalconnect.paymentapp.navigation.dst_Cash
 import one.globalconnect.paymentapp.navigation.dst_CardReaderTest
@@ -160,7 +162,12 @@ import java.util.Locale
 import kotlin.text.toBigDecimalOrNull
 import java.math.BigDecimal
 import java.math.RoundingMode
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
+
+private const val PARAM_UPDATE_IDLE_CHECK_INTERVAL_MS = 60_000L
+private const val PARAM_UPDATE_REMINDER_INTERVAL_MS = 60 * 60 * 1000L
 
 /**
  * MainActivity is the entry point of the application.
@@ -241,8 +248,16 @@ class MainActivity : ComponentActivity() {
         setContent {
             val languageViewModel: LanguageViewModel = viewModel()
             GlobalConnectPaymentTheme {
-                val appInitialized by GlobalConnectPaymentApplication.instance.appInitialized.collectAsState()
-                val paramsAvailable by GlobalConnectPaymentApplication.instance.paramsReadyFlow.collectAsState()
+                val app = GlobalConnectPaymentApplication.instance
+                val appInitialized by app.appInitialized.collectAsState()
+                val paramsAvailable by app.paramsReadyFlow.collectAsState()
+                var paramsUpdateNoticeId by remember { mutableLongStateOf(0L) }
+
+                LaunchedEffect(app) {
+                    app.paramsUpdateEvent.collect {
+                        paramsUpdateNoticeId += 1L
+                    }
+                }
 
                 when {
                     !appInitialized -> AppInitializingScreen()
@@ -287,43 +302,15 @@ class MainActivity : ComponentActivity() {
                             )
                         }
 
-                        // Pending param-update reminder — shown when TMS pushed new params while
-                        // there were unsettled transactions. Re-shown every hour while still pending.
-                        val paramUpdatePending by PendingUpdateManager.paramUpdatePending.collectAsState()
-                        if (paramUpdatePending) {
-                            var showParamReminder by remember { mutableStateOf(true) }
-                            var lastReminderMs by remember { mutableLongStateOf(0L) }
-
-                            LaunchedEffect(paramUpdatePending) {
-                                while (paramUpdatePending) {
-                                    val now = System.currentTimeMillis()
-                                    if (now - lastReminderMs >= 60 * 60 * 1000L &&
-                                        !PendingUpdateManager.isOperationInProgress
-                                    ) {
-                                        showParamReminder = true
-                                        lastReminderMs = now
-                                    }
-                                    kotlinx.coroutines.delay(60_000L)
-                                }
-                            }
-                            if (showParamReminder && !PendingUpdateManager.isOperationInProgress) {
-                                androidx.compose.material3.AlertDialog(
-                                    onDismissRequest = { showParamReminder = false },
-                                    title = { androidx.compose.material3.Text(getString(R.string.pending_param_update_title)) },
-                                    text = { androidx.compose.material3.Text(getString(R.string.pending_param_update_msg)) },
-                                    confirmButton = {
-                                        androidx.compose.material3.TextButton(onClick = {
-                                            showParamReminder = false
-                                        }) {
-                                            androidx.compose.material3.Text(getString(R.string.ok))
-                                        }
-                                    },
-                                    shape = androidx.compose.ui.graphics.RectangleShape
-                                )
-                            }
-                        }
                     }
                 } // when
+
+                if (paramsUpdateNoticeId > 0L) {
+                    TmsParametersUpdatedDialog(
+                        updateId = paramsUpdateNoticeId,
+                        onDismiss = { paramsUpdateNoticeId = 0L },
+                    )
+                }
             }
         }
     }
@@ -331,6 +318,16 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         super.onDestroy()
         unregisterReceiver(paramsAppliedReceiver)
+    }
+
+    override fun onStart() {
+        super.onStart()
+        TmsParamsUpdateNotifier.setMainActivityVisible(true)
+    }
+
+    override fun onStop() {
+        TmsParamsUpdateNotifier.setMainActivityVisible(false)
+        super.onStop()
     }
 
     override fun onResume() {
@@ -838,6 +835,56 @@ fun UICApp(
     }
     val selectedTab = navigationManager.currentTab
     val navBackStackEntry by navController.currentBackStackEntryAsState()
+    val paramUpdatePending by PendingUpdateManager.paramUpdatePending.collectAsState()
+    val operationInProgress by PendingUpdateManager.operationInProgress.collectAsState()
+    var showParamUpdateReminder by remember { mutableStateOf(paramUpdatePending) }
+    var lastParamUpdateReminderMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
+
+    LaunchedEffect(paramUpdatePending, operationInProgress) {
+        if (!paramUpdatePending) {
+            showParamUpdateReminder = false
+            return@LaunchedEffect
+        }
+
+        if (!operationInProgress) {
+            showParamUpdateReminder = true
+            lastParamUpdateReminderMs = System.currentTimeMillis()
+        }
+
+        while (paramUpdatePending) {
+            if (!PendingUpdateManager.isOperationInProgress) {
+                when (PendingUpdateManager.applyPendingParamUpdateIfBatchEmpty(context)) {
+                    PendingParamUpdateResult.Applied,
+                    PendingParamUpdateResult.NoPendingUpdate -> {
+                        showParamUpdateReminder = false
+                        return@LaunchedEffect
+                    }
+                    PendingParamUpdateResult.WaitingForIdleBatch,
+                    PendingParamUpdateResult.Failed -> {
+                        val now = System.currentTimeMillis()
+                        if (now - lastParamUpdateReminderMs >= PARAM_UPDATE_REMINDER_INTERVAL_MS) {
+                            showParamUpdateReminder = true
+                            lastParamUpdateReminderMs = now
+                        }
+                    }
+                }
+            }
+            delay(PARAM_UPDATE_IDLE_CHECK_INTERVAL_MS)
+        }
+    }
+
+    if (paramUpdatePending && showParamUpdateReminder && !operationInProgress) {
+        TmsParametersPendingDialog(
+            onSettlement = {
+                showParamUpdateReminder = false
+                navigationManager.onDestinationSelected(dst_EndOfDay)
+            },
+            onDismiss = {
+                showParamUpdateReminder = false
+                lastParamUpdateReminderMs = System.currentTimeMillis()
+            },
+        )
+    }
 
     val isBottomBarVisible = navigationManager.shouldShowBottomBar(navBackStackEntry?.destination)
 
@@ -1100,79 +1147,84 @@ fun UICApp(
                     dst_EndOfDay.screen { request ->
                         coroutineScope.launch {
                             try {
-                                val results = settlementCoordinator.execute(
-                                    request,
-                                    onTargetStart = { target ->
-                                        val displayName = target.option.name.ifBlank { target.option.id }
-                                        coroutineScope.launch {
-                                            val strings = ProcessingStatusStrings(
-                                                connecting = context.getString(R.string.processing_status_connecting),
-                                                sending = context.getString(R.string.processing_status_sending),
-                                                waitingForResponse = context.getString(R.string.processing_status_waiting),
-                                                processingResponse = context.getString(R.string.processing_status_processing_response),
-                                                result = context.getString(R.string.processing_status_result),
-                                                pendingResult = context.getString(R.string.processing_status_result_pending),
-                                            )
-                                            val machine = HostProcessingStateMachine(strings)
-                                            settlementProcessingMachine = machine
-                                            val state = SettlementProcessingState(
-                                                acquirerName = displayName,
-                                                processingStatus = machine.restart(),
-                                            )
-                                            localSettlementState = state
-                                            onSettlementProcessingStateChanged(state)
-                                        }
-                                    },
-                                    onHostEvent = { event ->
-                                        coroutineScope.launch {
-                                            val machine = settlementProcessingMachine ?: return@launch
-                                            val current = localSettlementState ?: run {
-                                                Log.w(TAG, "Host event $event ignored because settlement state is null")
-                                                return@launch
-                                            }
-                                            val updatedState = current.copy(
-                                                processingStatus = machine.onEvent(event),
-                                            )
-                                            localSettlementState = updatedState
-                                            onSettlementProcessingStateChanged(updatedState)
-                                        }
-                                    },
-                                    onTargetResult = { message, success ->
-                                        coroutineScope.launch {
-                                            val machine = settlementProcessingMachine ?: return@launch
-                                            val updated = if (success) {
-                                                machine.onSuccess(message)
-                                            } else {
-                                                machine.onFailure(message)
-                                            }
-                                            val current = localSettlementState ?: run {
-                                                Log.w(
-                                                    TAG,
-                                                    "Host result ignored because settlement state is null (success=$success)"
+                                PendingUpdateManager.isOperationInProgress = true
+                                val results = try {
+                                    settlementCoordinator.execute(
+                                        request,
+                                        onTargetStart = { target ->
+                                            val displayName = target.option.name.ifBlank { target.option.id }
+                                            coroutineScope.launch {
+                                                val strings = ProcessingStatusStrings(
+                                                    connecting = context.getString(R.string.processing_status_connecting),
+                                                    sending = context.getString(R.string.processing_status_sending),
+                                                    waitingForResponse = context.getString(R.string.processing_status_waiting),
+                                                    processingResponse = context.getString(R.string.processing_status_processing_response),
+                                                    result = context.getString(R.string.processing_status_result),
+                                                    pendingResult = context.getString(R.string.processing_status_result_pending),
                                                 )
-                                                return@launch
+                                                val machine = HostProcessingStateMachine(strings)
+                                                settlementProcessingMachine = machine
+                                                val state = SettlementProcessingState(
+                                                    acquirerName = displayName,
+                                                    processingStatus = machine.restart(),
+                                                )
+                                                localSettlementState = state
+                                                onSettlementProcessingStateChanged(state)
                                             }
-                                            val updatedState = current.copy(processingStatus = updated)
-                                            localSettlementState = updatedState
-                                            onSettlementProcessingStateChanged(updatedState)
-                                        }
-                                    },
-                                    onTargetError = { message ->
-                                        coroutineScope.launch {
-                                            val machine = settlementProcessingMachine ?: return@launch
-                                            val current = localSettlementState ?: run {
-                                                Log.w(TAG, "Host error ignored because settlement state is null: $message")
-                                                return@launch
+                                        },
+                                        onHostEvent = { event ->
+                                            coroutineScope.launch {
+                                                val machine = settlementProcessingMachine ?: return@launch
+                                                val current = localSettlementState ?: run {
+                                                    Log.w(TAG, "Host event $event ignored because settlement state is null")
+                                                    return@launch
+                                                }
+                                                val updatedState = current.copy(
+                                                    processingStatus = machine.onEvent(event),
+                                                )
+                                                localSettlementState = updatedState
+                                                onSettlementProcessingStateChanged(updatedState)
                                             }
-                                            val updatedState = current.copy(
-                                                processingStatus = machine.onFailure(message),
-                                                results = SettlementResultsUiState.Message(message),
-                                            )
-                                            localSettlementState = updatedState
-                                            onSettlementProcessingStateChanged(updatedState)
-                                        }
-                                    },
-                                )
+                                        },
+                                        onTargetResult = { message, success ->
+                                            coroutineScope.launch {
+                                                val machine = settlementProcessingMachine ?: return@launch
+                                                val updated = if (success) {
+                                                    machine.onSuccess(message)
+                                                } else {
+                                                    machine.onFailure(message)
+                                                }
+                                                val current = localSettlementState ?: run {
+                                                    Log.w(
+                                                        TAG,
+                                                        "Host result ignored because settlement state is null (success=$success)"
+                                                    )
+                                                    return@launch
+                                                }
+                                                val updatedState = current.copy(processingStatus = updated)
+                                                localSettlementState = updatedState
+                                                onSettlementProcessingStateChanged(updatedState)
+                                            }
+                                        },
+                                        onTargetError = { message ->
+                                            coroutineScope.launch {
+                                                val machine = settlementProcessingMachine ?: return@launch
+                                                val current = localSettlementState ?: run {
+                                                    Log.w(TAG, "Host error ignored because settlement state is null: $message")
+                                                    return@launch
+                                                }
+                                                val updatedState = current.copy(
+                                                    processingStatus = machine.onFailure(message),
+                                                    results = SettlementResultsUiState.Message(message),
+                                                )
+                                                localSettlementState = updatedState
+                                                onSettlementProcessingStateChanged(updatedState)
+                                            }
+                                        },
+                                    )
+                                } finally {
+                                    PendingUpdateManager.isOperationInProgress = false
+                                }
                                 results.filterIsInstance<SettlementResult.Success>()
                                     .mapNotNull(SettlementResult.Success::snapshot)
                                     .forEach { snapshot ->
@@ -1187,7 +1239,7 @@ fun UICApp(
                                 // waiting for unsettled transactions to clear.
                                 if (results.any { it is SettlementResult.Success }) {
                                     if (PendingUpdateManager.hasPendingParamUpdate(context)) {
-                                        PendingUpdateManager.applyPendingParamUpdate(context)
+                                        PendingUpdateManager.applyPendingParamUpdateIfBatchEmpty(context)
                                     }
                                     if (PendingUpdateManager.hasPendingAppUpdate(context)) {
                                         PendingUpdateManager.notifyXtmsAgentCanProceed(context)
@@ -1226,6 +1278,7 @@ fun UICApp(
                                 }
                                 Log.e(TAG, "Settlement execution failed", error)
                             } finally {
+                                PendingUpdateManager.isOperationInProgress = false
                                 settlementProcessingMachine = null
                             }
                         }

@@ -1,0 +1,28 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\GlobalConnect.KeyInjection.Core\GlobalConnect.KeyInjection.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.IO.Ports" Version="8.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="Assets\global-connect-one-logo.png">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>GlobalConnectKeyInjection</AssemblyName>
+    <RootNamespace>GlobalConnect.KeyInjection.App</RootNamespace>
+    <ApplicationIcon Condition="Exists('Assets\global-connect.ico')">Assets\global-connect.ico</ApplicationIcon>
+  </PropertyGroup>
+
+</Project>

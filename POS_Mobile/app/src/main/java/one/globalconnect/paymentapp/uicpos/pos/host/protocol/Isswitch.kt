@@ -83,7 +83,10 @@ class Isswitch(
         val localTime = IsoFieldFormatter.localTime(timestamp)
         val localDate = IsoFieldFormatter.localDate(timestamp)
         val stan = context.stanSupplier()
-        val entryMode = EntryModeMapper.from(transLog)
+        val entryMode = EntryModeMapper.from(
+            transLog = transLog,
+            onlinePinCap = context.terminal.onlinePinCap,
+        )
         val nii = IsoFieldFormatter.numeric(context.acquirer.NII, 3)
         val terminalId = IsoFieldFormatter.alphaNumeric(context.acquirer.AcqTermID, 8)
         val merchantId = IsoFieldFormatter.alphaNumeric(context.acquirer.MerchID, 15)
@@ -196,6 +199,11 @@ class Isswitch(
             }
         }
 
+        buildPinBlock(transLog)?.let { pinBlock ->
+            fieldValues[52] = pinBlock
+            message.setFieldValue(52, pinBlock)
+        }
+
         buildField55(transLog, hasTrackData = trackData != null)?.let { emvData ->
             if (BuildConfig.ENABLE_ISO8583_DEBUG_LOGS) {
                 Log.d(TAG, "Resolved EMV data for field 055: ${LogSanitizer.sanitizeIsoField(55, emvData)}")
@@ -294,6 +302,18 @@ class Isswitch(
 
         val sanitized = if (hasTrackData) removeTlvTag(normalized, "57") else normalized
         return sanitized.takeIf { it.isNotEmpty() }
+    }
+
+    private fun buildPinBlock(transLog: TransLog): String? {
+        val normalized = transLog.PINBlock
+            ?.filterNot(Char::isWhitespace)
+            ?.uppercase(Locale.US)
+            ?.takeIf { it.isNotEmpty() }
+            ?: return null
+        if (!PIN_BLOCK_PATTERN.matches(normalized)) {
+            throw HostProtocolException("Invalid encrypted PIN block")
+        }
+        return normalized
     }
 
     private fun removeTlvTag(tlv: String, targetTag: String): String {
@@ -461,6 +481,13 @@ class Isswitch(
         tags.addAmountTag("40", transLog.Tax2Amt)
         tags.addAmountTag("41", transLog.CashbackAmt)
         transLog.PaymentPlan.takeIf { !it.isNullOrBlank() }?.let { tags += Tag("45", it.trim()) }
+        if (!transLog.PINBlock.isNullOrBlank()) {
+            transLog.KSN
+                ?.filterNot(Char::isWhitespace)
+                ?.uppercase(Locale.US)
+                ?.takeIf(KSN_PATTERN::matches)
+                ?.let { tags += Tag("33", it) }
+        }
         transLog.OriginalTax1Amt.takeIf { it.isNotBlank() }?.let { tags.addAmountTag("82", it) }
         if (acquirer.SendAqEntryCap && acquirer.Acq_Entry_Cap.isNotBlank()) {
             tags += Tag("1C", acquirer.Acq_Entry_Cap.trim())
@@ -484,6 +511,8 @@ class Isswitch(
         private const val BATCH_UPLOAD_MESSAGE_TYPE = "0320"
         private val WHITESPACE_PATTERN = Regex("\\s+")
         private val HEX_PATTERN = Regex("[0-9A-F]+")
+        private val PIN_BLOCK_PATTERN = Regex("[0-9A-F]{16}")
+        private val KSN_PATTERN = Regex("[0-9A-F]{12,20}")
         private val PROCESSING_CODE_PATTERN = Regex("[0-9]{6}")
     }
 }

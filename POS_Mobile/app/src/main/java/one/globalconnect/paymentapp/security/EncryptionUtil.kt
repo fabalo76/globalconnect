@@ -45,20 +45,20 @@ object EncryptionUtil {
 
         if (!storedPassphrase.isNullOrEmpty()) {
             decodeStoredPassphrase(storedPassphrase)?.let { decoded ->
-                logDatabasePassphrase("Retrieved stored database passphrase", decoded)
+                Log.i(TAG, "Retrieved stored database passphrase")
                 return decoded
             }
         }
 
         loadLegacyPassphrase(context)?.let { legacy ->
-            logDatabasePassphrase("Loaded legacy database passphrase", legacy)
+            Log.i(TAG, "Loaded legacy database passphrase")
             persistPassphrase(prefs, legacy)
             clearLegacyPassphrase(context)
             return legacy
         }
 
         val derivedPass = deriveSerialBasedPassphrase(context)
-        logDatabasePassphrase("Generated new database passphrase", derivedPass)
+        Log.i(TAG, "Generated new database passphrase")
         persistPassphrase(prefs, derivedPass)
         return derivedPass
     }
@@ -169,11 +169,6 @@ object EncryptionUtil {
         val encodedPass = Base64.encodeToString(passphrase, Base64.NO_WRAP)
         val encryptedValue = encryptData(encodedPass)
         prefs.edit().putString(DB_PASS_KEY, encryptedValue).apply()
-    }
-
-    private fun logDatabasePassphrase(event: String, passphrase: ByteArray) {
-        val encodedPassphrase = Base64.encodeToString(passphrase, Base64.NO_WRAP)
-        Log.i(TAG, "$event: $encodedPassphrase")
     }
 
     private fun deriveSerialBasedPassphrase(context: Context): ByteArray {

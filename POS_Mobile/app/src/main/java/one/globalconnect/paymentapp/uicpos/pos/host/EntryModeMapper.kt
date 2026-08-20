@@ -9,8 +9,18 @@ import one.globalconnect.paymentapp.uicpos.pos.model.TransLog
  */
 object EntryModeMapper {
 
-    fun from(transLog: TransLog): String {
+    /**
+     * Builds ISO 8583 field 22 from the card capture method and terminal PIN capability.
+     *
+     * The final digit reports capability, not whether this transaction contains a PIN block.
+     *
+     * @param transLog transaction data containing the card capture method.
+     * @param onlinePinCap whether terminal-level online PIN capability is enabled.
+     * @return the four-character POS entry mode used by the ISSwitch host protocol.
+     */
+    fun from(transLog: TransLog, onlinePinCap: Boolean): String {
         val entryMode = CharArray(4) { '0' }
+        entryMode[3] = if (onlinePinCap) '1' else '2'
         val source = (transLog.CardDataSource.ifBlank { transLog.TxnInterface ?: "" })
             .trim()
             .uppercase()
@@ -29,12 +39,10 @@ object EntryModeMapper {
             "SWIPE" in source || "MAG" in source || source == "02" -> {
                 entryMode[1] = '0'
                 entryMode[2] = '2'
-                entryMode[3] = '2'
             }
             "MANUAL" in source || source == "01" -> {
                 entryMode[1] = '0'
                 entryMode[2] = '1'
-                entryMode[3] = '2'
             }
             else -> {
                 entryMode[1] = '0'

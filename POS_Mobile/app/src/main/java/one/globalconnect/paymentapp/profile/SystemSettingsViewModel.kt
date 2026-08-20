@@ -4,6 +4,9 @@ import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import one.globalconnect.paymentapp.GlobalConnectPaymentApplication
+import one.globalconnect.paymentapp.ParameterRequestReadiness
+import one.globalconnect.paymentapp.PendingUpdateManager
+import one.globalconnect.paymentapp.checkParameterRequestReadiness
 import one.globalconnect.paymentapp.uicpos.pos.model.SysParam
 import one.globalconnect.paymentapp.uicpos.pos.repository.SystemParameterRepository
 import kotlinx.coroutines.Dispatchers
@@ -96,22 +99,33 @@ class SystemSettingsViewModel(
         viewModelScope.launch {
             _initializeState.value = InitializeState.Loading
             val app = GlobalConnectPaymentApplication.instance
-            val count = try {
-                app.container.transactionRepository
-                    .getOpenAndNeedTipTransactionNumber()
-                    .first()
-            } catch (e: Exception) {
-                Log.e("SystemSettingsViewModel", "requestInitialize: could not check transactions", e)
-                _initializeState.value = InitializeState.Error(
-                    app.getString(R.string.setting_initialize_err_generic)
-                )
-                return@launch
-            }
-            if (count > 0) {
-                _initializeState.value = InitializeState.Error(
-                    app.getString(R.string.setting_initialize_err_batch_not_empty, count)
-                )
-                return@launch
+            val readiness = checkParameterRequestReadiness(
+                operationInProgress = { PendingUpdateManager.isOperationInProgress },
+                transactionCount = {
+                    app.container.transactionRepository.getTransactionCount().first()
+                },
+            )
+            when (readiness) {
+                ParameterRequestReadiness.Ready -> Unit
+                ParameterRequestReadiness.OperationInProgress -> {
+                    _initializeState.value = InitializeState.Error(
+                        app.getString(R.string.setting_initialize_err_operation_in_progress),
+                    )
+                    return@launch
+                }
+                is ParameterRequestReadiness.LiveTransactions -> {
+                    _initializeState.value = InitializeState.Error(
+                        app.getString(R.string.setting_initialize_err_batch_not_empty, readiness.count),
+                    )
+                    return@launch
+                }
+                ParameterRequestReadiness.UnableToVerify -> {
+                    Log.e("SystemSettingsViewModel", "requestInitialize: could not verify idle empty batch")
+                    _initializeState.value = InitializeState.Error(
+                        app.getString(R.string.setting_initialize_err_generic),
+                    )
+                    return@launch
+                }
             }
             app.requestParamsFromXtmsAgent()
             _initializeState.value = InitializeState.Requested

@@ -151,6 +151,7 @@ class SettlementCoordinator(
                 val openMessage = try {
                     hostMessageBuilder.build(
                         acquirer = acquirer,
+                        terminal = terminal,
                         procInfo = procInfo,
                         isoFactory = isoFactory,
                         stanSupplier = { stan },
@@ -219,6 +220,7 @@ class SettlementCoordinator(
                                 acquirer = acquirer,
                                 batchNumber = currentBatchNumber(acquirer),
                                 responseCode = responseCode,
+                                tmsDatabase = database,
                             )
                             snapshot?.let { storeSettlementSnapshot(it) }
                             advanceBatchNumber(acquirer)
@@ -275,6 +277,7 @@ class SettlementCoordinator(
                             val closeProcInfo = buildProcInfo(target, acquirer, closeStan, invoiceId)
                             val closeMessage = hostMessageBuilder.build(
                                 acquirer = acquirer,
+                                terminal = terminal,
                                 procInfo = closeProcInfo,
                                 isoFactory = isoFactory,
                                 stanSupplier = { closeStan },
@@ -312,6 +315,7 @@ class SettlementCoordinator(
                                     acquirer = acquirer,
                                     batchNumber = currentBatchNumber(acquirer),
                                     responseCode = closeResponseCode,
+                                    tmsDatabase = database,
                                 )
                                 snapshot?.let { storeSettlementSnapshot(it) }
                                 advanceBatchNumber(acquirer)
@@ -533,6 +537,7 @@ class SettlementCoordinator(
             val message = try {
                 hostMessageBuilder.build(
                     acquirer = acquirer,
+                    terminal = terminal,
                     procInfo = procInfo,
                     isoFactory = isoFactory,
                     stanSupplier = { uploadStan },

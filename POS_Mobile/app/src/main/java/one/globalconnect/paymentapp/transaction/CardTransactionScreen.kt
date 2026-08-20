@@ -38,9 +38,11 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import one.globalconnect.paymentapp.AppViewModelProvider
+import one.globalconnect.paymentapp.PendingUpdateManager
 import one.globalconnect.paymentapp.R
 import one.globalconnect.paymentapp.cardreader.CardReaderStatus
 import one.globalconnect.paymentapp.cardreader.CardReaderViewModel
+import one.globalconnect.paymentapp.cardreader.EmvApplicationSelection
 import one.globalconnect.paymentapp.navigation.TopBar
 import one.globalconnect.paymentapp.records.BackButton
 import one.globalconnect.paymentapp.ui.components.AcquirerSelectionOption
@@ -103,7 +105,16 @@ fun CardTransactionScreen(
                     currencyCode = uiState.emvCurrencyCode,
                 )
             }
-            else -> cardReaderViewModel.cancelCardSearch()
+            else -> {
+                val shouldKeepKernelActive = cardReaderState.onlineAuthorizationPending &&
+                    (uiState.step is CardTransactionStep.ProcessingHost ||
+                        uiState.step is CardTransactionStep.SelectingAcquirer)
+                if (shouldKeepKernelActive) {
+                    Log.d(TAG, "Keeping EMV kernel active while host authorization is pending")
+                } else {
+                    cardReaderViewModel.cancelCardSearch()
+                }
+            }
         }
     }
 
@@ -114,8 +125,24 @@ fun CardTransactionScreen(
         )
         val cardData = cardReaderState.cardData
         if (cardData != null && uiState.step is CardTransactionStep.AwaitingCard) {
-            Log.d(TAG, "Forwarding card data to CardTransactionViewModel")
-            cardTransactionViewModel.onCardRead(cardData)
+            val onlineResponseHandler = if (cardReaderState.onlineAuthorizationPending) {
+                cardReaderViewModel::completeOnlineAuthorization
+            } else {
+                null
+            }
+            Log.d(
+                TAG,
+                "Forwarding card data to CardTransactionViewModel " +
+                    "onlineAuthorization=${onlineResponseHandler != null}",
+            )
+            cardTransactionViewModel.onCardRead(cardData, onlineResponseHandler)
+        }
+    }
+
+    LaunchedEffect(cardReaderViewModel) {
+        cardReaderViewModel.onlineCompletions.collect { completion ->
+            Log.d(TAG, "Forwarding EMV kernel completion resultCode=${completion.resultCode}")
+            cardTransactionViewModel.onEmvKernelCompleted(completion)
         }
     }
 
@@ -172,7 +199,9 @@ fun CardTransactionScreen(
     }
 
     DisposableEffect(Unit) {
+        PendingUpdateManager.isOperationInProgress = true
         onDispose {
+            PendingUpdateManager.isOperationInProgress = false
             Log.d(TAG, "CardTransactionScreen disposed cancelling search")
             cardReaderViewModel.cancelCardSearch()
         }
@@ -219,6 +248,7 @@ fun CardTransactionScreen(
             contentPadding = padding,
             uiState = uiState,
             cardReaderStatus = cardReaderState.status,
+            applicationSelection = cardReaderState.applicationSelection,
             onRetry = {
                 Log.d(TAG, "Retry requested from CardTransactionBody")
                 cardReaderViewModel.cancelCardSearch()
@@ -240,6 +270,15 @@ fun CardTransactionScreen(
                 Log.d(TAG, "Acquirer selection cancelled from SelectingAcquirerContent")
                 cardReaderViewModel.cancelCardSearch()
                 cardTransactionViewModel.cancelTransaction()
+            },
+            onSelectApplication = { selectedIndex ->
+                Log.d(TAG, "EMV application selected index=$selectedIndex")
+                cardReaderViewModel.selectApplication(selectedIndex)
+            },
+            onCancelApplicationSelection = {
+                Log.d(TAG, "EMV application selection cancelled")
+                cardReaderViewModel.cancelCardSearch()
+                cardTransactionViewModel.cancelTransaction()
             }
         )
     }
@@ -251,11 +290,14 @@ private fun CardTransactionBody(
     contentPadding: PaddingValues,
     uiState: CardTransactionUiState,
     cardReaderStatus: CardReaderStatus,
+    applicationSelection: EmvApplicationSelection?,
     onRetry: () -> Unit,
     onSelectCurrency: (String) -> Unit,
     onCancelCurrencySelection: () -> Unit,
     onSelectAcquirer: (String) -> Unit,
     onCancelAcquirerSelection: () -> Unit,
+    onSelectApplication: (Int) -> Unit,
+    onCancelApplicationSelection: () -> Unit,
 ) {
     Log.d(TAG, "CardTransactionBody step=${uiState.step} status=$cardReaderStatus")
     val amountText = uiState.totalAmount.takeIf { it.isNotBlank() }?.let { amt ->
@@ -277,15 +319,32 @@ private fun CardTransactionBody(
             )
         }
 
-        is CardTransactionStep.AwaitingCard -> TransactionStatusContainer(
-            modifier = modifier,
-            contentPadding = contentPadding,
-            amountText = amountText,
-        ) {
-            AwaitingCardContent(
-                statusMessage = uiState.statusMessage,
-                cardReaderStatus = cardReaderStatus,
-            )
+        is CardTransactionStep.AwaitingCard -> {
+            if (applicationSelection != null) {
+                TransactionStatusContainer(
+                    modifier = modifier,
+                    contentPadding = contentPadding,
+                    amountText = null,
+                    fullBleedContent = true,
+                ) {
+                    SelectingApplicationContent(
+                        selection = applicationSelection,
+                        onSelectApplication = onSelectApplication,
+                        onCancel = onCancelApplicationSelection,
+                    )
+                }
+            } else {
+                TransactionStatusContainer(
+                    modifier = modifier,
+                    contentPadding = contentPadding,
+                    amountText = amountText,
+                ) {
+                    AwaitingCardContent(
+                        statusMessage = uiState.statusMessage,
+                        cardReaderStatus = cardReaderStatus,
+                    )
+                }
+            }
         }
 
         is CardTransactionStep.SelectingAcquirer -> TransactionStatusContainer(
@@ -380,6 +439,30 @@ private fun SelectingCurrencyContent(
         onOptionSelected = {
             Log.d(TAG, "Selecting currency $it")
             onSelectCurrency(it)
+        },
+        onCancel = onCancel,
+    )
+}
+
+@Composable
+private fun SelectingApplicationContent(
+    selection: EmvApplicationSelection,
+    onSelectApplication: (Int) -> Unit,
+    onCancel: () -> Unit,
+) {
+    Log.d(TAG, "SelectingApplicationContent options=${selection.labels.size}")
+    val selectionOptions = selection.labels.mapIndexed { index, label ->
+        AcquirerSelectionOption(
+            id = index.toString(),
+            title = label,
+        )
+    }
+    AcquirerSelectionPanel(
+        modifier = Modifier.fillMaxSize(),
+        title = stringResource(R.string.select_application_label),
+        options = selectionOptions,
+        onOptionSelected = { optionId ->
+            optionId.toIntOrNull()?.let(onSelectApplication)
         },
         onCancel = onCancel,
     )

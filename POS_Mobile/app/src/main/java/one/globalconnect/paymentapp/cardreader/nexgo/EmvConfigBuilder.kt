@@ -5,6 +5,7 @@ import com.nexgo.oaf.apiv3.emv.AidEntity
 import com.nexgo.oaf.apiv3.emv.AidEntryModeEnum
 import one.globalconnect.tms.paymentapp.TMS_EmvContactConfig
 import one.globalconnect.tms.paymentapp.TMS_EmvCtlsConfig
+import one.globalconnect.tms.paymentapp.TMS_Terminal
 
 internal object EmvConfigBuilder {
     private const val TAG = "EmvConfigBuilder"
@@ -65,6 +66,87 @@ internal object EmvConfigBuilder {
     internal fun effectiveOnlinePinCap(terminalOnlinePinCap: Boolean, aidOnlinePinCap: Int): Int {
         return if (terminalOnlinePinCap && aidOnlinePinCap == 1) 1 else 0
     }
+
+    fun buildTerminalCapabilityProfiles(
+        aidTab: List<TMS_EmvContactConfig>,
+        pcdApps: List<TMS_EmvCtlsConfig>,
+        terminal: TMS_Terminal,
+    ): List<EmvTerminalCapabilityProfile> {
+        val profiles = ArrayList<EmvTerminalCapabilityProfile>(aidTab.size + pcdApps.size)
+        aidTab.forEach { aid -> profiles += contactCapabilityProfile(aid, terminal) }
+        pcdApps.forEach { aid -> profiles += contactlessCapabilityProfile(aid, terminal) }
+        profiles.forEach { profile ->
+            Log.d(
+                TAG,
+                "[9F33 ${profile.interfaceType}] aid=${profile.aid} " +
+                    "base=${profile.base9F33?.toHex()} controlled=%02X enabled=%02X".format(
+                        profile.controlledCvmMask,
+                        profile.enabledCvmMask,
+                    ),
+            )
+        }
+        return profiles
+    }
+
+    private fun contactCapabilityProfile(
+        aid: TMS_EmvContactConfig,
+        terminal: TMS_Terminal,
+    ): EmvTerminalCapabilityProfile {
+        var enabled = 0
+        if (terminal.offlineClearPinCap && aid.offlineClearPinCap) {
+            enabled = enabled or EmvTerminalCapabilities.PLAINTEXT_OFFLINE_PIN
+        }
+        if (terminal.onlinePinCap && aid.onlinePinCap == 1) {
+            enabled = enabled or EmvTerminalCapabilities.ONLINE_PIN
+        }
+        if (terminal.signatureCap && aid.signatureCap) {
+            enabled = enabled or EmvTerminalCapabilities.SIGNATURE
+        }
+        if (terminal.offlineEncrPinCap && aid.offlineEncrPinCap) {
+            enabled = enabled or EmvTerminalCapabilities.ENCIPHERED_OFFLINE_PIN
+        }
+        if (terminal.noCVMCap && aid.noCVMCap) {
+            enabled = enabled or EmvTerminalCapabilities.NO_CVM
+        }
+        return EmvTerminalCapabilityProfile(
+            aid = aid.AID,
+            interfaceType = EmvCapabilityInterface.CONTACT,
+            base9F33 = null,
+            controlledCvmMask = EmvTerminalCapabilities.STANDARD_CVM_MASK,
+            enabledCvmMask = enabled,
+        )
+    }
+
+    private fun contactlessCapabilityProfile(
+        aid: TMS_EmvCtlsConfig,
+        terminal: TMS_Terminal,
+    ): EmvTerminalCapabilityProfile {
+        val base = EmvTerminalCapabilities.parse9F33(aid.terminalCapabilities)
+        // Contactless does not support offline PIN. Controlling all standard CVM bits here
+        // guarantees that raw values such as E0F8C8 cannot advertise either offline PIN method.
+        val controlled = EmvTerminalCapabilities.STANDARD_CVM_MASK
+        var enabled = 0
+
+        if (terminal.onlinePinCap && aid.onlinePinCap == 1) {
+            enabled = enabled or EmvTerminalCapabilities.ONLINE_PIN
+        }
+        if (terminal.signatureCap && aid.signatureCap) {
+            enabled = enabled or EmvTerminalCapabilities.SIGNATURE
+        }
+        if (terminal.noCVMCap && aid.noCVMCap) {
+            enabled = enabled or EmvTerminalCapabilities.NO_CVM
+        }
+
+        return EmvTerminalCapabilityProfile(
+            aid = aid.AID,
+            interfaceType = EmvCapabilityInterface.CONTACTLESS,
+            base9F33 = base,
+            controlledCvmMask = controlled,
+            enabledCvmMask = enabled,
+        )
+    }
+
+    private fun ByteArray.toHex(): String = joinToString("") { "%02X".format(it.toInt() and 0xFF) }
 
     private fun logAidEntity(e: AidEntity) {
         when (e.aidEntryModeEnum) {

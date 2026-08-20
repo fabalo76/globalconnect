@@ -4,6 +4,7 @@ import android.util.Log
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.nexgo.oaf.apiv3.SdkResult
 import com.nexgo.oaf.apiv3.device.reader.CardSlotTypeEnum
 import one.globalconnect.tms.paymentapp.TMS_Acquirer
 import one.globalconnect.tms.paymentapp.TMS_CardRanges
@@ -11,9 +12,13 @@ import one.globalconnect.tms.paymentapp.TMSDATA
 import one.globalconnect.tms.paymentapp.TMS_Issuer
 import one.globalconnect.tms.paymentapp.TMS_HostConnectionInfo
 import one.globalconnect.tms.paymentapp.TMS_Terminal
+import one.globalconnect.tms.paymentapp.TMS_PinKeyScheme
 import one.globalconnect.paymentapp.R
 import one.globalconnect.paymentapp.GlobalConnectPaymentApplication
 import one.globalconnect.paymentapp.cardreader.CardReadResult
+import one.globalconnect.paymentapp.cardreader.EmvKernelCompletion
+import one.globalconnect.paymentapp.cardreader.EmvOnlineAuthorizationResponse
+import one.globalconnect.paymentapp.cardreader.nexgo.OnlinePinScheme
 import one.globalconnect.paymentapp.dao.TransactionRepository
 import one.globalconnect.paymentapp.navigation.AMOUNT_KEY
 import one.globalconnect.paymentapp.navigation.CHECK_IN_ID_KEY
@@ -56,6 +61,7 @@ import com.uic.pos.iso8583.IsoMessageFactory
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -66,6 +72,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.math.BigDecimal
 import java.math.BigInteger
 import java.math.RoundingMode
@@ -117,6 +124,7 @@ class CardTransactionViewModel(
     private var selectionJob: Job? = null
     private var activeCardData: CardReadResult? = null
     private var currentOptions: List<CardTransactionAcquirerOption> = emptyList()
+    private var pendingEmvOnlineContext: EmvOnlineFlowCoordinator? = null
     private val pendingAcquirerIds = MutableStateFlow<Set<String>>(emptySet())
     private val supportedTransactionTypes = setOf(
         TransactionType.SALE,
@@ -217,12 +225,16 @@ class CardTransactionViewModel(
         }
     }
 
-    fun onCardRead(result: CardReadResult) {
+    fun onCardRead(
+        result: CardReadResult,
+        onlineResponseHandler: ((EmvOnlineAuthorizationResponse) -> Unit)? = null,
+    ) {
         Log.d(
             TAG,
             "onCardRead slot=${result.slotType} maskedPan=${result.maskedCardNumber} track2Length=${result.track2?.length}",
         )
         if (!supportedTransactionTypes.contains(transactionType)) return
+        pendingEmvOnlineContext = onlineResponseHandler?.let(::EmvOnlineFlowCoordinator)
         activeCardData = result
         val allOptions = resolveAcquirerOptions(result)
         Log.d(TAG, "onCardRead all options=${allOptions.joinToString(separator = ", ") { it.acquirer.AcquirerName }}")
@@ -294,6 +306,16 @@ class CardTransactionViewModel(
         showError(display)
     }
 
+    fun onEmvKernelCompleted(completion: EmvKernelCompletion) {
+        val context = pendingEmvOnlineContext
+        if (context == null) {
+            Log.w(TAG, "Ignoring EMV kernel completion without a pending online authorization")
+            return
+        }
+        Log.d(TAG, "onEmvKernelCompleted resultCode=${completion.resultCode}")
+        context.complete(completion)
+    }
+
     fun onAcquirerSelected(acquirerId: String) {
         Log.d(TAG, "onAcquirerSelected acquirerId=$acquirerId")
         val option = currentOptions.find { it.acquirer.AcqID == acquirerId }
@@ -336,6 +358,7 @@ class CardTransactionViewModel(
         Log.d(TAG, "cancelTransaction invoked")
         selectionJob?.cancel()
         stopWaitingForResponseCountdown()
+        abortPendingEmvOnlineAuthorization()
         viewModelScope.launch {
             Log.d(TAG, "Emitting CardTransactionEvent.Cancelled")
             _events.emit(CardTransactionEvent.Cancelled)
@@ -384,10 +407,32 @@ class CardTransactionViewModel(
             TAG,
             "processTransaction option=${option.acquirer.AcqID} maskedPan=${cardData.maskedCardNumber} entry=${cardData.slotType}",
         )
-        if (cardData.onlinePinRequested && !option.acquirer.supportsDukptOnlinePin) {
+        if (cardData.onlinePinRequested && !option.acquirer.supportsOnlinePin) {
             showError(string(R.string.online_pin_error_no_selected_acquirer_pin_type))
             return
         }
+        if (cardData.onlinePinRequested) {
+            val expectedScheme = when (option.acquirer.pinKeyScheme) {
+                TMS_PinKeyScheme.MKSK -> OnlinePinScheme.MKSK
+                TMS_PinKeyScheme.DUKPT -> OnlinePinScheme.DUKPT
+                TMS_PinKeyScheme.NONE -> null
+            }
+            val profileMatches = expectedScheme != null &&
+                cardData.onlinePinScheme == expectedScheme &&
+                cardData.onlinePinKeyIndex == option.acquirer.nexgoPinKeyIndex &&
+                (cardData.onlinePinAcquirerIds.isEmpty() || option.acquirer.AcqID in cardData.onlinePinAcquirerIds)
+            if (!profileMatches) {
+                Log.e(
+                    TAG,
+                    "Online PIN profile does not match selected acquirer=${option.acquirer.AcqID} " +
+                        "expectedScheme=$expectedScheme expectedIndex=${option.acquirer.nexgoPinKeyIndex} " +
+                        "actualScheme=${cardData.onlinePinScheme} actualIndex=${cardData.onlinePinKeyIndex}",
+                )
+                showError(string(R.string.online_pin_error_no_selected_acquirer_pin_type))
+                return
+            }
+        }
+        val emvOnlineContext = pendingEmvOnlineContext
         viewModelScope.launch {
             Log.d(TAG, "processTransaction coroutine started")
             val isoFactory = IsoMessageFactoryProvider.factoryFor()
@@ -446,6 +491,7 @@ class CardTransactionViewModel(
                 val message = try {
                     hostMessageBuilder.build(
                         acquirer = option.acquirer,
+                        terminal = terminalConfig,
                         procInfo = procInfo,
                         isoFactory = isoFactory,
                         stanSupplier = { stan },
@@ -509,10 +555,30 @@ class CardTransactionViewModel(
                 val result = hostClient.execute(request)
                 val responseCode = result.isoMessage.getFieldValue(39)
                 Log.d(TAG, "processTransaction responseCode=$responseCode")
-                val responseMessage = HostResponseMessageResolver.resolveOrFallback(responseCode)
-                val approved = responseCode == "00"
+                val hostApproved = responseCode == "00"
+                val kernelCompletion = emvOnlineContext?.let { context ->
+                    submitEmvOnlineResponseAndAwaitCompletion(
+                        context = context,
+                        response = EmvOnlineAuthorizationResponse(
+                            hostReachable = true,
+                            responseCode = responseCode ?: "96",
+                            authorizationCode = result.isoMessage.getFieldValue(38),
+                            field55 = result.isoMessage.getFieldValue(55),
+                        ),
+                    )
+                }
+                val kernelApproved = kernelCompletion?.resultCode == SdkResult.Success
+                val approved = hostApproved && (kernelCompletion == null || kernelApproved)
+                val responseMessage = if (hostApproved && kernelCompletion != null && !kernelApproved) {
+                    kernelCompletion.message.ifBlank { string(R.string.err_comm_error) }
+                } else {
+                    HostResponseMessageResolver.resolveOrFallback(responseCode)
+                }
                 val shouldPersistReversal =
-                    needsReversal && (responseCode == "91" || responseCode == "96" || responseCode == "92") &&
+                    needsReversal && (
+                        responseCode == "91" || responseCode == "96" || responseCode == "92" ||
+                            (hostApproved && kernelCompletion != null && !kernelApproved)
+                        ) &&
                         reversalCandidate != null
                 updateProcInfoWithResponse(procInfo, result)
 
@@ -561,7 +627,9 @@ class CardTransactionViewModel(
                                 isoFactory = isoFactory,
                                 candidate = reversalCandidate!!,
                                 existing = queuedReversal,
-                                reason = reversalReasonForCode(responseCode),
+                                reason = reversalReasonForCode(
+                                    if (hostApproved && kernelCompletion != null && !kernelApproved) "96" else responseCode
+                                ),
                                 responseCode = responseCode,
                             )
                         }
@@ -578,6 +646,15 @@ class CardTransactionViewModel(
                 }
             } catch (error: Throwable) {
                 Log.e(TAG, "Host transaction failed", error)
+                if (emvOnlineContext != null && !emvOnlineContext.responseSent) {
+                    submitEmvOnlineResponseAndAwaitCompletion(
+                        context = emvOnlineContext,
+                        response = EmvOnlineAuthorizationResponse(
+                            hostReachable = false,
+                            responseCode = "91",
+                        ),
+                    )
+                }
                 val safeMessage = formatSafeHostConnectionError(error, activeIpProfile, activeHostSettings)
                 setProcessingResult(ProcessingStatusStepState.FAILED, safeMessage)
                 if (needsReversal && reversalCandidate != null) {
@@ -595,8 +672,44 @@ class CardTransactionViewModel(
                     }
                 }
                 showError(safeMessage)
+            } finally {
+                if (pendingEmvOnlineContext === emvOnlineContext) {
+                    pendingEmvOnlineContext = null
+                }
             }
         }
+    }
+
+    private suspend fun submitEmvOnlineResponseAndAwaitCompletion(
+        context: EmvOnlineFlowCoordinator,
+        response: EmvOnlineAuthorizationResponse,
+    ): EmvKernelCompletion {
+        context.submitResponse(response)
+
+        return withTimeoutOrNull(EMV_KERNEL_COMPLETION_TIMEOUT_MS) {
+            context.completion.await()
+        } ?: EmvKernelCompletion(
+            resultCode = SdkResult.Fail,
+            message = string(R.string.host_result_timeout),
+            cardData = null,
+        )
+    }
+
+    private fun abortPendingEmvOnlineAuthorization() {
+        val context = pendingEmvOnlineContext ?: return
+        if (!context.responseSent) {
+            runCatching {
+                context.submitResponse(
+                    EmvOnlineAuthorizationResponse(
+                        hostReachable = false,
+                        responseCode = "96",
+                    )
+                )
+            }.onFailure { error ->
+                Log.w(TAG, "Failed to abort pending EMV online authorization", error)
+            }
+        }
+        pendingEmvOnlineContext = null
     }
 
     private data class ReversalContext(
@@ -679,6 +792,8 @@ class CardTransactionViewModel(
         transLog.Track2 = cardData.track2 ?: ""
         transLog.Track3 = cardData.track3 ?: ""
         transLog.Field55 = cardData.rawEmvData?.trim().orEmpty()
+        transLog.PINBlock = cardData.pinBlock.orEmpty()
+        transLog.KSN = cardData.ksn.orEmpty()
 
         val expiryDigits = cardData.expiryDate?.filter { it.isDigit() }
         if (expiryDigits?.length == 4) {
@@ -705,7 +820,7 @@ class CardTransactionViewModel(
         transLog.AppName = applicationLabel
         transLog.AppLabel = applicationLabel
         transLog.AppId = transLog.AID
-        transLog.CVMText = "No CVM"
+        transLog.CVMText = if (cardData.onlinePinRequested) "Online PIN" else "No CVM"
         transLog.TipProcessingInfo = option.acquirer.TIPProcs.toString()
 
         return ProcInfo(TransLog = transLog)
@@ -1213,6 +1328,7 @@ class CardTransactionViewModel(
 
     private fun showError(message: String) {
         Log.w(TAG, "Transaction failed: $message")
+        abortPendingEmvOnlineAuthorization()
         stopWaitingForResponseCountdown()
         _uiState.update {
             it.copy(
@@ -1266,6 +1382,30 @@ class CardTransactionViewModel(
         private const val TAG = "CardTransactionVM"
         private const val DEFAULT_CONNECT_TIMEOUT_SEC = 10
         private const val DEFAULT_READ_TIMEOUT_SEC = 60
+        private const val EMV_KERNEL_COMPLETION_TIMEOUT_MS = 30_000L
+    }
+}
+
+internal class EmvOnlineFlowCoordinator(
+    private val responseHandler: (EmvOnlineAuthorizationResponse) -> Unit,
+) {
+    val completion = CompletableDeferred<EmvKernelCompletion>()
+    var responseSent: Boolean = false
+        private set
+
+    fun submitResponse(response: EmvOnlineAuthorizationResponse) {
+        if (responseSent) return
+        responseSent = true
+        try {
+            responseHandler(response)
+        } catch (error: Throwable) {
+            responseSent = false
+            throw error
+        }
+    }
+
+    fun complete(kernelCompletion: EmvKernelCompletion): Boolean {
+        return completion.complete(kernelCompletion)
     }
 }
 

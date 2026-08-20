@@ -27,14 +27,18 @@ class ParamReceiver : BroadcastReceiver() {
         val applicationId = intent.getStringExtra(ParamConstants.EXTRA_APPLICATION_ID)
             ?.trim()
             ?.takeIf { it.isNotEmpty() }
+        val clientPackage = intent.getStringExtra(ParamConstants.EXTRA_CLIENT_PACKAGE)
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
         val extras = intent.extras?.keySet()
             ?.joinToString(prefix = "[", postfix = "]")
             ?: "[]"
         Log.i(
             TAG,
-            "Parameter request received action=${intent.action} senderPackage=${intent.`package` ?: "(implicit)"} " +
-                "targetHomePackage=${context.packageName} applicationId=${applicationId ?: "(none)"} extraKeys=$extras"
+            "Parameter request received action=${intent.action} targetHomePackage=${context.packageName} " +
+                "clientPackage=${clientPackage ?: "(legacy)"} " +
+                "applicationId=${applicationId ?: "(none)"} extraKeys=$extras"
         )
-        ParamManager.requestParamDownload(context.applicationContext, applicationId)
+        ParamManager.requestParamDownload(context.applicationContext, applicationId, clientPackage)
     }
 }

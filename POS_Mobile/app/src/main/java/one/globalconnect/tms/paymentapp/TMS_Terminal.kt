@@ -30,6 +30,10 @@ data class TMS_Terminal(
     var printReversal: Boolean = false,
     var capkMode: String = "",
     var onlinePinCap: Boolean = true,
+    var signatureCap: Boolean = true,
+    var noCVMCap: Boolean = true,
+    var offlineEncrPinCap: Boolean = true,
+    var offlineClearPinCap: Boolean = true,
     var tranReportingMethod: String = "",
     var tranReportingBatchSize: Double = 0.0,
     var tranReportingIntervalSeconds: Double = 0.0,
@@ -38,6 +42,15 @@ data class TMS_Terminal(
     var adminMessagesRequestTechnicianVisit: Boolean = false,
     var adminMessagesRequestExecutiveCall: Boolean = false,
     var adminMessagesRequestTraining: Boolean = false,
+    var bankPassword: String = "0000",
+    var voidPassword: String = "",
+    var clearPassword: String = "",
+    var adjustPassword: String = "",
+    var refundPassword: String = "",
+    var reportPassword: String = "",
+    var offlinePassword: String = "",
+    var settlementPassword: String = "",
+    var cashAdvancePassword: String = "",
     var ctls_application_config: List<TMS_CtlsApplicationConfig> = emptyList(),
     var contact_application_config: List<TMS_ContactApplicationConfig> = emptyList(),
     var acquirer: List<TMS_Acquirer> = emptyList()
@@ -45,7 +58,7 @@ data class TMS_Terminal(
     val TermID: String get() = acquirer.firstOrNull()?.AcqTermID ?: ""
     val CAPKKEyConfig: String get() = capkMode
     val IsBCDLength: Boolean get() = false
-    val password: Long get() = 0L
+    val password: Long get() = bankPassword.toLongOrNull() ?: 0L
     val AutoFolio: Boolean get() = false
     val MerchantTitle1: String get() = headerLine1
     val MerchantTitle2: String get() = headerLine2
@@ -95,7 +108,11 @@ data class TMS_Terminal(
                 printReports = TMS_Json.readBoolean(json, "printReports"),
                 printReversal = TMS_Json.readBoolean(json, "printReversal"),
                 capkMode = TMS_Json.readString(json, "capkMode"),
-                onlinePinCap = TMS_Json.readBooleanDefault(json, "onlinePinCap", true),
+                onlinePinCap = TMS_Json.readBinaryFlagDefault(json, "onlinePinCap", 1) == 1,
+                signatureCap = readCapabilityFlag(json, "signatureCap", "signaturePinCap"),
+                noCVMCap = readCapabilityFlag(json, "noCVMCap", "noCVMPinCap"),
+                offlineEncrPinCap = readCapabilityFlag(json, "offlineEncrPinCap", "offlineEncPinCap"),
+                offlineClearPinCap = TMS_Json.readBinaryFlagDefault(json, "offlineClearPinCap", 1) == 1,
                 tranReportingMethod = TMS_Json.readString(json, "tranReportingMethod"),
                 tranReportingBatchSize = TMS_Json.readDouble(json, "tranReportingBatchSize"),
                 tranReportingIntervalSeconds = TMS_Json.readDouble(json, "tranReportingIntervalSeconds"),
@@ -104,6 +121,15 @@ data class TMS_Terminal(
                 adminMessagesRequestTechnicianVisit = TMS_Json.readBoolean(json, "adminMessagesRequestTechnicianVisit"),
                 adminMessagesRequestExecutiveCall = TMS_Json.readBoolean(json, "adminMessagesRequestExecutiveCall"),
                 adminMessagesRequestTraining = TMS_Json.readBoolean(json, "adminMessagesRequestTraining"),
+                bankPassword = TMS_Json.readString(json, "bankPassword").ifBlank { "0000" },
+                voidPassword = TMS_Json.readString(json, "voidPassword"),
+                clearPassword = TMS_Json.readString(json, "clearPassword"),
+                adjustPassword = TMS_Json.readString(json, "adjustPassword"),
+                refundPassword = TMS_Json.readString(json, "refundPassword"),
+                reportPassword = TMS_Json.readString(json, "reportPassword"),
+                offlinePassword = TMS_Json.readString(json, "offlinePassword"),
+                settlementPassword = TMS_Json.readString(json, "settlementPassword"),
+                cashAdvancePassword = TMS_Json.readString(json, "cashAdvancePassword"),
                 ctls_application_config = TMS_CtlsApplicationConfig.listFromJson(json.optJSONArray("ctls_application_config")),
                 contact_application_config = TMS_ContactApplicationConfig.listFromJson(json.optJSONArray("contact_application_config")),
                 acquirer = TMS_Acquirer.listFromJson(json.optJSONArray("acquirer"))
@@ -118,6 +144,11 @@ data class TMS_Terminal(
                 items.add(fromJson(item))
             }
             return items
+        }
+
+        private fun readCapabilityFlag(json: JSONObject, canonicalName: String, alias: String): Boolean {
+            val name = if (json.has(canonicalName)) canonicalName else alias
+            return TMS_Json.readBinaryFlagDefault(json, name, 1) == 1
         }
     }
 }

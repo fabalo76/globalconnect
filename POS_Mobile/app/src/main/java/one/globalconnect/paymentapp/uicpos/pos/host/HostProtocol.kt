@@ -3,6 +3,7 @@ package one.globalconnect.paymentapp.uicpos.pos.host
 import com.uic.pos.iso8583.IsoMessage
 import com.uic.pos.iso8583.IsoMessageFactory
 import one.globalconnect.tms.paymentapp.TMS_Acquirer
+import one.globalconnect.tms.paymentapp.TMS_Terminal
 import one.globalconnect.paymentapp.uicpos.pos.model.ProcInfo
 
 /**
@@ -32,6 +33,7 @@ interface HostProtocol {
 data class HostProtocolContext(
     val procInfo: ProcInfo,
     val acquirer: TMS_Acquirer,
+    val terminal: TMS_Terminal,
     val isoFactory: IsoMessageFactory? = null,
     val stanSupplier: () -> String = { StanProvider.nextStan() },
     val timestampSupplier: () -> java.time.LocalDateTime = { java.time.LocalDateTime.now() }

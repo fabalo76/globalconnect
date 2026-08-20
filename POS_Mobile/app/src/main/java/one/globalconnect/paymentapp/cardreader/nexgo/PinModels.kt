@@ -18,6 +18,9 @@ internal data class PinData(
     var ksn: String = "",
     var onlinePinRequested: Boolean = false,
     var errorMessage: String = "",
+    var scheme: OnlinePinScheme? = null,
+    var keyIndex: Int = 0,
+    var compatibleAcquirerIds: Set<String> = emptySet(),
 ) {
     fun clear() {
         status = PinStatus.NA
@@ -25,5 +28,8 @@ internal data class PinData(
         ksn = ""
         onlinePinRequested = false
         errorMessage = ""
+        scheme = null
+        keyIndex = 0
+        compatibleAcquirerIds = emptySet()
     }
 }

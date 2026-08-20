@@ -108,6 +108,7 @@ object AppViewModelProvider {
         initializer {
             PasswordViewModel(
                 this.createSavedStateHandle(),
+                uicApplication().container.tmsDatabase.Terminal.firstOrNull(),
             )
         }
 

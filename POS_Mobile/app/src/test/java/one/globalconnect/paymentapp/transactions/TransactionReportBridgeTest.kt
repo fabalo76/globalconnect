@@ -10,6 +10,27 @@ import org.junit.Test
 
 class TransactionReportBridgeTest {
     @Test
+    fun disabledMethodTurnsTransactionReportingOff() {
+        val database = TMSDATA(
+            terminal = listOf(TMS_Terminal(tranReportingMethod = "Disabled"))
+        )
+
+        val policy = TransactionReportingPolicy.from(database)
+
+        assertEquals(false, policy.isEnabled)
+        assertEquals(false, policy.isBatching)
+    }
+
+    @Test
+    fun disabledMethodIsCaseInsensitiveAndTrimmed() {
+        val database = TMSDATA(
+            terminal = listOf(TMS_Terminal(tranReportingMethod = "  disabled  "))
+        )
+
+        assertEquals(false, TransactionReportingPolicy.from(database).isEnabled)
+    }
+
+    @Test
     fun transactionReportUsesAcquirerCurrencyCode() {
         val tmsDatabase = TMSDATA(
             terminal = listOf(

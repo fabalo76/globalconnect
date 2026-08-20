@@ -9,7 +9,6 @@ import one.globalconnect.paymentapp.transaction.PrintableTotalsReport
 import one.globalconnect.paymentapp.transaction.ReversalReceiptData
 import one.globalconnect.paymentapp.transaction.Transaction
 import one.globalconnect.paymentapp.settlement.storage.SettlementSnapshot
-import java.time.LocalDateTime
 
 const val MERCHANT = "MERCHANT"
 const val CUSTOMER = "CUSTOMER"
@@ -31,9 +30,7 @@ interface PaymentPrinter {
         transactions: List<Transaction>,
         printTransactions: Boolean,
         profile: Profile,
-        tmsDatabase: TMSDATA,
-        startDateTime: LocalDateTime,
-        endDateTime: LocalDateTime
+        tmsDatabase: TMSDATA
     )
 
     fun printBatchReport(
@@ -73,6 +70,11 @@ interface PaymentPrinter {
     )
 
     fun printConfigReport(
+        context: Context,
+        tmsDatabase: TMSDATA,
+    )
+
+    fun printPinPadKeysReport(
         context: Context,
         tmsDatabase: TMSDATA,
     )

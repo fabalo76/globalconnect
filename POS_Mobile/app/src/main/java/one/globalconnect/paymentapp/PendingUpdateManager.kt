@@ -5,13 +5,20 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.util.Log
 import one.globalconnect.tms.paymentapp.TMSDATA
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 
 private const val TAG                = "PendingUpdateManager"
 private const val PREFS_NAME         = "tms_pending_update_prefs"
 private const val KEY_PARAM_JSON     = "param_json"
+private const val KEY_PARAM_TASK_ID  = "param_task_id"
+private const val KEY_PARAM_RESULT_PACKAGE = "param_result_package"
 private const val KEY_APP_PKG        = "app_update_pkg"
 private const val KEY_APP_VER        = "app_update_ver"
 private const val KEY_APP_VER_CODE   = "app_update_ver_code"
@@ -45,18 +52,46 @@ const val ACTION_PRE_INSTALL_DISMISS  = "one.globalconnect.xtmsagent.ACTION_PRE_
 object PendingUpdateManager {
 
     /** True while a card transaction or settlement is in progress. Set by callers. */
-    @Volatile
-    var isOperationInProgress: Boolean = false
+    private val _operationInProgress = MutableStateFlow(false)
+    val operationInProgress: StateFlow<Boolean> = _operationInProgress.asStateFlow()
+
+    var isOperationInProgress: Boolean
+        get() = _operationInProgress.value
+        set(value) {
+            _operationInProgress.value = value
+        }
 
     // ── Param update ─────────────────────────────────────────────────────────
 
     private val _paramUpdatePending = MutableStateFlow(false)
     val paramUpdatePending: StateFlow<Boolean> = _paramUpdatePending.asStateFlow()
+    private val paramUpdateMutex = Mutex()
 
-    fun storePendingParamUpdate(context: Context, jsonText: String) {
-        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
-            .putString(KEY_PARAM_JSON, jsonText).apply()
+    internal fun storePendingParamUpdate(
+        context: Context,
+        jsonText: String,
+        task: TmsParamTaskContext? = null,
+    ) {
+        val previousTask = pendingParamTask(context)
+        if (previousTask != null && previousTask.taskId != task?.taskId) {
+            TmsParamTaskReporter.failed(
+                context,
+                previousTask,
+                "Parameter update was superseded by a newer update",
+            )
+        }
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit().apply {
+            putString(KEY_PARAM_JSON, jsonText)
+            if (task == null) {
+                remove(KEY_PARAM_TASK_ID)
+                remove(KEY_PARAM_RESULT_PACKAGE)
+            } else {
+                putString(KEY_PARAM_TASK_ID, task.taskId)
+                putString(KEY_PARAM_RESULT_PACKAGE, task.resultPackage)
+            }
+        }.apply()
         _paramUpdatePending.value = true
+        TmsParamsUpdateNotifier.notifyPendingSettlementWhenMainActivityClosed(context)
         Log.i(TAG, "Param update stored — pending settlement")
     }
 
@@ -75,31 +110,102 @@ object PendingUpdateManager {
     fun applyPendingParamUpdate(context: Context): Boolean {
         val prefs   = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val jsonText = prefs.getString(KEY_PARAM_JSON, null) ?: return false
+        val task = pendingParamTask(context)
         return try {
             val db = TMSDATA.parse(jsonText)
             val app = GlobalConnectPaymentApplication.instanceOrNull
             if (app == null) {
                 Log.e(TAG, "GlobalConnectPaymentApplication not ready — cannot apply deferred param update")
+                TmsParamTaskReporter.failed(context, task, "Payment application is not ready")
+                clearPendingParamUpdate(context)
                 return false
             }
             val applied = app.applyTmsUpdate(db)
             if (applied) {
                 clearPendingParamUpdate(context)
                 Log.i(TAG, "Deferred param update applied")
+                TmsParamTaskReporter.completed(context, task)
             } else {
                 Log.e(TAG, "applyTmsUpdate rejected deferred PAYMENT_APP params")
+                TmsParamTaskReporter.failed(context, task, "Could not apply deferred PAYMENT_APP params")
+                clearPendingParamUpdate(context)
             }
             applied
         } catch (e: Exception) {
             Log.e(TAG, "Failed to apply deferred param update: ${e.message}", e)
+            TmsParamTaskReporter.failed(
+                context,
+                task,
+                "Failed to apply deferred parameters: ${e.message}",
+            )
+            clearPendingParamUpdate(context)
             false
+        }
+    }
+
+    /**
+     * Re-checks the complete live batch before applying a deferred parameter update.
+     * A database error is deliberately treated as blocked: parameters must never be
+     * applied merely because the application could not prove that the batch is empty.
+     */
+    suspend fun applyPendingParamUpdateIfBatchEmpty(
+        context: Context,
+    ): PendingParamUpdateResult = paramUpdateMutex.withLock {
+        if (!hasPendingParamUpdate(context)) {
+            return@withLock PendingParamUpdateResult.NoPendingUpdate
+        }
+
+        val app = GlobalConnectPaymentApplication.instanceOrNull
+            ?: return@withLock PendingParamUpdateResult.WaitingForIdleBatch
+        val liveTransactionCount = withContext(Dispatchers.IO) {
+            try {
+                app.container.transactionRepository
+                    .getTransactionCount()
+                    .first()
+            } catch (error: Exception) {
+                Log.e(TAG, "Could not verify that the transaction batch is empty", error)
+                null
+            }
+        }
+
+        if (shouldDeferParameterUpdate(isOperationInProgress, liveTransactionCount)) {
+            Log.i(
+                TAG,
+                "Deferred params remain pending " +
+                    "(operationInProgress=$isOperationInProgress liveTransactions=$liveTransactionCount)",
+            )
+            return@withLock PendingParamUpdateResult.WaitingForIdleBatch
+        }
+
+        val applied = withContext(Dispatchers.Main) {
+            applyPendingParamUpdate(context)
+        }
+        if (applied) {
+            PendingParamUpdateResult.Applied
+        } else {
+            PendingParamUpdateResult.Failed
         }
     }
 
     fun clearPendingParamUpdate(context: Context) {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
-            .remove(KEY_PARAM_JSON).apply()
+            .remove(KEY_PARAM_JSON)
+            .remove(KEY_PARAM_TASK_ID)
+            .remove(KEY_PARAM_RESULT_PACKAGE)
+            .apply()
         _paramUpdatePending.value = false
+        TmsParamsUpdateNotifier.cancelPendingSettlementNotification(context)
+    }
+
+    private fun pendingParamTask(context: Context): TmsParamTaskContext? {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val taskId = prefs.getString(KEY_PARAM_TASK_ID, null)?.takeIf { it.isNotBlank() }
+        val resultPackage = prefs.getString(KEY_PARAM_RESULT_PACKAGE, null)?.takeIf { it.isNotBlank() }
+        return if (taskId != null && resultPackage != null) {
+            TmsParamTaskContext(taskId, resultPackage)
+        } else {
+            null
+        }
     }
 
     // ── App update ────────────────────────────────────────────────────────────
@@ -165,4 +271,16 @@ object PendingUpdateManager {
         _paramUpdatePending.value = !prefs.getString(KEY_PARAM_JSON, null).isNullOrBlank()
         _appUpdatePending.value   = !prefs.getString(KEY_APP_PKG,    null).isNullOrBlank()
     }
+}
+
+internal fun shouldDeferParameterUpdate(
+    operationInProgress: Boolean,
+    liveTransactionCount: Int?,
+): Boolean = operationInProgress || liveTransactionCount == null || liveTransactionCount > 0
+
+enum class PendingParamUpdateResult {
+    NoPendingUpdate,
+    WaitingForIdleBatch,
+    Applied,
+    Failed,
 }

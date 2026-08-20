@@ -16,6 +16,8 @@ import com.nexgo.oaf.apiv3.device.printer.GrayLevelEnum
 import com.nexgo.oaf.apiv3.device.printer.LineOptionEntity
 import com.nexgo.oaf.apiv3.device.printer.OnPrintListener
 import com.nexgo.oaf.apiv3.device.printer.Printer
+import com.nexgo.oaf.apiv3.device.pinpad.PinPadTypeEnum
+import com.nexgo.oaf.apiv3.device.pinpad.WorkKeyTypeEnum
 import one.globalconnect.tms.paymentapp.TMSDATA
 import one.globalconnect.paymentapp.R
 import one.globalconnect.paymentapp.GlobalConnectPaymentApplication
@@ -39,7 +41,6 @@ import one.globalconnect.paymentapp.transaction.TransactionType
 import one.globalconnect.paymentapp.transaction.TotalsMetric
 import one.globalconnect.paymentapp.transaction.toStringForUsers
 import one.globalconnect.paymentapp.transaction.toTransactionString
-import one.globalconnect.paymentapp.uicpos.pos.host.HostProtocolRegistry
 import one.globalconnect.paymentapp.uicpos.pos.host.InvoiceNumberProvider
 import one.globalconnect.paymentapp.uicpos.pos.host.StanProvider
 import one.globalconnect.paymentapp.uicpos.pos.host.TransactionConfigRegistry
@@ -245,8 +246,6 @@ object NexGoPaymentPrinter : PaymentPrinter {
         printTransactions: Boolean,
         profile: Profile,
         tmsDatabase: TMSDATA,
-        startDateTime: LocalDateTime,
-        endDateTime: LocalDateTime,
     ) {
         val deviceEngine = APIProxy.getDeviceEngine(context)
         val printer = deviceEngine.printer
@@ -304,12 +303,12 @@ object NexGoPaymentPrinter : PaymentPrinter {
             )
         }
 
-        val periodLabel = resources.getString(
-            R.string.report_period_label,
-            startDateTime.format(dateTimeFormatterForUsers),
-            endDateTime.format(dateTimeFormatterForUsers),
+        printer.appendPrnStr(
+            resources.getString(R.string.report_current_batch),
+            SMALLFONTSIZE,
+            AlignEnum.CENTER,
+            false,
         )
-        printer.appendPrnStr(periodLabel, SMALLFONTSIZE, AlignEnum.CENTER, false)
 
         printer.appendPrnStr(dottedSpacer, SMALLFONTSIZE, AlignEnum.CENTER, false)
 
@@ -1531,72 +1530,25 @@ object NexGoPaymentPrinter : PaymentPrinter {
         )
 
         val now = LocalDateTime.now()
-        printer.printLine("${now.format(dateFormatter)}  ${now.format(reversalTimeFormatter)}", PrintFontSize.SMALL)
-        printer.printLine("Parametros de Terminal [${terminal?.TermID ?: ""}]", PrintFontSize.SMALL, isBold = true)
-        printer.printLine("No. Serie [${GlobalConnectPaymentApplication.serialNumber}]", PrintFontSize.TINY)
-        printer.printLine(dottedSpacer, PrintFontSize.SMALL)
+        printer.printCentered("CONFIGURATION REPORT", PrintFontSize.LARGE, isBold = true)
+        printer.printCentered(
+            "${now.format(dateFormatter)} ${now.format(reversalTimeFormatter)}",
+            PrintFontSize.SMALL,
+        )
+        printer.printWrappedField("Model", GlobalConnectPaymentApplication.model)
+        printer.printWrappedField("Serial number", GlobalConnectPaymentApplication.serialNumber)
+        printer.printWrappedField("Application version", GlobalConnectPaymentApplication.instance.appVersion)
 
-        printer.printLine("EMV Caps [${terminal?.TermCap ?: ""}]", PrintFontSize.TINY)
-        printer.printLine("EMV AddCaps [${terminal?.AddTermCap ?: ""}]", PrintFontSize.TINY)
-        printer.printLine("Max Ajuste Propina", "${terminal?.TipMaxAdjusts ?: 0}", PrintFontSize.TINY)
-        printer.printLine("CTLS Group", terminal?.CTLSAppsGroup ?: "", PrintFontSize.TINY)
-        printer.printLine("Invoice", InvoiceNumberProvider.currentInvoiceNumber(), PrintFontSize.TINY)
-        printer.printLine("STAN", StanProvider.currentStan(), PrintFontSize.TINY)
-        printer.printLine("TAX", (terminal?.ApplyTax == true).toYesNo(), PrintFontSize.TINY)
-        printer.printLine("TAX DISC", (terminal?.ApplyTaxDisc == true).toYesNo(), PrintFontSize.TINY)
-        printer.printLine("TAX2", (terminal?.ApplyTax2 == true).toYesNo(), PrintFontSize.TINY)
-        printer.printLine("Manual Entry", (terminal?.EnableManualEntry == true).toYesNo(), PrintFontSize.TINY)
-        val capkEnvLabel = when (terminal?.CAPKKEyConfig) {
-            "02" -> "Test"
-            "03" -> "Live and Test"
-            else -> "Live"
-        }
-        printer.printLine("CAPK Keys", capkEnvLabel, PrintFontSize.TINY)
-
-        tmsDatabase.Acquirer.forEach { acquirer ->
+        buildConfigurationReportSections(
+            database = tmsDatabase,
+            invoiceNumber = InvoiceNumberProvider.currentInvoiceNumber(),
+            stan = StanProvider.currentStan(),
+        ).forEach { section ->
             printer.printLine(dottedSpacer, PrintFontSize.SMALL)
-            printer.printLine("ADQUIRENTE [${acquirer.AcqID}] ${acquirer.AcquirerName}", PrintFontSize.SMALL, isBold = true)
-            printer.printLine(dottedSpacer, PrintFontSize.SMALL)
-            printer.printLine("Merchant ID", acquirer.MerchID, PrintFontSize.TINY)
-            printer.printLine("Terminal ID", acquirer.AcqTermID, PrintFontSize.TINY)
-            printer.printLine("NII", acquirer.NII.toString().padStart(4, '0'), PrintFontSize.TINY)
-            printer.printLine("Batch", String.format("%06d", acquirer.InitBatchNo), PrintFontSize.TINY)
-
-            val protocolName = HostProtocolRegistry.protocolFor(acquirer.HostProtocol)
-                ?.javaClass?.simpleName ?: acquirer.HostProtocol.toString()
-            printer.printLine("Protocolo", protocolName, PrintFontSize.TINY)
-
-            if (acquirer.AcqLine1.isNotBlank()) printer.printLine("Linea1", acquirer.AcqLine1, PrintFontSize.TINY)
-            if (acquirer.AcqLine2.isNotBlank()) printer.printLine("Linea2", acquirer.AcqLine2, PrintFontSize.TINY)
-            if (acquirer.AcqLine3.isNotBlank()) printer.printLine("Linea3", acquirer.AcqLine3, PrintFontSize.TINY)
-
-            val country = acquirer.CountryCode.toString().padStart(4, '0')
-            val currency = acquirer.CurrencyCode.toString().padStart(4, '0')
-            printer.printLine("Pais:$country  Moneda:$currency", PrintFontSize.TINY)
-
-            fun ipTabLine(tabId: String, label: String) {
-                val tab = tmsDatabase.IPTab.find { it.IPTabID == tabId }
-                val ip = tab?.PrimIpAddr?.takeIf { it.isNotBlank() } ?: tabId
-                val timeout = tab?.IPConnTime ?: 0
-                val ssl = if (tab?.SSL == true) "SSL" else ""
-                printer.printLine("$label:[$tabId]$ip T:${timeout}s $ssl".trim(), PrintFontSize.TINY)
+            printer.printWrappedCentered(section.title, PrintFontSize.SMALL)
+            section.fields.forEach { field ->
+                printer.printWrappedField(field.label, field.value)
             }
-            ipTabLine(acquirer.IPTabTran, "Txn")
-            ipTabLine(acquirer.IPTabSet, "Set")
-
-            if (acquirer.RestrictedBins.isNotBlank())
-                printer.printLine("BINs Restr.", acquirer.RestrictedBins, PrintFontSize.TINY)
-            if (acquirer.BlockFallBackToBINS.isNotBlank())
-                printer.printLine("BINs FallBack", acquirer.BlockFallBackToBINS, PrintFontSize.TINY)
-
-            printer.printLine("TIP Process", String.format("%02X", acquirer.TIPProcs), PrintFontSize.TINY)
-            printer.printLine("EMV", acquirer.EMV_Feature.toYesNo(), PrintFontSize.TINY)
-            printer.printLine("FallBack", acquirer.AllowFallBack.toYesNo(), PrintFontSize.TINY)
-            printer.printLine("Ventas", acquirer.EnableSales.toYesNo(), PrintFontSize.TINY)
-            printer.printLine("Efectivo", acquirer.EnableCash.toYesNo(), PrintFontSize.TINY)
-            printer.printLine("Pagos", acquirer.EnablePayment.toYesNo(), PrintFontSize.TINY)
-            printer.printLine("CheckIn", acquirer.EnableCheckin.toYesNo(), PrintFontSize.TINY)
-            printer.printLine("Consulta", acquirer.EnableBalance.toYesNo(), PrintFontSize.TINY)
         }
 
         printer.printLine(dottedSpacer, PrintFontSize.SMALL)
@@ -1612,5 +1564,91 @@ object NexGoPaymentPrinter : PaymentPrinter {
         printer.startPrint(true, listener)
     }
 
-    private fun Boolean.toYesNo(): String = if (this) "SI" else "NO"
+    override fun printPinPadKeysReport(context: Context, tmsDatabase: TMSDATA) {
+        val deviceEngine = APIProxy.getDeviceEngine(context)
+        val printer = deviceEngine.printer
+        printer.initPrinter()
+        printer.setGray(GrayLevelEnum.LEVEL_0)
+        printer.setTypeface(Typeface.MONOSPACE)
+
+        val terminal = tmsDatabase.Terminal.firstOrNull()
+        val primaryAcquirer = tmsDatabase.Acquirer.firstOrNull()
+        printHeader(
+            context,
+            terminal?.MerchantTitle1 ?: "",
+            terminal?.MerchantTitle2 ?: "",
+            terminal?.MerchantTitle3 ?: "",
+            primaryAcquirer?.AcqLine1 ?: "",
+            printerObject = printer,
+            printLogo = true,
+        )
+
+        val now = LocalDateTime.now()
+        printer.printCentered("PIN PAD KEY STATUS", PrintFontSize.LARGE, isBold = true)
+        printer.printCentered(
+            "${now.format(dateFormatter)} ${now.format(reversalTimeFormatter)}",
+            PrintFontSize.SMALL,
+        )
+        printer.printWrappedField("Model", GlobalConnectPaymentApplication.model)
+        printer.printWrappedField("Serial number", GlobalConnectPaymentApplication.serialNumber)
+        printer.printLine(dottedSpacer, PrintFontSize.SMALL)
+        printer.printWrappedCentered("CONFIGURED PIN PROFILES", PrintFontSize.SMALL)
+
+        val configuredProfiles = tmsDatabase.Acquirer.filter { it.supportsOnlinePin }
+        if (configuredProfiles.isEmpty()) {
+            printer.printLine("No online PIN profiles configured", PrintFontSize.TINY)
+        } else {
+            configuredProfiles.forEach { acquirer ->
+                val slot = acquirer.nexgoPinKeyIndex?.toString() ?: "INVALID"
+                printer.printWrappedField(
+                    acquirer.AcqID.ifBlank { acquirer.AcquirerName.ifBlank { "Acquirer" } },
+                    "${acquirer.pinKeyScheme.name} slot $slot",
+                )
+            }
+        }
+
+        printer.printLine(dottedSpacer, PrintFontSize.SMALL)
+        printer.printWrappedCentered("LOADED PED KEYS", PrintFontSize.SMALL)
+        val pinPad = deviceEngine.pinPad
+        val initResult = runCatching { pinPad.initPinPad(PinPadTypeEnum.INTERNAL) }.getOrNull()
+        if (initResult != SdkResult.Success) {
+            printer.printWrappedField("PIN pad", "INITIALIZATION FAILED (${initResult ?: "EXCEPTION"})")
+        } else {
+            val statuses = readPinPadKeyStatuses(
+                masterKeyKcv = { index ->
+                    runCatching {
+                        val zeros = ByteArray(16)
+                        pinPad.encryptByMKey(index, zeros, zeros.size)?.copyOfRange(0, 4)?.toHexString()
+                    }.getOrNull()
+                },
+                workingKeyKcv = { index, type ->
+                    runCatching { pinPad.calcWKeyKCV(index, type)?.toHexString() }.getOrNull()
+                },
+                dukptLoaded = { index ->
+                    runCatching { pinPad.dukptCurrentKsn(index)?.size == 10 }.getOrDefault(false)
+                },
+            )
+            statuses.forEach { status ->
+                printer.printWrappedField(
+                    "${status.type} [${status.index}]",
+                    status.kcv?.let { "LOADED KCV $it" } ?: status.state,
+                )
+            }
+        }
+
+        printer.printLine(dottedSpacer, PrintFontSize.SMALL)
+        printer.printLine("No key values are printed.", PrintFontSize.TINY)
+        printer.printCentered(GlobalConnectPaymentApplication.instance.getString(R.string.end_of_report), PrintFontSize.LARGE)
+        printer.printLine("          ", PrintFontSize.LARGE)
+
+        val listener = OnPrintListener { result ->
+            when (result) {
+                SdkResult.Success -> Log.d(TAG, "PIN pad key report printed successfully")
+                else -> Log.e(TAG, "PIN pad key report print failed: $result")
+            }
+        }
+        printer.startPrint(true, listener)
+    }
+
+    private fun ByteArray.toHexString(): String = joinToString("") { "%02X".format(it.toInt() and 0xFF) }
 }

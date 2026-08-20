@@ -33,6 +33,7 @@ data class MagstripeData(
 interface EmvTransactionListener {
     fun onCardDetected(slot: CardSlotTypeEnum, info: CardInfoEntity) {}
     fun onMagstripeRead(data: MagstripeData) {}
+    fun onApplicationSelectionRequested(appLabels: List<String>, isMandatory: Boolean) {}
     fun onPrompt(prompt: PromptEnum?) {}
     fun onPinRequested(isOnlinePin: Boolean, attemptsRemaining: Int) {}
     fun onOnlineProcessing() {}

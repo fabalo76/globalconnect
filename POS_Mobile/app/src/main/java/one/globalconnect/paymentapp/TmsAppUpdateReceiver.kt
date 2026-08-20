@@ -22,7 +22,8 @@ private const val TAG = "TmsAppUpdateReceiver"
  *
  * "Busy" means either:
  *  - [PendingUpdateManager.isOperationInProgress] is true (active transaction or settlement), OR
- *  - There are unsettled transactions in the transaction log (Open or NeedTip status).
+ *  - There are transactions in the current batch. Approved transactions are stored with
+ *    Closed status but remain live until a successful settlement removes them.
  */
 class TmsAppUpdateReceiver : BroadcastReceiver() {
 
@@ -52,18 +53,18 @@ class TmsAppUpdateReceiver : BroadcastReceiver() {
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 val inProgress = PendingUpdateManager.isOperationInProgress
-                val unsettledCount = try {
+                val liveBatchCount = try {
                     GlobalConnectPaymentApplication.instance.container.transactionRepository
-                        .getOpenAndNeedTipTransactionNumber()
+                        .getTransactionCount()
                         .first()
                 } catch (e: Exception) {
-                    Log.e(TAG, "Could not query unsettled transactions: ${e.message}", e)
-                    0
+                    Log.e(TAG, "Could not verify that the transaction batch is empty: ${e.message}", e)
+                    null
                 }
 
-                val canProceed = !inProgress && unsettledCount == 0
+                val canProceed = !inProgress && liveBatchCount == 0
                 Log.i(TAG, "PRE_INSTALL_CHECK response: pkg=$pkg proceed=$canProceed " +
-                    "(inProgress=$inProgress unsettled=$unsettledCount)")
+                    "(inProgress=$inProgress liveBatch=$liveBatchCount)")
 
                 if (!canProceed) {
                     PendingUpdateManager.storePendingAppUpdate(context, pkg, ver, verCode)

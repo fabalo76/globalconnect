@@ -1,0 +1,21 @@
+ERASE ALL KEYS
+<02>0501<03><LRC>
+++++**--++++****
+ |  |  | |   |
+ |  |  | |   |-> LRC After STX Including ETX
+ |  |  | |-> ETX char 0x03
+ |  |  |
+ |  |  |-> Version of command for expandability of commandin ASCII hex "01"
+ |  |-> Command 05 Erase all keys
+ |-> STX char 0x02
+
+ERASE ALL KEYS RESPONSE
+
+<02>0500<03><LRC>
+++++**------****
+ |  | |   |   |
+ |  | |   |   |-> LRC After STX Including ETX
+ |  | |   |-> ETX char 0x03
+ |  | |-> Response Code 00 = Success
+ |  |-> Command 05 Erase all keys
+ |-> STX char 0x02

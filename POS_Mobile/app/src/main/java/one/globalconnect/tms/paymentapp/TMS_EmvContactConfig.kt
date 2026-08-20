@@ -15,6 +15,10 @@ data class TMS_EmvContactConfig(
     var percentage_for_selection: String = "",
     var threshold_for_bias_selection: String = "",
     var onlinePinCap: Int = 1,
+    var signatureCap: Boolean = true,
+    var noCVMCap: Boolean = true,
+    var offlineEncrPinCap: Boolean = true,
+    var offlineClearPinCap: Boolean = true,
     var tacDenial: String = "",
     var tacOnline: String = "",
     var tacDefault: String = ""
@@ -45,6 +49,13 @@ data class TMS_EmvContactConfig(
                 percentage_for_selection = TMS_Json.readString(json, "percentage_for_selection"),
                 threshold_for_bias_selection = TMS_Json.readString(json, "threshold_for_bias_selection"),
                 onlinePinCap = TMS_Json.readBinaryFlagDefault(json, "onlinePinCap", 1),
+                signatureCap = when {
+                    json.has("signatureCap") -> TMS_Json.readBinaryFlagDefault(json, "signatureCap", 1) == 1
+                    else -> TMS_Json.readBinaryFlagDefault(json, "signarureCap", 1) == 1
+                },
+                noCVMCap = TMS_Json.readBinaryFlagDefault(json, "noCVMCap", 1) == 1,
+                offlineEncrPinCap = TMS_Json.readBinaryFlagDefault(json, "offlineEncrPinCap", 1) == 1,
+                offlineClearPinCap = TMS_Json.readBinaryFlagDefault(json, "offlineClearPinCap", 1) == 1,
                 tacDenial = TMS_Json.readString(json, "tacDenial"),
                 tacOnline = TMS_Json.readString(json, "tacOnline"),
                 tacDefault = TMS_Json.readString(json, "tacDefault")

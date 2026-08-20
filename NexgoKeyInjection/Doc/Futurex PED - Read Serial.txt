@@ -1,0 +1,23 @@
+READ SERIAL NUMBER COMMAND
+<02>0301<03><LRC>
+++++**--++++****
+ |  |  | |   |
+ |  |  | |   |-> LRC After STX Including ETX
+ |  |  | |-> ETX char 0x03
+ |  |  |
+ |  |  |-> Version of command for expandability of commandin ASCII hex "01"
+ |  |-> Command 03 Read Serial Number Command
+ |-> STX char 0x02
+
+MASTER KEY INJECTION RESPONSE
+
+Terminal Serial Number: 123456789ABCDEFG
+<02>0300123456789ABCDEFG<03><LRC>
+++++**--++++++++++++++++----****
+ |  | |      |           |   |
+ |  | |      |           |   |-> LRC After STX Including ETX
+ |  | |      |           |-> ETX char 0x03
+ |  | |      |-> 16 character serial number
+ |  | |-> Response Code 00 = Success
+ |  |-> Command 03 Read Serial Number Command
+ |-> STX char 0x02

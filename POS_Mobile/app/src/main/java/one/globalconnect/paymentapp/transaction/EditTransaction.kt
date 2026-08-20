@@ -38,6 +38,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -63,8 +64,11 @@ import one.globalconnect.paymentapp.AppViewModelProvider
 import one.globalconnect.paymentapp.R
 import one.globalconnect.paymentapp.GlobalConnectPaymentApplication
 import one.globalconnect.paymentapp.navigation.TopBar
+import one.globalconnect.paymentapp.profile.labelResource
 import one.globalconnect.paymentapp.records.CardIcon
 import one.globalconnect.paymentapp.records.defaultFormattedVerboseDateTime
+import one.globalconnect.paymentapp.security.TerminalPasswordAction
+import one.globalconnect.paymentapp.security.TerminalPasswordPolicy
 import one.globalconnect.paymentapp.ui.theme.color_Green80
 import one.globalconnect.paymentapp.ui.theme.color_Pink80
 import one.globalconnect.paymentapp.ui.theme.color_Purple40
@@ -89,22 +93,29 @@ fun EditTransactionScreen(
     val viewModel: TransactionDetailsViewModel = viewModel(factory = viewModelFactory)
 
     var screenToShow by rememberSaveable { mutableStateOf(TransactionViewScreen.MainScreen) }
-    var showVoidPasswordDialog by rememberSaveable { mutableStateOf(false) }
+    var pendingPasswordAction by rememberSaveable {
+        mutableStateOf<TerminalPasswordAction?>(null)
+    }
     val transaction by viewModel.transactionFlow.collectAsState()
+    val terminal = GlobalConnectPaymentApplication.instance.tmsDatabase.Terminal.firstOrNull()
 
     when (screenToShow) {
         TransactionViewScreen.MainScreen -> TransactionMainScreen(
             onBackButtonPressed = onBackButtonPressed,
             onDetailsButtonPressed = { screenToShow = TransactionViewScreen.PaymentDetails },
             onPrintButtonPressed = { viewModel.printReceipt() },
-            onTipAdjustPressed = { screenToShow = TransactionViewScreen.AdjustTip },
-            onRefundPressed = {
-                val voidPassword = GlobalConnectPaymentApplication.instance.tmsDatabase.Terminal
-                    .firstOrNull()?.password ?: 0L
-                if (voidPassword == 0L) {
-                    screenToShow = TransactionViewScreen.Refund
+            onTipAdjustPressed = {
+                if (TerminalPasswordPolicy.requiresPassword(terminal, TerminalPasswordAction.ADJUST)) {
+                    pendingPasswordAction = TerminalPasswordAction.ADJUST
                 } else {
-                    showVoidPasswordDialog = true
+                    screenToShow = TransactionViewScreen.AdjustTip
+                }
+            },
+            onRefundPressed = {
+                if (TerminalPasswordPolicy.requiresPassword(terminal, TerminalPasswordAction.VOID)) {
+                    pendingPasswordAction = TerminalPasswordAction.VOID
+                } else {
+                    screenToShow = TransactionViewScreen.Refund
                 }
             },
             transaction = transaction
@@ -137,13 +148,17 @@ fun EditTransactionScreen(
 
     }
 
-    if (showVoidPasswordDialog) {
-        VoidPasswordDialog(
+    pendingPasswordAction?.let { action ->
+        TransactionPasswordDialog(
+            action = action,
             onAuthenticated = {
-                showVoidPasswordDialog = false
-                screenToShow = TransactionViewScreen.Refund
+                pendingPasswordAction = null
+                screenToShow = when (action) {
+                    TerminalPasswordAction.ADJUST -> TransactionViewScreen.AdjustTip
+                    else -> TransactionViewScreen.Refund
+                }
             },
-            onDismiss = { showVoidPasswordDialog = false }
+            onDismiss = { pendingPasswordAction = null },
         )
     }
 }
@@ -410,12 +425,26 @@ fun TransactionMainScreen(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun VoidPasswordDialog(onAuthenticated: () -> Unit, onDismiss: () -> Unit) {
+private fun TransactionPasswordDialog(
+    action: TerminalPasswordAction,
+    onAuthenticated: () -> Unit,
+    onDismiss: () -> Unit,
+) {
     var input by remember { mutableStateOf("") }
     var showError by remember { mutableStateOf(false) }
-    val expectedPassword = remember {
-        val pwd = GlobalConnectPaymentApplication.instance.tmsDatabase.Terminal.firstOrNull()?.password ?: 0L
-        "%04d".format(pwd)
+    val expectedPassword = remember(action) {
+        val terminal = GlobalConnectPaymentApplication.instance.tmsDatabase.Terminal.firstOrNull()
+        TerminalPasswordPolicy.passwordFor(terminal, action)
+    }
+
+    fun checkAndSubmit() {
+        if (input.isEmpty()) return
+        if (input == expectedPassword) {
+            onAuthenticated()
+        } else {
+            input = ""
+            showError = true
+        }
     }
 
     BasicAlertDialog(onDismissRequest = onDismiss) {
@@ -430,7 +459,10 @@ private fun VoidPasswordDialog(onAuthenticated: () -> Unit, onDismiss: () -> Uni
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 Text(
-                    text = stringResource(R.string.enter_password),
+                    text = stringResource(
+                        R.string.enter_action_password,
+                        stringResource(action.labelResource()),
+                    ),
                     style = MaterialTheme.typography.titleLarge,
                     textAlign = TextAlign.Center,
                 )
@@ -448,19 +480,44 @@ private fun VoidPasswordDialog(onAuthenticated: () -> Unit, onDismiss: () -> Uni
                         style = MaterialTheme.typography.bodyMedium,
                     )
                 }
-                Numpad(
+                DialogNumpad(
                     onSelected = { key ->
                         when (key) {
                             "C" -> { input = input.dropLast(1); showError = false }
                             else -> if (input.length < 4) input += key
                         }
                     },
-                    onEnterPressed = {
-                        if (input == expectedPassword) onAuthenticated()
-                        else { input = ""; showError = true }
-                    },
+                    onEnterPressed = ::checkAndSubmit,
                     onCancelPressed = onDismiss,
                 )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    OutlinedButton(
+                        onClick = onDismiss,
+                        modifier = Modifier.weight(1f).height(50.dp),
+                        shape = RoundedCornerShape(24.dp),
+                        border = BorderStroke(1.dp, color_primaryBrand),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = color_primaryBrand,
+                        ),
+                    ) {
+                        Text(stringResource(R.string.cancel))
+                    }
+                    Button(
+                        onClick = ::checkAndSubmit,
+                        enabled = input.isNotEmpty(),
+                        modifier = Modifier.weight(1f).height(50.dp),
+                        shape = RoundedCornerShape(24.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = color_primaryBrand,
+                            contentColor = color_secondaryFive,
+                        ),
+                    ) {
+                        Text(stringResource(R.string.ok))
+                    }
+                }
             }
         }
     }

@@ -25,7 +25,7 @@ class PinpadKeyLoadAuthorizer(
     modelName: String,
 ) : KeyLoadAuthorizer {
     private val securityStore = PinpadSecurityConfigStore(context)
-    private val useOnScreenKeypad = !DeviceModelConfig.getDeviceSpec(modelName).hasPhysicalKeypad
+    private val useOnScreenKeypad = !DeviceModelConfig.hasPhysicalKeypad(modelName)
     private val mainHandler = Handler(Looper.getMainLooper())
     private val lock = Any()
     private var pending: PendingAuthorization? = null

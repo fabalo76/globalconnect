@@ -201,5 +201,16 @@
             android:textColor="@android:color/white"
             android:backgroundTint="#FF0D7377" />
 
+        <Button
+            android:id="@+id/btnResetTmsRegistration"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:layout_marginBottom="8dp"
+            android:text="@string/tms_reset_registration"
+            android:textSize="@dimen/tms_field_text_size"
+            android:textColor="@android:color/white"
+            android:backgroundTint="#FFB71C1C" />
+
     </LinearLayout>
 </ScrollView>

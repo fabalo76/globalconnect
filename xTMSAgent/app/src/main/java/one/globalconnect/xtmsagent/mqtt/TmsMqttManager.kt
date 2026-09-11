@@ -48,6 +48,9 @@ import java.time.Instant
 import kotlinx.coroutines.flow.first
 
 private const val TAG = "TmsMqttManager"
+private const val DEREGISTER_COMMAND = "deregister"
+private const val BANK_TRANSFER_REASON = "bank_transfer"
+private const val BANK_TRANSFER_RECONNECT_DELAY_MS = 5_000L
 
 /**
  * Broadcast sent after a server-triggered housekeeping cycle completes so that
@@ -105,6 +108,8 @@ object TmsMqttManager {
     // finally from a cancelled job does not clear the flag for a newer job.
     private val isConnecting = AtomicBoolean(false)
     private val connectionAttemptActive = AtomicBoolean(false)
+    private val registrationResetInProgress = AtomicBoolean(false)
+    private val launcherConfigSyncInProgress = AtomicBoolean(false)
     @Volatile private var connectGeneration = 0
     private val clientSequence = AtomicLong(0)
     private val handledDownloadTaskIds = ConcurrentHashMap.newKeySet<String>()
@@ -533,6 +538,27 @@ object TmsMqttManager {
         scheduleReconnect(backoffIndex = 0)
     }
 
+    fun resetRegistration(): Result<Unit> {
+        if (!::appContext.isInitialized || !::awsIotCertificateStore.isInitialized) {
+            return Result.failure(IllegalStateException("TMS connection is not initialized"))
+        }
+        if (!registrationResetInProgress.compareAndSet(false, true)) {
+            return Result.failure(IllegalStateException("TMS registration reset is already running"))
+        }
+
+        return try {
+            awsIotCertificateStore.resetServerRegistration(termId)
+            runCatching { awsIotCertificateStore.clear() }
+                .onFailure { Log.w(TAG, "Server registration reset, but local credential deletion failed", it) }
+            reconnectAfterCredentialReset()
+            Result.success(Unit)
+        } catch (error: Exception) {
+            Result.failure(error)
+        } finally {
+            registrationResetInProgress.set(false)
+        }
+    }
+
     /**
      * Single entry point for all connection scheduling.
      *
@@ -717,15 +743,10 @@ object TmsMqttManager {
                 publishFullStatusReport()
             }
 
-            // On connect: apply LauncherConfig if missing, then request version info.
-            // verreq is only sent when a config was just downloaded (first provisioning)
-            // so we don't re-download 60 MB APKs on every reconnect when apps are current.
-            // Subsequent version checks are triggered by triggerLauncherConfigDownload()
-            // whenever the server pushes a new config assignment.
-            managerScope.launch(Dispatchers.IO) {
-                val configWasDownloaded = LauncherConfigManager.checkAndDownloadIfMissing(appContext)
-                if (configWasDownloaded) publishVersionRequest()
-            }
+            // A newly provisioned IoT certificate persists a mandatory LauncherConfig
+            // refresh marker. Keep retrying transient failures while connected and do
+            // not resume version processing until the required config has been applied.
+            synchronizeLauncherConfigAfterConnect()
 
         } catch (e: ExecutionException) {
             val connAckEx = e.cause as? Mqtt3ConnAckException
@@ -781,6 +802,36 @@ object TmsMqttManager {
 
 
     // ── Subscriptions ─────────────────────────────────────────────────────────
+
+    private fun synchronizeLauncherConfigAfterConnect() {
+        if (!launcherConfigSyncInProgress.compareAndSet(false, true)) {
+            Log.d(TAG, "LauncherConfig synchronization already in progress")
+            return
+        }
+
+        managerScope.launch(Dispatchers.IO) {
+            var retryIndex = 1
+            try {
+                while (isConnected && !isShuttingDown) {
+                    val configWasDownloaded = LauncherConfigManager.checkAndDownloadIfMissing(appContext)
+                    if (configWasDownloaded) {
+                        publishVersionRequest()
+                        return@launch
+                    }
+                    if (LauncherConfigManager.isConfigApplied(appContext)) {
+                        return@launch
+                    }
+
+                    val retryDelayMs = BACKOFF_STEPS_MS[min(retryIndex, BACKOFF_STEPS_MS.lastIndex)]
+                    Log.w(TAG, "LauncherConfig is required but unavailable; retrying in ${retryDelayMs}ms")
+                    delay(retryDelayMs)
+                    retryIndex = min(retryIndex + 1, BACKOFF_STEPS_MS.lastIndex)
+                }
+            } finally {
+                launcherConfigSyncInProgress.set(false)
+            }
+        }
+    }
 
     private fun subscribeToTopics(client: Mqtt3AsyncClient) {
         val notifyTopic = termNotifyTopic(termId)
@@ -936,6 +987,7 @@ object TmsMqttManager {
      * Supported commands:
      *   report_status  — publish a full status report immediately, including os, mdl, apps.
      *   uninstall_app  — silently uninstall the package named in the "pkg" field.
+     *   deregister     — clear local IoT credentials before a bank transfer and reprovision.
      */
     private fun handleCmdMessage(payload: ByteArray) {
         if (payload.isEmpty()) return
@@ -954,6 +1006,9 @@ object TmsMqttManager {
                         Log.i(TAG, "uninstall_app command received — uninstalling $pkg")
                         uninstallPackage(pkg)
                     }
+                }
+                DEREGISTER_COMMAND -> {
+                    handleDeregisterCommand(json)
                 }
                 "remote_start" -> {
                     try {
@@ -1265,6 +1320,41 @@ object TmsMqttManager {
         } else {
             termTransactionTopic(BuildConfig.GLOBAL_CONNECT_ENV, termId)
         }
+    }
+
+    private fun handleDeregisterCommand(command: org.json.JSONObject) {
+        val reason = command.optString("reason")
+        if (reason != BANK_TRANSFER_REASON) {
+            Log.w(TAG, "Ignoring deregister command with unsupported reason='$reason'")
+            return
+        }
+
+        managerScope.launch(Dispatchers.IO) {
+            try {
+                awsIotCertificateStore.clear()
+            } catch (error: Exception) {
+                Log.e(TAG, "Could not clear local IoT credentials for bank transfer", error)
+                return@launch
+            }
+
+            Log.w(TAG, "Bank transfer deregistration received; reconnecting with new credentials")
+            delay(BANK_TRANSFER_RECONNECT_DELAY_MS)
+            reconnectAfterCredentialReset()
+        }
+    }
+
+    private fun reconnectAfterCredentialReset() {
+        connectGeneration++
+        cancelReconnectJob()
+        isConnecting.set(false)
+        activeClientSequence = 0L
+        val client = mqttClient
+        mqttClient = null
+        isConnected = false
+        isShuttingDown = false
+        client?.disconnect()
+        TmsTaskStatus.connecting(termId, "Registering device after bank transfer")
+        scheduleReconnect(backoffIndex = 0)
     }
 
     private fun enrichTransactionReportPayload(payload: org.json.JSONObject): org.json.JSONObject {

@@ -64,6 +64,8 @@ internal fun buildConfigurationReportSections(
             field("No CVM", terminal.noCVMCap)
             field("Offline enciphered PIN", terminal.offlineEncrPinCap)
             field("Offline plaintext PIN", terminal.offlineClearPinCap)
+            field("Offline PIN change", terminal.enableOfflinePinChange)
+            field("Offline PIN unblock", terminal.enableOfflinePinUnblock)
         }
 
         addSection("TERMINAL ${terminalIndex + 1} REPORTING") {

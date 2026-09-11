@@ -45,6 +45,13 @@ internal fun isSameApplicationVersion(
     requestedVersionCode > 0 &&
     installedVersionCode == requestedVersionCode
 
+internal fun isApplicationDowngrade(
+    installedVersionCode: Long?,
+    requestedVersionCode: Long,
+): Boolean = installedVersionCode != null &&
+    requestedVersionCode > 0 &&
+    requestedVersionCode < installedVersionCode
+
 object AwsDeviceDownloadManager {
 
     data class Result(
@@ -487,7 +494,7 @@ object AwsDeviceDownloadManager {
     ): DownloadResponse {
         val cfg = TMSFunc.tmsCfg
         val serial = cfg.sn.ifBlank { MainActivity.vg_sSN }
-        val token = DeviceApi.deviceToken(serial, cfg.download_secret)
+        val token = DeviceApi.deviceToken(serial, cfg)
         val endpoint = when {
             isBootAnimation -> "boot-animation"
             isFirmware -> "firmware"
@@ -695,79 +702,94 @@ object AwsDeviceDownloadManager {
         )
 
         val platform = com.nexgo.oaf.apiv3.APIProxy.getDeviceEngine(context).platform
+        val fallbackSelfUpdateId = DeviceOwnerPackageInstaller.persistFallbackSelfUpdate(
+            context = context,
+            taskId = taskId,
+            packageName = expected.packageName,
+            versionCode = expected.versionCode,
+            installFile = installFile,
+            stagedFile = apkFile,
+        )
         var lastFailure =
             "Android PackageInstaller: ${deviceOwnerResult.message}; " +
                 "NEXGO installer did not complete"
 
-        repeat(INSTALL_ATTEMPTS) { attemptIndex ->
-            val attempt = attemptIndex + 1
-            if (isExpectedPackageInstalled(context, expected)) {
-                Log.i(
-                    TAG,
-                    "APK already installed while preparing attempt $attempt: " +
-                        "${expected.describe()}"
-                )
-                cleanupInstalledApk(installFile, apkFile)
-                return expected
-            }
-
-            val result = CompletableDeferred<Boolean>()
-            val sdkResult = platform.installApp(
-                installFile.absolutePath,
-                object : com.nexgo.oaf.apiv3.OnAppOperatListener {
-                    override fun onOperatResult(res: Int) {
-                        val success = res == com.nexgo.oaf.apiv3.SdkResult.Success
-                        Log.i(
-                            TAG,
-                            "Nexgo install result for ${apkFile.name}: " +
-                                "attempt=$attempt res=$res success=$success"
-                        )
-                        result.complete(success)
-                    }
-                }
-            )
-
-            if (sdkResult == com.nexgo.oaf.apiv3.SdkResult.Success) {
-                val success = awaitInstallCompletion(context, result, expected)
-                if (success == true || isExpectedPackageInstalled(context, expected)) {
-                    if (success == null) {
-                        Log.w(
-                            TAG,
-                            "NEXGO install callback timed out, but PackageManager confirms " +
-                                "${expected.describe()}"
-                        )
-                    }
+        try {
+            repeat(INSTALL_ATTEMPTS) { attemptIndex ->
+                val attempt = attemptIndex + 1
+                if (isExpectedPackageInstalled(context, expected)) {
+                    Log.i(
+                        TAG,
+                        "APK already installed while preparing attempt $attempt: " +
+                            "${expected.describe()}"
+                    )
                     cleanupInstalledApk(installFile, apkFile)
                     return expected
                 }
-                lastFailure = if (success == null) {
-                    "NEXGO install callback timed out and PackageManager does not report " +
-                        expected.describe()
+
+                val result = CompletableDeferred<Boolean>()
+                val sdkResult = platform.installApp(
+                    installFile.absolutePath,
+                    object : com.nexgo.oaf.apiv3.OnAppOperatListener {
+                        override fun onOperatResult(res: Int) {
+                            val success = res == com.nexgo.oaf.apiv3.SdkResult.Success
+                            Log.i(
+                                TAG,
+                                "Nexgo install result for ${apkFile.name}: " +
+                                    "attempt=$attempt res=$res success=$success"
+                            )
+                            result.complete(success)
+                        }
+                    }
+                )
+
+                if (sdkResult == com.nexgo.oaf.apiv3.SdkResult.Success) {
+                    val success = awaitInstallCompletion(context, result, expected)
+                    if (success == true || isExpectedPackageInstalled(context, expected)) {
+                        if (success == null) {
+                            Log.w(
+                                TAG,
+                                "NEXGO install callback timed out, but PackageManager confirms " +
+                                    "${expected.describe()}"
+                            )
+                        }
+                        cleanupInstalledApk(installFile, apkFile)
+                        return expected
+                    }
+                    lastFailure = if (success == null) {
+                        "NEXGO install callback timed out and PackageManager does not report " +
+                            expected.describe()
+                    } else {
+                        "NEXGO installer reported failure for ${expected.describe()}"
+                    }
                 } else {
-                    "NEXGO installer reported failure for ${expected.describe()}"
+                    lastFailure =
+                        "installApp returned $sdkResult for ${expected.describe()}"
                 }
-            } else {
-                lastFailure =
-                    "installApp returned $sdkResult for ${expected.describe()}"
+
+                if (attempt < INSTALL_ATTEMPTS) {
+                    Log.w(
+                        TAG,
+                        "$lastFailure; retrying installation in ${INSTALL_RETRY_DELAY_MS}ms " +
+                            "(attempt ${attempt + 1}/$INSTALL_ATTEMPTS)"
+                    )
+                    MainActivity.writeLog(
+                        "Application install retry: ${expected.describe()} " +
+                            "attempt=${attempt + 1}/$INSTALL_ATTEMPTS reason=$lastFailure"
+                    )
+                    delay(INSTALL_RETRY_DELAY_MS)
+                }
             }
 
-            if (attempt < INSTALL_ATTEMPTS) {
-                Log.w(
-                    TAG,
-                    "$lastFailure; retrying installation in ${INSTALL_RETRY_DELAY_MS}ms " +
-                        "(attempt ${attempt + 1}/$INSTALL_ATTEMPTS)"
-                )
-                MainActivity.writeLog(
-                    "Application install retry: ${expected.describe()} " +
-                        "attempt=${attempt + 1}/$INSTALL_ATTEMPTS reason=$lastFailure"
-                )
-                delay(INSTALL_RETRY_DELAY_MS)
-            }
+            throw IllegalStateException(
+                "Install failed after $INSTALL_ATTEMPTS attempts: $lastFailure"
+            )
+        } finally {
+            DeviceOwnerPackageInstaller.discardFallbackSelfUpdate(
+                context,
+                fallbackSelfUpdateId,
+            )
         }
-
-        throw IllegalStateException(
-            "Install failed after $INSTALL_ATTEMPTS attempts: $lastFailure"
-        )
     }
 
     private suspend fun awaitInstallCompletion(
@@ -778,8 +800,7 @@ object AwsDeviceDownloadManager {
         while (true) {
             if (callback.isCompleted) {
                 val callbackSuccess = callback.await()
-                return@withTimeoutOrNull callbackSuccess ||
-                    isExpectedPackageInstalled(context, expected)
+                if (!callbackSuccess) return@withTimeoutOrNull false
             }
             if (isExpectedPackageInstalled(context, expected)) {
                 Log.i(
@@ -806,7 +827,7 @@ object AwsDeviceDownloadManager {
         val installed = runCatching {
             context.packageManager.getPackageInfo(expected.packageName, 0)
         }.getOrNull() ?: return false
-        return installed.versionCodeCompat() >= expected.versionCode
+        return isSameApplicationVersion(installed.versionCodeCompat(), expected.versionCode)
     }
 
     private fun findMatchingInstalledApplication(

@@ -377,7 +377,7 @@ object AppUpdateManager {
         val info = runCatching {
             context.packageManager.getPackageInfo(packageName, 0)
         }.getOrNull() ?: return false
-        return info.versionCodeCompat() >= versionCode
+        return info.versionCodeCompat() == versionCode
     }
 
     private fun PackageInfo.versionCodeCompat(): Long =

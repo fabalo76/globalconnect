@@ -1,5 +1,6 @@
 package one.globalconnect.xtmsagent
 
+import android.app.AlertDialog
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -8,8 +9,14 @@ import android.widget.Button
 import android.widget.EditText
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import androidx.lifecycle.lifecycleScope
 import com.google.gson.GsonBuilder
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
+import one.globalconnect.xtmsagent.mqtt.TmsMqttManager
+import one.globalconnect.xtmsagent.nexgo.PhysicalKeypadInputPolicy
 
 private const val TAG = "TmsConfigActivity"
 
@@ -61,9 +68,23 @@ class TmsConfigActivity : AppCompatActivity() {
         etMqttKeepalive  = findViewById(R.id.etMqttKeepalive)
         etStatusInterval = findViewById(R.id.etStatusInterval)
 
+        PhysicalKeypadInputPolicy.configure(
+            etServerAddr,
+            etTcpPort,
+            etWebPort,
+            etMqttPort,
+            etConnTimeout,
+            etRespTimeout,
+            etMqttKeepalive,
+            etStatusInterval,
+        )
+
         populateFields()
 
         findViewById<Button>(R.id.btnTmsConfigSave).setOnClickListener { saveConfig() }
+        findViewById<Button>(R.id.btnResetTmsRegistration).setOnClickListener {
+            confirmRegistrationReset()
+        }
     }
 
     override fun onResume() {
@@ -154,6 +175,43 @@ class TmsConfigActivity : AppCompatActivity() {
         } catch (e: Exception) {
             Log.e(TAG, "Failed to save TMS config: ${e.message}", e)
             Toast.makeText(this, getString(R.string.tms_save_error), Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun confirmRegistrationReset() {
+        AlertDialog.Builder(this)
+            .setTitle(R.string.tms_reset_registration_title)
+            .setMessage(R.string.tms_reset_registration_warning)
+            .setPositiveButton(R.string.tms_reset_registration_confirm) { _, _ ->
+                resetRegistration()
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
+    private fun resetRegistration() {
+        val button = findViewById<Button>(R.id.btnResetTmsRegistration)
+        button.isEnabled = false
+        lifecycleScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                TmsMqttManager.resetRegistration()
+            }
+            button.isEnabled = true
+            if (result.isSuccess) {
+                MainActivity.writeLog("TMS registration reset from TMS Config")
+                Toast.makeText(
+                    this@TmsConfigActivity,
+                    getString(R.string.tms_reset_registration_started),
+                    Toast.LENGTH_LONG,
+                ).show()
+            } else {
+                Log.e(TAG, "TMS registration reset failed", result.exceptionOrNull())
+                Toast.makeText(
+                    this@TmsConfigActivity,
+                    getString(R.string.tms_reset_registration_failed),
+                    Toast.LENGTH_LONG,
+                ).show()
+            }
         }
     }
 

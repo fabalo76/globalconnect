@@ -72,10 +72,42 @@ class TmsParamsViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     /**
-     * Re-sends the parameter request.
-     * Called when the operator taps the retry button on the waiting screen.
+     * Re-checks a parameter update already pushed to this application before asking
+     * xTMSAgent to start a new download. A pushed update can be stored locally while
+     * it waits for the terminal to become idle, so blindly downloading again could
+     * supersede the task that the portal is already tracking.
      */
-    fun retry() = sendRequest()
+    fun retry() {
+        timeoutJob?.cancel()
+        _state.value = ParamsRequestState.Requesting
+
+        viewModelScope.launch {
+            when (
+                PendingUpdateManager.applyPendingParamUpdateIfBatchEmpty(
+                    getApplication<GlobalConnectPaymentApplication>().applicationContext,
+                )
+            ) {
+                PendingParamUpdateResult.Applied -> {
+                    Log.i(TAG, "Retry applied the pending pushed parameter update")
+                    // applyTmsUpdate() raises paramsReadyFlow and dismisses the waiting screen.
+                }
+
+                PendingParamUpdateResult.WaitingForIdleBatch -> {
+                    Log.i(TAG, "Retry found a pushed parameter update waiting for an idle batch")
+                    _state.value = ParamsRequestState.Failed(
+                        getApplication<GlobalConnectPaymentApplication>()
+                            .getString(R.string.pending_param_update_msg),
+                    )
+                }
+
+                PendingParamUpdateResult.NoPendingUpdate,
+                PendingParamUpdateResult.Failed -> {
+                    Log.i(TAG, "No applicable local pushed update; asking xTMSAgent to check or download")
+                    sendRequest()
+                }
+            }
+        }
+    }
 
     /**
      * Transitions to [ParamsRequestState.Failed] and cancels the timeout timer.

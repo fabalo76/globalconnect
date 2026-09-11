@@ -1,5 +1,6 @@
 package one.globalconnect.paymentapp.navigation
 
+import android.util.Log
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -32,6 +33,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -49,15 +51,19 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.material3.BasicAlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.runtime.remember
 import one.globalconnect.paymentapp.R
 import one.globalconnect.paymentapp.GlobalConnectPaymentApplication
+import one.globalconnect.paymentapp.PendingParamUpdateResult
+import one.globalconnect.paymentapp.PendingUpdateManager
 import one.globalconnect.paymentapp.admin.AdminRequestBridge
 import one.globalconnect.paymentapp.printer.NexGoPaymentPrinter
 import one.globalconnect.paymentapp.printer.PaymentPrinter
+import one.globalconnect.paymentapp.profile.labelResource
 import one.globalconnect.paymentapp.security.TerminalPasswordAction
 import one.globalconnect.paymentapp.security.TerminalPasswordPolicy
 import one.globalconnect.paymentapp.transaction.DialogNumpad
@@ -70,7 +76,24 @@ import one.globalconnect.paymentapp.ui.theme.GlobalConnectPaymentTheme
 import one.globalconnect.paymentapp.utils.SoundEffect
 import one.globalconnect.paymentapp.utils.SoundManager
 import one.globalconnect.paymentapp.navigation.dst_AppConfig
+import kotlinx.coroutines.launch
 
+private const val TAG = "MoreMenu"
+
+private data class PasswordProtectedMenuAction(
+    val passwordAction: TerminalPasswordAction,
+    val onAuthenticated: () -> Unit,
+)
+
+private enum class TechnicalMaintenanceAction {
+    ERASE_REVERSALS,
+    ERASE_BATCH,
+}
+
+private data class TechnicalMaintenanceResult(
+    val title: String,
+    val message: String,
+)
 
 enum class ReportShortcut(val route: String) {
     Totals("Reports/Totals"),
@@ -97,16 +120,28 @@ fun MoreMenuScreen(
 ) {
     var currentMenuId by rememberSaveable { mutableStateOf("main") }
     var showInitializeDialog by rememberSaveable { mutableStateOf(false) }
-    var showConfigPasswordDialog by rememberSaveable { mutableStateOf(false) }
-    var pendingBankProtectedAction by remember { mutableStateOf<(() -> Unit)?>(null) }
+    var technicalMenuUnlocked by remember { mutableStateOf(false) }
+    var pendingPasswordAction by remember { mutableStateOf<PasswordProtectedMenuAction?>(null) }
+    var pendingMaintenanceAction by remember { mutableStateOf<TechnicalMaintenanceAction?>(null) }
+    var maintenanceResult by remember { mutableStateOf<TechnicalMaintenanceResult?>(null) }
+    var maintenanceInProgress by remember { mutableStateOf(false) }
+    var reversalSendInProgress by remember { mutableStateOf(false) }
     val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
     val terminal = GlobalConnectPaymentApplication.instance.tmsDatabase.Terminal.firstOrNull()
 
-    fun runWithBankPassword(action: () -> Unit) {
-        if (TerminalPasswordPolicy.requiresPassword(terminal, TerminalPasswordAction.BANK)) {
-            pendingBankProtectedAction = action
+    /** Runs a menu action immediately or requests its configured terminal password first. */
+    fun runWithPassword(passwordAction: TerminalPasswordAction, action: () -> Unit) {
+        if (TerminalPasswordPolicy.requiresPassword(terminal, passwordAction)) {
+            pendingPasswordAction = PasswordProtectedMenuAction(passwordAction, action)
         } else {
             action()
+        }
+    }
+
+    LaunchedEffect(currentMenuId, technicalMenuUnlocked) {
+        if (currentMenuId == "technical" && !technicalMenuUnlocked) {
+            currentMenuId = "functions"
         }
     }
     val adminRequestButtons = if (terminal?.adminMessagesEnabled == true) {
@@ -149,14 +184,8 @@ fun MoreMenuScreen(
                 ButtonConfig(stringResource(id = R.string.trans_settlement), Icons.Filled.MonetizationOn) { onDestinationSelected(dst_EndOfDay) },
                 ButtonConfig(stringResource(id = R.string.function_menu), Icons.Filled.AdminPanelSettings) { currentMenuId = "functions" },
                 ButtonConfig(stringResource(id = R.string.config_menu), Icons.Filled.Tune) {
-                    val requiresPassword = TerminalPasswordPolicy.requiresPassword(
-                        terminal,
-                        TerminalPasswordAction.CONFIGURATION,
-                    )
-                    if (!requiresPassword) {
+                    runWithPassword(TerminalPasswordAction.CONFIGURATION) {
                         currentMenuId = "config"
-                    } else {
-                        showConfigPasswordDialog = true
                     }
                 },
             )
@@ -188,13 +217,57 @@ fun MoreMenuScreen(
                     }
                 } else null,
                 ButtonConfig(stringResource(id = R.string.gprs_information), Icons.Filled.SignalCellularAlt) { /* Handle GPRS information */ },
-                ButtonConfig(stringResource(id = R.string.send_reversals), Icons.AutoMirrored.Filled.Send) { /* Handle transaction reversals */ },
+                ButtonConfig(stringResource(id = R.string.send_reversals), Icons.AutoMirrored.Filled.Send) {
+                    if (!reversalSendInProgress) {
+                        if (PendingUpdateManager.isOperationInProgress) {
+                            maintenanceResult = TechnicalMaintenanceResult(
+                                title = context.getString(R.string.send_reversals),
+                                message = context.getString(R.string.setting_initialize_err_operation_in_progress),
+                            )
+                        } else {
+                            reversalSendInProgress = true
+                            coroutineScope.launch {
+                                try {
+                                    val result = TerminalMaintenanceOperations.sendPendingReversals()
+                                    val message = if (result.found == 0) {
+                                        context.getString(R.string.send_reversals_none)
+                                    } else {
+                                        context.getString(
+                                            R.string.send_reversals_result,
+                                            result.found,
+                                            result.sent,
+                                            result.remaining,
+                                        )
+                                    }
+                                    maintenanceResult = TechnicalMaintenanceResult(
+                                        title = context.getString(R.string.send_reversals),
+                                        message = message,
+                                    )
+                                } catch (error: Exception) {
+                                    Log.e(TAG, "Unable to send pending reversals", error)
+                                    maintenanceResult = TechnicalMaintenanceResult(
+                                        title = context.getString(R.string.send_reversals),
+                                        message = context.getString(R.string.send_reversals_failed),
+                                    )
+                                } finally {
+                                    reversalSendInProgress = false
+                                }
+                            }
+                        }
+                    }
+                },
                 ButtonConfig(stringResource(id = R.string.application_info), Icons.Filled.Info) {
                     onDestinationSelected(dst_ApplicationInfo)
                 },
                 ButtonConfig(stringResource(id = R.string.print_test), Icons.Filled.Print) {
                     val paymentPrinter: PaymentPrinter = NexGoPaymentPrinter
                     paymentPrinter.printerTest(context)
+                },
+                ButtonConfig(stringResource(id = R.string.technical_menu), Icons.Filled.Engineering) {
+                    runWithPassword(TerminalPasswordAction.BANK) {
+                        technicalMenuUnlocked = true
+                        currentMenuId = "technical"
+                    }
                 },
                 ButtonConfig(stringResource(id = R.string.back), Icons.AutoMirrored.Filled.ArrowBack) { currentMenuId = "main" }
             )
@@ -206,31 +279,52 @@ fun MoreMenuScreen(
                 ButtonConfig(stringResource(id = R.string.back), Icons.AutoMirrored.Filled.ArrowBack) { currentMenuId = "functions" }
         ),
         MenuConfig(
+            id = "technical",
+            title = stringResource(id = R.string.technical_menu),
+            buttons = listOf(
+                ButtonConfig(stringResource(id = R.string.erase_reversals), Icons.Filled.DeleteSweep) {
+                    pendingMaintenanceAction = TechnicalMaintenanceAction.ERASE_REVERSALS
+                },
+                ButtonConfig(stringResource(id = R.string.erase_batch), Icons.Filled.DeleteForever) {
+                    runWithPassword(TerminalPasswordAction.CLEAR) {
+                        pendingMaintenanceAction = TechnicalMaintenanceAction.ERASE_BATCH
+                    }
+                },
+                ButtonConfig(stringResource(id = R.string.terminal_counters), Icons.Filled.Numbers) {
+                    onDestinationSelected(dst_TerminalCounters)
+                },
+                ButtonConfig(stringResource(id = R.string.audio_test), Icons.Filled.Settings) {
+                    onDestinationSelected(dst_AudioTest)
+                },
+                ButtonConfig(stringResource(id = R.string.back), Icons.AutoMirrored.Filled.ArrowBack) {
+                    technicalMenuUnlocked = false
+                    currentMenuId = "functions"
+                },
+            ),
+        ),
+        MenuConfig(
             id = "config",
             title = stringResource(id = R.string.config_menu),
             buttons = listOf(
-                ButtonConfig(stringResource(id = R.string.terminal_counters), Icons.Filled.Numbers) {
-                    runWithBankPassword { onDestinationSelected(dst_TerminalCounters) }
-                },
                 ButtonConfig(stringResource(id = R.string.setting_initialize), Icons.Filled.CloudDownload) {
                     showInitializeDialog = true
                 },
                 ButtonConfig(stringResource(id = R.string.print_configuration), Icons.Filled.Print) {
-                    runWithBankPassword {
+                    runWithPassword(TerminalPasswordAction.BANK) {
                         val paymentPrinter: PaymentPrinter = NexGoPaymentPrinter
                         val tmsDatabase = GlobalConnectPaymentApplication.instance.tmsDatabase
                         paymentPrinter.printConfigReport(context, tmsDatabase)
                     }
                 },
                 ButtonConfig(stringResource(id = R.string.print_pinpadkeys), Icons.Filled.VpnKey) {
-                    runWithBankPassword {
+                    runWithPassword(TerminalPasswordAction.BANK) {
                         val paymentPrinter: PaymentPrinter = NexGoPaymentPrinter
                         val tmsDatabase = GlobalConnectPaymentApplication.instance.tmsDatabase
                         paymentPrinter.printPinPadKeysReport(context, tmsDatabase)
                     }
                 },
                 ButtonConfig(stringResource(id = R.string.app_config), Icons.Filled.PhoneAndroid) {
-                    runWithBankPassword { onDestinationSelected(dst_AppConfig) }
+                    runWithPassword(TerminalPasswordAction.BANK) { onDestinationSelected(dst_AppConfig) }
                 },
                 ButtonConfig(stringResource(id = R.string.back), Icons.AutoMirrored.Filled.ArrowBack) { currentMenuId = "main" }
             )
@@ -251,6 +345,7 @@ fun MoreMenuScreen(
                     modifier = Modifier.fillMaxWidth().height(56.dp),
                     onClick = {
                         SoundManager.play(SoundEffect.KEY_DELETE)
+                        technicalMenuUnlocked = false
                         currentMenuId = "main"
                     },
                     shape = RoundedCornerShape(24.dp),
@@ -372,26 +467,106 @@ fun MoreMenuScreen(
         TmsInitializeDialog(onDismiss = { showInitializeDialog = false })
     }
 
-    if (showConfigPasswordDialog) {
+    if (reversalSendInProgress) {
+        MenuOperationProgressDialog(message = stringResource(R.string.send_reversals_in_progress))
+    }
+
+    pendingPasswordAction?.let { protectedAction ->
         ConfigPasswordDialog(
-            action = TerminalPasswordAction.CONFIGURATION,
+            action = protectedAction.passwordAction,
             onAuthenticated = {
-                showConfigPasswordDialog = false
-                currentMenuId = "config"
+                pendingPasswordAction = null
+                protectedAction.onAuthenticated()
             },
-            onDismiss = { showConfigPasswordDialog = false }
+            onDismiss = { pendingPasswordAction = null },
         )
     }
 
-    pendingBankProtectedAction?.let { protectedAction ->
-        ConfigPasswordDialog(
-            action = TerminalPasswordAction.BANK,
-            onAuthenticated = {
-                pendingBankProtectedAction = null
-                protectedAction()
+    pendingMaintenanceAction?.let { action ->
+        TechnicalMaintenanceConfirmationDialog(
+            action = action,
+            enabled = !maintenanceInProgress,
+            onConfirm = {
+                pendingMaintenanceAction = null
+                maintenanceInProgress = true
+                coroutineScope.launch {
+                    try {
+                        maintenanceResult = when (action) {
+                            TechnicalMaintenanceAction.ERASE_REVERSALS -> {
+                                val erased = TerminalMaintenanceOperations.erasePendingReversals()
+                                TechnicalMaintenanceResult(
+                                    title = context.getString(R.string.erase_reversals),
+                                    message = context.getString(R.string.erase_reversals_success, erased),
+                                )
+                            }
+
+                            TechnicalMaintenanceAction.ERASE_BATCH -> {
+                                val result = TerminalMaintenanceOperations.eraseActiveBatch(context)
+                                val pendingMessages = buildList {
+                                    if (result.pendingOperations.parameterResult == PendingParamUpdateResult.Applied) {
+                                        add(context.getString(R.string.pending_parameter_update_applied))
+                                    } else if (result.pendingOperations.parameterResult == PendingParamUpdateResult.Failed) {
+                                        add(context.getString(R.string.pending_parameter_update_failed))
+                                    }
+                                    if (result.pendingOperations.appUpdateReleased) {
+                                        add(context.getString(R.string.pending_application_update_released))
+                                    }
+                                }
+                                val baseMessage = context.getString(
+                                    R.string.erase_batch_success,
+                                    result.erasedTransactions,
+                                )
+                                TechnicalMaintenanceResult(
+                                    title = context.getString(R.string.erase_batch),
+                                    message = (listOf(baseMessage) + pendingMessages).joinToString("\n\n"),
+                                )
+                            }
+                        }
+                    } catch (error: Exception) {
+                        Log.e(TAG, "Technical maintenance operation failed: $action", error)
+                        maintenanceResult = TechnicalMaintenanceResult(
+                            title = context.getString(R.string.technical_menu),
+                            message = context.getString(R.string.technical_maintenance_failed),
+                        )
+                    } finally {
+                        maintenanceInProgress = false
+                    }
+                }
             },
-            onDismiss = { pendingBankProtectedAction = null },
+            onDismiss = { pendingMaintenanceAction = null },
         )
+    }
+
+    maintenanceResult?.let { result ->
+        TechnicalMaintenanceResultDialog(
+            result = result,
+            onDismiss = { maintenanceResult = null },
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun MenuOperationProgressDialog(message: String) {
+    BasicAlertDialog(onDismissRequest = {}) {
+        Card(
+            shape = MaterialTheme.shapes.large,
+            elevation = CardDefaults.cardElevation(defaultElevation = 6.dp),
+            modifier = Modifier.fillMaxWidth(0.92f),
+        ) {
+            Column(
+                modifier = Modifier.fillMaxWidth().padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(18.dp),
+            ) {
+                CircularProgressIndicator()
+                Text(
+                    text = message,
+                    style = MaterialTheme.typography.bodyLarge,
+                    textAlign = TextAlign.Center,
+                )
+            }
+        }
     }
 }
 
@@ -405,6 +580,131 @@ private fun menuTitleFontSize(title: String): TextUnit {
     }
 }
 
+/**
+ * Confirms a destructive Technical Menu operation before any terminal data is removed.
+ *
+ * @param action maintenance operation awaiting confirmation.
+ * @param enabled whether the confirmation controls accept input.
+ * @param onConfirm invoked when the operator confirms the destructive operation.
+ * @param onDismiss invoked when the operator cancels the operation.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun TechnicalMaintenanceConfirmationDialog(
+    action: TechnicalMaintenanceAction,
+    enabled: Boolean,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val message = when (action) {
+        TechnicalMaintenanceAction.ERASE_REVERSALS -> {
+            stringResource(R.string.erase_reversals_confirmation)
+        }
+
+        TechnicalMaintenanceAction.ERASE_BATCH -> {
+            stringResource(R.string.erase_batch_confirmation)
+        }
+    }
+    BasicAlertDialog(onDismissRequest = { if (enabled) onDismiss() }) {
+        Card(
+            shape = MaterialTheme.shapes.large,
+            elevation = CardDefaults.cardElevation(defaultElevation = 6.dp),
+            modifier = Modifier.fillMaxWidth(0.92f),
+        ) {
+            Column(
+                modifier = Modifier.fillMaxWidth().padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(18.dp),
+            ) {
+                Text(
+                    text = stringResource(R.string.confirm_technical_maintenance),
+                    style = MaterialTheme.typography.titleLarge,
+                    textAlign = TextAlign.Center,
+                )
+                Text(
+                    text = message,
+                    style = MaterialTheme.typography.bodyLarge,
+                    textAlign = TextAlign.Center,
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    OutlinedButton(
+                        onClick = onDismiss,
+                        enabled = enabled,
+                        modifier = Modifier.weight(1f).height(50.dp),
+                        shape = RoundedCornerShape(24.dp),
+                        border = BorderStroke(1.dp, color_primaryBrand),
+                    ) {
+                        Text(stringResource(R.string.cancel))
+                    }
+                    Button(
+                        onClick = onConfirm,
+                        enabled = enabled,
+                        modifier = Modifier.weight(1f).height(50.dp),
+                        shape = RoundedCornerShape(24.dp),
+                    ) {
+                        Text(stringResource(R.string.erase))
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Displays the final status of a destructive Technical Menu operation.
+ *
+ * @param result localized title and message to display.
+ * @param onDismiss invoked when the operator acknowledges the result.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun TechnicalMaintenanceResultDialog(
+    result: TechnicalMaintenanceResult,
+    onDismiss: () -> Unit,
+) {
+    BasicAlertDialog(onDismissRequest = onDismiss) {
+        Card(
+            shape = MaterialTheme.shapes.large,
+            elevation = CardDefaults.cardElevation(defaultElevation = 6.dp),
+            modifier = Modifier.fillMaxWidth(0.92f),
+        ) {
+            Column(
+                modifier = Modifier.fillMaxWidth().padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(18.dp),
+            ) {
+                Text(
+                    text = result.title,
+                    style = MaterialTheme.typography.titleLarge,
+                    textAlign = TextAlign.Center,
+                )
+                Text(
+                    text = result.message,
+                    style = MaterialTheme.typography.bodyLarge,
+                    textAlign = TextAlign.Center,
+                )
+                Button(
+                    onClick = onDismiss,
+                    modifier = Modifier.fillMaxWidth().height(50.dp),
+                    shape = RoundedCornerShape(24.dp),
+                ) {
+                    Text(stringResource(R.string.ok))
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Requests and validates the password associated with a terminal action.
+ *
+ * @param action terminal action whose configured password must be entered.
+ * @param onAuthenticated invoked after successful password validation.
+ * @param onDismiss invoked when the operator cancels password entry.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ConfigPasswordDialog(
@@ -443,13 +743,7 @@ private fun ConfigPasswordDialog(
                 Text(
                     text = stringResource(
                         R.string.enter_action_password,
-                        stringResource(
-                            if (action == TerminalPasswordAction.BANK) {
-                                R.string.password_action_bank
-                            } else {
-                                R.string.password_action_configuration
-                            },
-                        ),
+                        stringResource(action.labelResource()),
                     ),
                     style = MaterialTheme.typography.titleLarge,
                     textAlign = TextAlign.Center,

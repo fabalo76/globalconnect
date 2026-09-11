@@ -47,6 +47,12 @@
     <string name="tms_save_error">Error al guardar configuración</string>
     <string name="tms_invalid_value">Todos los valores deben ser números positivos</string>
     <string name="tms_config_file_not_found">Archivo de configuración no encontrado</string>
+    <string name="tms_reset_registration">Restablecer registro TMS</string>
+    <string name="tms_reset_registration_title">¿Restablecer el registro TMS?</string>
+    <string name="tms_reset_registration_warning">Esto elimina el registro y el certificado de IoT actuales. xTMSAgent se desconectará y volverá a registrarse. ¿Desea continuar?</string>
+    <string name="tms_reset_registration_confirm">Restablecer registro</string>
+    <string name="tms_reset_registration_started">Registro TMS restablecido. Reconectando…</string>
+    <string name="tms_reset_registration_failed">No se pudo restablecer el registro TMS.</string>
     <!-- BlockedActivity -->
     <string name="unlock_by_code">Desbloquear por código</string>
     <string name="unlock_code_title">Ingresar código de desbloqueo</string>
@@ -62,7 +68,12 @@
     <string name="config_network">Móvil / SIM</string>
     <string name="config_factory_tms">TMS Nexgo de fábrica</string>
     <string name="config_usb">Config. USB</string>
+    <string name="config_local_install">Instalación local</string>
     <string name="config_back">Volver</string>
+    <string name="local_install_title">Instalación local</string>
+    <string name="local_install_progress">Validando e instalando la aplicación seleccionada…</string>
+    <string name="local_install_success">Se instaló %1$s versión %2$s</string>
+    <string name="local_install_failure">Error de instalación: %1$s</string>
     <string name="usb_config_title">Transferencia de archivos USB</string>
     <string name="usb_config_status_enabled">Habilitada. Una computadora conectada puede seleccionar Transferencia de archivos (MTP/PTP).</string>
     <string name="usb_config_status_disabled">Deshabilitada por xTMSAgent. La carga y las demás funciones USB configuradas permanecen disponibles.</string>
@@ -109,9 +120,12 @@
     <string name="diagnostics_title">Diagnóstico del dispositivo</string>
     <string name="diagnostics_refresh">Actualizar</string>
     <string name="diagnostics_share">Compartir</string>
+    <string name="diagnostics_export">Exportar a Descargas</string>
     <string name="diagnostics_loading">Recopilando diagnóstico…</string>
     <string name="diagnostics_share_title">Compartir informe de diagnóstico</string>
     <string name="diagnostics_no_share_target">No hay una aplicación disponible para compartir el informe. El informe permanece visible en esta pantalla.</string>
+    <string name="diagnostics_exported">Diagnóstico exportado a %1$s</string>
+    <string name="diagnostics_export_failed">No se pudo exportar el diagnóstico: %1$s</string>
     <!-- AppUpdateManager -->
     <string name="app_update_downloading">Descargando actualización: %1$s v%2$s…</string>
     <string name="app_update_installing">Instalando actualización: %1$s…</string>

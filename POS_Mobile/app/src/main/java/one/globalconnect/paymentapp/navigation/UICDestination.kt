@@ -6,7 +6,10 @@ import androidx.compose.material.icons.automirrored.filled.ArrowRight
 import androidx.compose.material.icons.automirrored.filled.FactCheck
 import androidx.compose.material.icons.automirrored.filled.LibraryBooks
 import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.automirrored.filled.Login
+import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.automirrored.filled.ReceiptLong
+import androidx.compose.material.icons.automirrored.filled.ShowChart
 import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.CreditCard
 import androidx.compose.material.icons.filled.Hotel
@@ -20,6 +23,7 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.RequestQuote
 import androidx.compose.material.icons.filled.PointOfSale
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.VpnKey
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -120,6 +124,25 @@ object dst_Sale : TransactionDestination {
         }
 }
 
+/** Sale entry shown after selecting Sale from the hotel-oriented home screen. */
+object dst_SaleTransaction : TransactionDestination {
+    override val icon = Icons.Filled.CreditCard
+    override val route: String = "SaleTransaction"
+    override fun getLabel(context: Context): String = context.getString(R.string.trans_sale)
+    override val transactionType: TransactionType = TransactionType.SALE
+    override val usesCardFlow: Boolean = true
+    override val amountPromptConfig: AmountPromptConfig
+        get() = resolveAmountPromptConfig(transactionType)
+    val screen: @Composable ((String, String, String, String, String, String) -> Unit) -> Unit =
+        { onPressCharge: (String, String, String, String, String, String) -> Unit ->
+            SaleScreen(
+                onPressCharge,
+                transactionType = transactionType,
+                promptConfig = amountPromptConfig,
+            )
+        }
+}
+
 object dst_Refund : TransactionDestination {
     override val icon = Icons.Filled.CreditCard
     override val route: String = "Refund"
@@ -200,6 +223,13 @@ object dst_LoyaltySale : TransactionDestination {
         }
 }
 
+object dst_LoyaltyBalance : UICDestination {
+    override val icon = Icons.AutoMirrored.Filled.ShowChart
+    override val route: String = "LoyaltyBalance"
+    override fun getLabel(context: Context): String =
+        context.getString(R.string.trans_loyalty_balance)
+}
+
 object dst_QuotaSale : TransactionDestination {
     override val icon = Icons.Filled.CreditCard
     override val route: String = "QuotaSale"
@@ -221,39 +251,53 @@ object dst_QuotaSale : TransactionDestination {
 }
 
 object dst_CheckIn : UICDestination {
-    override val icon = Icons.Filled.Hotel
+    override val icon = Icons.AutoMirrored.Filled.Login
     override val route: String = "HotelCheckIn"
     override fun getLabel(context: Context): String {
         return context.getString(R.string.trans_check_in)
     }
-    val screen: @Composable ((String, String, String, String, String, String) -> Unit) -> Unit =
-        { onSubmit: (String, String, String, String, String, String) -> Unit ->
-            HotelCheckInScreen { base, tax1, tax2, tip, folio ->
-                onSubmit(TransactionType.CHECKIN.toTransactionString(), base, tax1, tax2, tip, folio)
-            }
+    val screen: @Composable (
+        (String, String, String, String, String, String) -> Unit,
+        () -> Unit,
+    ) -> Unit =
+        { onSubmit: (String, String, String, String, String, String) -> Unit, onCancel: () -> Unit ->
+            HotelCheckInScreen(
+                onSubmit = { base, tax1, tax2, tip, folio ->
+                    onSubmit(TransactionType.CHECKIN.toTransactionString(), base, tax1, tax2, tip, folio)
+                },
+                onCancel = onCancel,
+            )
         }
 }
 
 object dst_CheckOut : UICDestination {
-    override val icon = Icons.Filled.Info
+    override val icon = Icons.AutoMirrored.Filled.Logout
     override val route: String = "HotelCheckOut"
     override fun getLabel(context: Context): String {
         return context.getString(R.string.trans_check_out)
     }
-    val screen: @Composable ((String, String, String, String, String, String, Int, String) -> Unit) -> Unit =
-        { onSubmit: (String, String, String, String, String, String, Int, String) -> Unit ->
-            HotelCheckOutScreen { base, tax1, tax2, tip, folio, checkInId, originalTxnId ->
-                onSubmit(
-                    TransactionType.CHECKOUT.toTransactionString(),
-                    base,
-                    tax1,
-                    tax2,
-                    tip,
-                    folio,
-                    checkInId,
-                    originalTxnId,
-                )
-            }
+    val screen: @Composable (
+        Int?,
+        (String, String, String, String, String, String, Int, String) -> Unit,
+        () -> Unit,
+    ) -> Unit =
+        { selectedCheckInId: Int?, onSubmit: (String, String, String, String, String, String, Int, String) -> Unit, onCancel: () -> Unit ->
+            HotelCheckOutScreen(
+                selectedCheckInId = selectedCheckInId,
+                onSubmit = { base, tax1, tax2, tip, folio, checkInId, originalTxnId ->
+                    onSubmit(
+                        TransactionType.CHECKOUT.toTransactionString(),
+                        base,
+                        tax1,
+                        tax2,
+                        tip,
+                        folio,
+                        checkInId,
+                        originalTxnId,
+                    )
+                },
+                onCancel = onCancel,
+            )
         }
 }
 
@@ -307,8 +351,8 @@ object dst_CardTransaction : UICDestination {
     override fun getLabel(context: Context): String {
         return context.getString(R.string.trans_sale)
     }
-    val screen: @Composable ((String, Boolean) -> Unit, () -> Unit) -> Unit =
-        { onNavigateToResult: (String, Boolean) -> Unit, onCancel: () -> Unit ->
+    val screen: @Composable ((String, TransactionType) -> Unit, () -> Unit) -> Unit =
+        { onNavigateToResult: (String, TransactionType) -> Unit, onCancel: () -> Unit ->
             CardTransactionScreen(
                 onNavigateToResult = onNavigateToResult,
                 onCancel = onCancel,
@@ -360,6 +404,28 @@ object dst_CheckInReport : UICDestination {
     }
     val screen: @Composable ((() -> Unit), (Transaction) -> Unit) -> Unit = { onBack, onCheckOut ->
         HotelCheckInReportScreen(onBack = onBack, onCheckOut = onCheckOut)
+    }
+}
+
+object dst_OpenCheckIns : UICDestination {
+    override val icon = Icons.AutoMirrored.Filled.List
+    override val route: String = "HotelOpenCheckIns"
+    override fun getLabel(context: Context): String = context.getString(R.string.hotel_check_in_report_title)
+    val screen: @Composable ((() -> Unit), (Transaction) -> Unit) -> Unit = { onBack, onCheckOut ->
+        HotelCheckInReportScreen(onBack = onBack, onCheckOut = onCheckOut)
+    }
+}
+
+object dst_IncrementalCheckIn : UICDestination {
+    override val icon = Icons.Filled.RequestQuote
+    override val route: String = "HotelIncrementalCheckIn"
+    override fun getLabel(context: Context): String = context.getString(R.string.hotel_home_incremental_check_in)
+    val screen: @Composable ((() -> Unit), (Transaction) -> Unit) -> Unit = { onBack, onCheckOut ->
+        HotelCheckInReportScreen(
+            onBack = onBack,
+            onCheckOut = onCheckOut,
+            title = stringResource(id = R.string.hotel_home_incremental_check_in),
+        )
     }
 }
 
@@ -431,6 +497,28 @@ object dst_ReportAudit : UICDestination {
             printTransactions = true,
         )
     }
+}
+
+object dst_OfflinePinChange : UICDestination {
+    override val icon = Icons.Filled.VpnKey
+    override val route: String =
+        "CardTransaction/${TransactionType.OFFLINE_PIN_CHANGE.toTransactionString()}/0.00/" +
+            "?$TAX1_KEY=0.00&$TAX2_KEY=0.00&$TIP_KEY=0.00&$FOLIO_KEY=" +
+            "&$CHECK_IN_ID_KEY=&$ORIGINAL_TRANSACTION_ID_KEY="
+
+    override fun getLabel(context: Context): String =
+        context.getString(R.string.trans_offline_pin_change)
+}
+
+object dst_PinUnblock : UICDestination {
+    override val icon = Icons.Filled.VpnKey
+    override val route: String =
+        "CardTransaction/${TransactionType.PIN_UNBLOCK.toTransactionString()}/0.00/" +
+            "?$TAX1_KEY=0.00&$TAX2_KEY=0.00&$TIP_KEY=0.00&$FOLIO_KEY=" +
+            "&$CHECK_IN_ID_KEY=&$ORIGINAL_TRANSACTION_ID_KEY="
+
+    override fun getLabel(context: Context): String =
+        context.getString(R.string.trans_pin_unblock)
 }
 
 object dst_ReportReprintLast : UICDestination {
@@ -568,6 +656,13 @@ object dst_TerminalCounters : UICDestination {
     val screen: @Composable ((() -> Unit) -> Unit) = { onBack ->
         TerminalCountersScreen(onBack = onBack)
     }
+}
+
+object dst_AudioTest : UICDestination {
+    override val icon: ImageVector get() = Icons.Filled.Settings
+    override val route: String = "AudioTest"
+    override fun getLabel(context: Context): String = context.getString(R.string.audio_test)
+    val screen: @Composable (() -> Unit) -> Unit = { onBack -> AudioTestScreen(onBack) }
 }
 
 object dst_ApplicationInfo : UICDestination {

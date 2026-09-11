@@ -4,6 +4,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import one.globalconnect.tms.paymentapp.TMSDATA
+import one.globalconnect.tms.paymentapp.TMS_Terminal
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -66,5 +68,15 @@ class TmsParamsReceiverTest {
                 liveTransactionCount = 0,
             ),
         )
+    }
+
+    @Test
+    fun `rejects downloaded parameters without terminal configuration`() {
+        assertFalse(isUsableTmsDatabase(TMSDATA()))
+    }
+
+    @Test
+    fun `accepts downloaded parameters with terminal configuration`() {
+        assertTrue(isUsableTmsDatabase(TMSDATA(terminal = listOf(TMS_Terminal()))))
     }
 }

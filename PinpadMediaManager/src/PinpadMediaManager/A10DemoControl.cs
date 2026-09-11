@@ -1,4 +1,5 @@
 ﻿using System.Globalization;
+using System.Text.Json;
 using PinpadMediaManager.Core;
 using PinpadMediaManager.Core.Models;
 using PinpadMediaManager.Core.Protocol;
@@ -7,27 +8,39 @@ namespace PinpadMediaManager;
 
 internal sealed partial class A10DemoControl : UserControl
 {
+    private const int ConfigurationButtonWidth = 320;
+    private const int ConfigurationButtonHeight = 34;
+    private const string DefaultSessionPinKey = "0123456789ABCDEFFEDCBA9876543210";
+
     private readonly PinpadClient _client;
     private readonly RichTextBox _deviceOutput = OutputBox();
     private readonly RichTextBox _configOutput = OutputBox();
     private readonly RichTextBox _smartCardOutput = OutputBox();
     private readonly RichTextBox _rawOutput = OutputBox();
-    private readonly Label _status = new() { AutoSize = true, Text = "Ready." };
+    private readonly Action<string>? _reportStatus;
     private readonly List<Control> _actionControls = [];
+    private readonly List<Control> _cancelControls = [];
+    private readonly List<TextBox> _sessionKeyEditors = [];
+    private CancellationTokenSource? _operationCancellation;
+    private string _sharedSessionKey = DefaultSessionPinKey;
+    private bool _synchronizingSessionKeys;
     private bool _busy;
 
-    public A10DemoControl(PinpadClient client)
+    internal Control OfflinePinChangeContent { get; }
+
+    public A10DemoControl(PinpadClient client, Action<string>? reportStatus = null)
     {
         _client = client;
+        _reportStatus = reportStatus;
         Dock = DockStyle.Fill;
         Controls.Add(BuildLayout());
+        OfflinePinChangeContent = BuildOfflinePinChangePage();
     }
 
     private Control BuildLayout()
     {
-        var root = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2, ColumnCount = 1 };
+        var root = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 1, ColumnCount = 1 };
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         var tabs = new ProminentTabControl { Dock = DockStyle.Fill };
         tabs.TabPages.Add(Page("Device & hardware", BuildDevicePage()));
         tabs.TabPages.Add(Page("Display tests", BuildDisplayPage()));
@@ -40,11 +53,10 @@ internal sealed partial class A10DemoControl : UserControl
         tabs.TabPages.Add(Page("ICC / SAM card", BuildSmartCardPage()));
         tabs.TabPages.Add(Page("Command console", BuildRawCommandPage()));
         root.Controls.Add(tabs, 0, 0);
-        var footer = new Panel { Dock = DockStyle.Fill, Height = 30, Padding = new Padding(8, 5, 8, 0) };
-        footer.Controls.Add(_status);
-        root.Controls.Add(footer, 0, 1);
         return root;
     }
+
+    private void SetStatus(string status) => _reportStatus?.Invoke(status);
 
     private Control BuildDevicePage()
     {
@@ -76,7 +88,7 @@ internal sealed partial class A10DemoControl : UserControl
         panel.Controls.Add(buttons, 0, 0);
         panel.Controls.Add(_deviceOutput, 0, 1);
         panel.Controls.Add(InfoLabel(
-            "Reproduces the A10 demo's reader-alive, version-query, random-number, capability, and beeper tests."), 0, 2);
+            "Reproduces the A10 traditional commands reader-alive, version-query, random-number, capability, and beeper tests."), 0, 2);
         return panel;
     }
 
@@ -116,7 +128,7 @@ internal sealed partial class A10DemoControl : UserControl
         var mode = Combo("E - Encrypt", "D - Decrypt", "B - Both", "G - Generate");
         var algorithm = Combo("T - TDES", "A - AES", "D - DES");
         AddRow(master, 0, "Master key slot", keyId);
-        AddRow(master, 1, "Clear key (hex)", key);
+        AddKeyRow(master, 1, "Clear key (hex)", key);
         AddRow(master, 2, "", show);
         AddRow(master, 3, "Usage", usage);
         AddRow(master, 4, "Mode", mode);
@@ -139,7 +151,7 @@ internal sealed partial class A10DemoControl : UserControl
         var showIpek = new CheckBox { Text = "Show initial key", AutoSize = true };
         showIpek.CheckedChanged += (_, _) => ipek.UseSystemPasswordChar = !showIpek.Checked;
         AddRow(dukpt, 0, "DUKPT key set", keySet);
-        AddRow(dukpt, 1, "Initial key (hex)", ipek);
+        AddKeyRow(dukpt, 1, "Initial key (hex)", ipek);
         AddRow(dukpt, 2, "", showIpek);
         AddRow(dukpt, 3, "KSN (20 hex)", ksn);
         var dukptButtons = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true };
@@ -151,7 +163,7 @@ internal sealed partial class A10DemoControl : UserControl
         var wrapper = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2, ColumnCount = 1 };
         wrapper.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); wrapper.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         wrapper.Controls.Add(root, 0, 0);
-        wrapper.Controls.Add(InfoLabel("Security: first enter authenticated Key Injection Mode on the terminal (Clear+2, or the terminal menu). The mode closes after one minute of inactivity. Clear keys are masked and redacted from the protocol trace."), 0, 1);
+        wrapper.Controls.Add(InfoLabel("First enter authenticated Key Injection Mode on the terminal (Clear+2, or the terminal menu). The mode closes after one minute of inactivity. This demo displays complete protocol frames."), 0, 1);
         return wrapper;
     }
 
@@ -164,27 +176,81 @@ internal sealed partial class A10DemoControl : UserControl
         var promptMode = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Dock = DockStyle.Fill };
         promptMode.Items.AddRange(Enum.GetValues<A10PinPromptMode>().Cast<object>().ToArray()); promptMode.SelectedIndex = 0;
         var account = TextValue("4111111111111111", 19);
-        var session = SecretValue("0123456789ABCDEFFEDCBA9876543210", 48);
+        var session = SharedSessionKeyEditor();
+        var keyIndex = new ComboBox
+        {
+            DropDownStyle = ComboBoxStyle.DropDownList,
+            Dock = DockStyle.Fill,
+        };
+        var schemeAndIndex = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            ColumnCount = 3,
+            RowCount = 1,
+            Margin = Padding.Empty,
+        };
+        schemeAndIndex.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        schemeAndIndex.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        schemeAndIndex.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 85));
+        scheme.Margin = Padding.Empty;
+        keyIndex.Margin = Padding.Empty;
+        schemeAndIndex.Controls.Add(scheme, 0, 0);
+        schemeAndIndex.Controls.Add(new Label
+        {
+            Text = "Key index",
+            AutoSize = true,
+            Margin = new Padding(14, 5, 8, 0),
+        }, 1, 0);
+        schemeAndIndex.Controls.Add(keyIndex, 2, 0);
+
+        void UpdateKeyIndexes()
+        {
+            var schemeValue = (A10PinKeyScheme)scheme.SelectedItem!;
+            var numberOfSlots = schemeValue == A10PinKeyScheme.MasterSession ? 10 : 2;
+            var selectedIndex = keyIndex.SelectedIndex;
+            keyIndex.BeginUpdate();
+            keyIndex.Items.Clear();
+            keyIndex.Items.AddRange(Enumerable.Range(0, numberOfSlots).Select(value => value.ToString()).ToArray());
+            keyIndex.SelectedIndex = selectedIndex >= 0 && selectedIndex < numberOfSlots ? selectedIndex : 0;
+            keyIndex.EndUpdate();
+            session.Enabled = schemeValue == A10PinKeyScheme.MasterSession;
+        }
+        scheme.SelectedIndexChanged += (_, _) => UpdateKeyIndexes();
+        UpdateKeyIndexes();
+
         var timeout = new NumericUpDown { Minimum = 30, Maximum = 270, Increment = 30, Value = 60, Dock = DockStyle.Fill };
         var minimum = new NumericUpDown { Minimum = 0, Maximum = 12, Value = 4, Dock = DockStyle.Fill };
         var maximum = new NumericUpDown { Minimum = 4, Maximum = 12, Value = 12, Dock = DockStyle.Fill };
         var allowNull = new CheckBox { Text = "Allow Enter without PIN", AutoSize = true };
         var first = TextValue("ENTER PIN", 80); var second = TextValue("PRESS ENTER", 80); var completion = TextValue("PROCESSING", 80);
-        AddRow(form, 0, "Key scheme", scheme); AddRow(form, 1, "Prompt mode", promptMode);
-        AddRow(form, 2, "Account / PAN", account); AddRow(form, 3, "Encrypted session key", session);
+        AddRow(form, 0, "Key scheme", schemeAndIndex); AddRow(form, 1, "Prompt mode", promptMode);
+        AddRow(form, 2, "Account / PAN", account); AddKeyRow(form, 3, "Encrypted session key", session);
         AddRow(form, 4, "Timeout (seconds)", timeout); AddRow(form, 5, "Minimum PIN length", minimum);
         AddRow(form, 6, "Maximum PIN length", maximum); AddRow(form, 7, "Null PIN", allowNull);
         AddRow(form, 8, "First prompt", first); AddRow(form, 9, "Second prompt", second); AddRow(form, 10, "Completion prompt", completion);
         var output = OutputBox();
         var start = ActionButton("Start PIN entry", async () =>
         {
+            var selectedScheme = (A10PinKeyScheme)scheme.SelectedItem!;
+            if (selectedScheme == A10PinKeyScheme.MasterSession)
+            {
+                await _client.SelectA10MasterKeyAsync((char)('0' + keyIndex.SelectedIndex));
+            }
+            else
+            {
+                await _client.SelectA10DukptKeySetAsync(keyIndex.SelectedIndex);
+            }
             var result = await _client.StartA10PinEntryAsync(new A10PinEntryRequest(
-                (A10PinKeyScheme)scheme.SelectedItem!, (A10PinPromptMode)promptMode.SelectedItem!, account.Text, session.Text,
+                selectedScheme, (A10PinPromptMode)promptMode.SelectedItem!, account.Text, session.Text,
                 (int)timeout.Value, (int)minimum.Value, (int)maximum.Value, allowNull.Checked, first.Text, second.Text, completion.Text));
             output.Text = string.Join(Environment.NewLine, $"Status: {result.Status}", $"Encrypted PIN block: {result.EncryptedPinBlock}",
                 $"KSN: {result.Ksn ?? "Not applicable"}", $"PIN length: {result.PinLength?.ToString() ?? "Not returned"}",
-                $"Key identifier: {result.KeyIdentifier ?? "Not returned"}", "", "Sensitive response material is redacted from the shared protocol log.");
+                $"Key identifier: {result.KeyIdentifier ?? "Not returned"}", "", "Complete request and response frames are available in the shared protocol log.");
         });
+        _actionControls.Add(scheme);
+        _actionControls.Add(keyIndex);
         form.Controls.Add(start, 0, 11); form.SetColumnSpan(start, 2);
         root.Panel1.Padding = new Padding(10); root.Panel1.Controls.Add(form);
         root.Panel2.Padding = new Padding(10); root.Panel2.Controls.Add(output);
@@ -198,17 +264,33 @@ internal sealed partial class A10DemoControl : UserControl
         {
             Dock = DockStyle.Top,
             AutoSize = true,
-            ColumnCount = 2,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            ColumnCount = 3,
+            RowCount = 4,
+            GrowStyle = TableLayoutPanelGrowStyle.FixedSize,
             Padding = new Padding(0, 0, 0, 8),
         };
-        grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
-        grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+        grid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        grid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        grid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        grid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        grid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        grid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         AddConfigButton(grid, 0, 0, "Load data formats", A10EmvConfigurationType.DataFormats);
         AddConfigButton(grid, 1, 0, "Load terminal configuration", A10EmvConfigurationType.Terminal);
         AddConfigButton(grid, 0, 1, "Add contact CA key", A10EmvConfigurationType.ContactCaKey);
         AddConfigButton(grid, 1, 1, "Add contact application", A10EmvConfigurationType.ContactApplication);
         AddConfigButton(grid, 0, 2, "Add contactless CA key", A10EmvConfigurationType.ContactlessCaKey);
         AddConfigButton(grid, 1, 2, "Add contactless application", A10EmvConfigurationType.ContactlessApplication);
+        AddConfigurationActionButton(grid, 0, 3, "Query current EMV configuration", QueryCurrentConfigurationAsync);
+        var clearButton = AddConfigurationActionButton(
+            grid,
+            1,
+            3,
+            "Delete all EMV configuration",
+            ClearAllConfigurationAsync);
+        clearButton.ForeColor = Color.DarkRed;
         panel.Controls.Add(grid, 0, 0);
         panel.Controls.Add(_configOutput, 0, 1);
         panel.Controls.Add(InfoLabel(
@@ -230,7 +312,7 @@ internal sealed partial class A10DemoControl : UserControl
             AutoScroll = true,
             Padding = new Padding(12),
             ColumnCount = 2,
-            RowCount = 10,
+            RowCount = 12,
         };
         editor.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 165));
         editor.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
@@ -241,6 +323,10 @@ internal sealed partial class A10DemoControl : UserControl
         var transactionType = Combo("00 - Goods", "01 - Cash", "09 - Cashback");
         var transactionInfo = Combo("40 - Cardholder present", "00 - Default");
         var accountType = Combo("00 - Default", "10 - Savings", "20 - Checking", "30 - Credit");
+        var onlinePinType = Combo("0 - MK/SK", "1 - DUKPT");
+        var encryptedSessionKey = SharedSessionKeyEditor();
+        onlinePinType.SelectedIndexChanged += (_, _) =>
+            encryptedSessionKey.Enabled = onlinePinType.SelectedIndex == 0;
         var forceOnline = new CheckBox { Text = "Force online", AutoSize = true };
         var hostDecision = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Dock = DockStyle.Fill };
         hostDecision.Items.AddRange(Enum.GetValues<A10HostDecision>().Cast<object>().ToArray());
@@ -251,8 +337,10 @@ internal sealed partial class A10DemoControl : UserControl
         AddRow(editor, 3, "Transaction type", transactionType);
         AddRow(editor, 4, "Transaction information", transactionInfo);
         AddRow(editor, 5, "Account type", accountType);
-        AddRow(editor, 6, "Host response", hostDecision);
-        AddRow(editor, 7, "Processing", forceOnline);
+        AddRow(editor, 6, "Online PIN type", onlinePinType);
+        AddKeyRow(editor, 7, "Encrypted session PIN key", encryptedSessionKey);
+        AddRow(editor, 8, "Host response", hostDecision);
+        AddRow(editor, 9, "Processing", forceOnline);
 
         var resultBox = OutputBox();
         resultBox.Text = contactless
@@ -268,6 +356,8 @@ internal sealed partial class A10DemoControl : UserControl
                 Code(transactionInfo),
                 Code(accountType),
                 forceOnline.Checked,
+                onlinePinType.SelectedIndex == 1 ? A10PinKeyScheme.Dukpt : A10PinKeyScheme.MasterSession,
+                encryptedSessionKey.Text,
                 (A10HostDecision)hostDecision.SelectedItem!);
             var result = contactless
                 ? await _client.RunA10ContactlessTransactionAsync(request)
@@ -275,16 +365,236 @@ internal sealed partial class A10DemoControl : UserControl
             resultBox.Text = FormatTransactionResult(result);
         });
         start.Dock = DockStyle.Fill;
-        editor.Controls.Add(start, 0, 8);
+        editor.Controls.Add(start, 0, 10);
         editor.SetColumnSpan(start, 2);
         var note = InfoLabel(
-            "The built-in host simulator returns approval, decline, or no-response and then reads the standard receipt tags.");
-        editor.Controls.Add(note, 0, 9);
+            "The built-in host simulator returns approval, decline, or no-response and then reads the standard receipt tags. MK/SK accepts an encrypted session PIN key or uses the active P0 working key; DUKPT uses the active DUKPT set.");
+        editor.Controls.Add(note, 0, 11);
         editor.SetColumnSpan(note, 2);
         root.Panel1.Controls.Add(editor);
         root.Panel2.Padding = new Padding(8);
         root.Panel2.Controls.Add(resultBox);
         return root;
+    }
+
+    private Control BuildOfflinePinChangePage()
+    {
+        var defaults = LoadOfflinePinChangeOptions();
+        var root = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Vertical, SplitterDistance = 500 };
+        var form = FormGrid();
+        var apiAddress = TextValue(defaults.Api.BaseAddress, 300);
+        var apiKey = SecretValue(defaults.Api.ApiKey, 300);
+        var certificate = TextValue(defaults.Api.ClientCertificatePath ?? "", 500);
+        var certificatePassword = SecretValue(defaults.Api.ClientCertificatePassword ?? "", 300);
+        var acquirer = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Dock = DockStyle.Fill };
+        acquirer.Items.AddRange(defaults.Acquirers.Cast<object>().ToArray());
+        acquirer.SelectedIndex = 0;
+        var method = TextValue("", 50);
+        method.ReadOnly = true;
+        var keyIndex = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Dock = DockStyle.Fill };
+        var session = SharedSessionKeyEditor();
+        var pinProfile = TextValue("", 50);
+        pinProfile.ReadOnly = true;
+        void ApplyAcquirer()
+        {
+            var profile = (DemoAcquirerPinProfile)acquirer.SelectedItem!;
+            method.Text = profile.PinKeyScheme == A10PinKeyScheme.Dukpt ? "DUKPT / 7H" : "MK/SK / 7G";
+            var numberOfSlots = profile.PinKeyScheme == A10PinKeyScheme.MasterSession ? 10 : 2;
+            keyIndex.BeginUpdate();
+            keyIndex.Items.Clear();
+            keyIndex.Items.AddRange(Enumerable.Range(0, numberOfSlots).Cast<object>().ToArray());
+            keyIndex.SelectedItem = profile.TerminalKeyIndex >= 0 && profile.TerminalKeyIndex < numberOfSlots
+                ? profile.TerminalKeyIndex
+                : 0;
+            keyIndex.EndUpdate();
+            pinProfile.Text = profile.ApiPinProfileId;
+            session.Text = profile.EncryptedSessionKey;
+            session.Enabled = profile.PinKeyScheme == A10PinKeyScheme.MasterSession;
+        }
+        acquirer.SelectedIndexChanged += (_, _) => ApplyAcquirer();
+        ApplyAcquirer();
+        AddRow(form, 0, "EMV API address", apiAddress);
+        AddRow(form, 1, "API key", apiKey);
+        AddRow(form, 2, "Client certificate PFX", certificate);
+        AddRow(form, 3, "Certificate password", certificatePassword);
+        AddRow(form, 4, "Acquirer / PIN profile", acquirer);
+        AddRow(form, 5, "PIN encryption", method);
+        AddRow(form, 6, "Terminal key index", keyIndex);
+        AddKeyRow(form, 7, "Encrypted session PIN key", session);
+        AddRow(form, 8, "API PIN profile", pinProfile);
+        var output = OutputBox();
+        async Task SelectProfileKeyAsync()
+        {
+            var profile = (DemoAcquirerPinProfile)acquirer.SelectedItem!;
+            var selectedKeyIndex = (int)keyIndex.SelectedItem!;
+            if (profile.PinKeyScheme == A10PinKeyScheme.MasterSession)
+                await _client.SelectA10MasterKeyAsync((char)('0' + selectedKeyIndex));
+            else
+                await _client.SelectA10DukptKeySetAsync(selectedKeyIndex);
+        }
+        EmvOperationsApiOptions ApiOptions() => new(
+            apiAddress.Text,
+            apiKey.Text,
+            string.IsNullOrWhiteSpace(certificate.Text) ? null : certificate.Text,
+            string.IsNullOrEmpty(certificatePassword.Text) ? null : certificatePassword.Text);
+        A10OfflinePinChangeRequest PinUpdateRequest()
+        {
+            var profile = (DemoAcquirerPinProfile)acquirer.SelectedItem!;
+            return new A10OfflinePinChangeRequest(
+                profile.PinKeyScheme,
+                session.Text,
+                profile.ApiPinProfileId,
+                ApiOptions());
+        }
+        A10OfflinePinUnblockRequest PinUnblockRequest() => new(ApiOptions());
+        var change = ActionButton("Change Offline PIN", async () =>
+        {
+            await SelectProfileKeyAsync();
+            var result = await _client.RunA10OfflinePinChangeAsync(PinUpdateRequest(), CurrentOperationToken);
+            output.Text = FormatOfflinePinChangeResult(result);
+        });
+        var verify = ActionButton("Verify Offline PIN", async () =>
+        {
+            var result = await _client.VerifyA10OfflinePinAsync(CurrentOperationToken);
+            output.Text = FormatPinManagementResult("Verify Offline PIN", result);
+        });
+        var unblock = ActionButton("Unblock Offline PIN", async () =>
+        {
+            var result = await _client.RunA10OfflinePinUnblockAsync(PinUnblockRequest(), CurrentOperationToken);
+            output.Text = FormatOfflinePinChangeResult(result);
+        });
+        var cancel = new Button
+        {
+            Text = "Cancel",
+            AutoSize = true,
+            Height = 34,
+            Margin = new Padding(4),
+            Dock = DockStyle.Fill,
+            Enabled = false,
+        };
+        cancel.Click += async (_, _) =>
+        {
+            cancel.Enabled = false;
+            _operationCancellation?.Cancel();
+            SetStatus("Canceling PIN operation...");
+            try
+            {
+                await _client.CancelA10PinManagementAsync();
+                output.Text = "PIN operation canceled. Sent T1C (cancel ICC transaction), 72 (cancel PIN entry), and Z1 (reset to idle).";
+                SetStatus("Canceled.");
+            }
+            catch (Exception error)
+            {
+                SetStatus("Cancel failed: " + error.Message);
+                MessageBox.Show(this, error.Message, "Pinpad Demo", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        };
+        _cancelControls.Add(cancel);
+        var actions = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            AutoSize = true,
+            ColumnCount = 4,
+            RowCount = 1,
+            Margin = new Padding(0),
+        };
+        for (var column = 0; column < 4; column++)
+            actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25));
+        foreach (var button in new[] { change, verify, unblock, cancel }) button.Dock = DockStyle.Fill;
+        actions.Controls.Add(change, 0, 0);
+        actions.Controls.Add(verify, 1, 0);
+        actions.Controls.Add(unblock, 2, 0);
+        actions.Controls.Add(cancel, 3, 0);
+        form.Controls.Add(actions, 0, 9);
+        form.SetColumnSpan(actions, 2);
+        var note = InfoLabel(
+            "Change uses T37/SUB+1, verifies the current offline PIN, and captures a new PIN with 7G or 7H. Unblock uses T37/SUB+2 with No CVM and requests only a MAC-only unblock script; it never captures a PIN. Verify uses T37/SUB+3. Cancel sends T1C, 72, and Z1.");
+        form.Controls.Add(note, 0, 10);
+        form.SetColumnSpan(note, 2);
+        root.Panel1.Padding = new Padding(10);
+        root.Panel1.Controls.Add(form);
+        root.Panel2.Padding = new Padding(10);
+        root.Panel2.Controls.Add(output);
+        return root;
+    }
+
+    private static OfflinePinChangeDemoOptions LoadOfflinePinChangeOptions()
+    {
+        var fallback = new OfflinePinChangeDemoOptions(
+            new EmvOperationsApiOptions("http://127.0.0.1:5088/", "gc-emv-demo-2026"),
+            [new DemoAcquirerPinProfile("Demo Mastercard MK/SK", A10PinKeyScheme.MasterSession, 0, "mksk", DefaultSessionPinKey)]);
+        var path = Path.Combine(AppContext.BaseDirectory, "appsettings.json");
+        if (!File.Exists(path)) return fallback;
+        using var document = JsonDocument.Parse(File.ReadAllText(path));
+        if (!document.RootElement.TryGetProperty("EmvOperationsApi", out var section)) return fallback;
+        var api = new EmvOperationsApiOptions(
+            section.TryGetProperty("BaseAddress", out var address) ? address.GetString() ?? fallback.Api.BaseAddress : fallback.Api.BaseAddress,
+            section.TryGetProperty("ApiKey", out var key) ? key.GetString() ?? fallback.Api.ApiKey : fallback.Api.ApiKey,
+            section.TryGetProperty("ClientCertificatePath", out var certificate) ? certificate.GetString() : null,
+            section.TryGetProperty("ClientCertificatePassword", out var password) ? password.GetString() : null);
+        var acquirers = new List<DemoAcquirerPinProfile>();
+        if (section.TryGetProperty("Acquirers", out var configuredAcquirers))
+        {
+            foreach (var configured in configuredAcquirers.EnumerateArray())
+            {
+                var scheme = configured.GetProperty("PinKeyScheme").GetString();
+                acquirers.Add(new DemoAcquirerPinProfile(
+                    configured.GetProperty("Name").GetString() ?? "Unnamed acquirer",
+                    string.Equals(scheme, "DUKPT", StringComparison.OrdinalIgnoreCase)
+                        ? A10PinKeyScheme.Dukpt
+                        : A10PinKeyScheme.MasterSession,
+                    configured.GetProperty("TerminalKeyIndex").GetInt32(),
+                    configured.GetProperty("ApiPinProfileId").GetString() ?? throw new InvalidDataException("ApiPinProfileId is required."),
+                    configured.TryGetProperty("EncryptedSessionKey", out var sessionKey) ? sessionKey.GetString() ?? "" : ""));
+            }
+        }
+        return new OfflinePinChangeDemoOptions(api, acquirers.Count == 0 ? fallback.Acquirers : acquirers);
+    }
+
+    private static string FormatOfflinePinChangeResult(A10OfflinePinChangeResult result)
+    {
+        var lines = new List<string>
+        {
+            $"Result: {result.Status}",
+            $"T37 initial response: {Printable(result.InitialResponse)}",
+            $"T38 final response: {Printable(result.FinalResponse)}",
+            $"EMV API response code: {result.ApiResponseCode}",
+            $"Issuer field 55: {result.Field55}",
+            "",
+            "Completion tags",
+        };
+        lines.AddRange(result.Tags.OrderBy(item => item.Key).Select(item => $"{item.Key}: {item.Value}"));
+        return string.Join(Environment.NewLine, lines);
+    }
+
+    private static string FormatPinManagementResult(string operation, A10CommandResponse result)
+    {
+        var status = result.Payload switch
+        {
+            "0V0" => "PIN verification succeeded",
+            "0V1" => "PIN verification failed",
+            "0A1" => "Online authorization and issuer processing required",
+            "0A4" => "Application reselection required",
+            "12" => "Command format error",
+            "13" => "Transaction canceled",
+            _ when result.Payload.StartsWith("11", StringComparison.Ordinal) => "Terminal failure",
+            _ => "Terminal returned an unrecognized result",
+        };
+        return $"Operation: {operation}{Environment.NewLine}Result: {status}{Environment.NewLine}T38 response: {Printable(result.Payload)}";
+    }
+
+    private sealed record OfflinePinChangeDemoOptions(
+        EmvOperationsApiOptions Api,
+        IReadOnlyList<DemoAcquirerPinProfile> Acquirers);
+
+    private sealed record DemoAcquirerPinProfile(
+        string Name,
+        A10PinKeyScheme PinKeyScheme,
+        int TerminalKeyIndex,
+        string ApiPinProfileId,
+        string EncryptedSessionKey)
+    {
+        public override string ToString() => Name;
     }
 
     private Control BuildSmartCardPage()
@@ -305,7 +615,7 @@ internal sealed partial class A10DemoControl : UserControl
             ShowSmartCard(await _client.ExchangeA10SmartCardApduAsync(apdu.Text))));
         panel.Controls.Add(commandPanel, 0, 0);
         panel.Controls.Add(_smartCardOutput, 0, 1);
-        panel.Controls.Add(InfoLabel("Provides the A10 demo's ICC presence, cold reset, deactivate, and raw APDU tests."), 0, 2);
+        panel.Controls.Add(InfoLabel("Provides the Pinpad Demo's ICC presence, cold reset, deactivate, and raw APDU tests."), 0, 2);
         return panel;
     }
 
@@ -389,10 +699,24 @@ internal sealed partial class A10DemoControl : UserControl
         string text,
         A10EmvConfigurationType type)
     {
-        var button = ActionButton(text, () => LoadConfigurationFileAsync(type));
-        button.Dock = DockStyle.Fill;
+        AddConfigurationActionButton(panel, column, row, text, () => LoadConfigurationFileAsync(type));
+    }
+
+    private Button AddConfigurationActionButton(
+        TableLayoutPanel panel,
+        int column,
+        int row,
+        string text,
+        Func<Task> action)
+    {
+        var button = ActionButton(text, action);
+        button.AutoSize = false;
+        button.Size = new Size(ConfigurationButtonWidth, ConfigurationButtonHeight);
+        button.MaximumSize = new Size(ConfigurationButtonWidth, ConfigurationButtonHeight);
+        button.Anchor = AnchorStyles.Top | AnchorStyles.Left;
         button.Margin = new Padding(4);
         panel.Controls.Add(button, column, row);
+        return button;
     }
 
     private async Task LoadConfigurationFileAsync(A10EmvConfigurationType type)
@@ -408,6 +732,50 @@ internal sealed partial class A10DemoControl : UserControl
         _configOutput.AppendText($"{DateTime.Now:T}  Applied {type}: {dialog.FileName}{Environment.NewLine}");
     }
 
+    private async Task QueryCurrentConfigurationAsync()
+    {
+        var snapshot = await _client.QueryA10EmvConfigurationAsync();
+        _configOutput.Text = FormatConfigurationSnapshot(snapshot);
+    }
+
+    private async Task ClearAllConfigurationAsync()
+    {
+        var decision = MessageBox.Show(
+            this,
+            "Delete all terminal EMV configuration, including data formats, CA keys, contact and contactless applications? This cannot be undone.",
+            "Delete EMV configuration",
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Warning,
+            MessageBoxDefaultButton.Button2);
+        if (decision != DialogResult.Yes) return;
+
+        await _client.ClearAllA10EmvConfigurationAsync();
+        var snapshot = await _client.QueryA10EmvConfigurationAsync();
+        _configOutput.Text = $"{DateTime.Now:T}  All EMV configuration deleted.{Environment.NewLine}{Environment.NewLine}" +
+                             FormatConfigurationSnapshot(snapshot);
+    }
+
+    private static string FormatConfigurationSnapshot(A10EmvConfigurationSnapshot snapshot)
+    {
+        var terminal = snapshot.TerminalConfigurationPresent
+            ? $"Configured ({snapshot.TerminalConfigurationBytes:N0} bytes)"
+            : "Not configured";
+        return string.Join(
+            Environment.NewLine,
+            "Current EMV configuration",
+            $"Terminal configuration: {terminal}",
+            FormatConfigurationIds("Data formats", snapshot.DataFormatTags),
+            FormatConfigurationIds("CA keys", snapshot.CapkIds),
+            FormatConfigurationIds("Contact applications", snapshot.ContactAidIds),
+            FormatConfigurationIds("Contactless applications", snapshot.ContactlessAidIds),
+            FormatConfigurationIds("Contactless DRL entries", snapshot.ContactlessDrlIds));
+    }
+
+    private static string FormatConfigurationIds(string label, IReadOnlyList<string> ids)
+    {
+        return $"{label} ({ids.Count:N0}): {(ids.Count == 0 ? "None" : string.Join(", ", ids))}";
+    }
+
     private Button ActionButton(string text, Func<Task> action)
     {
         var button = new Button { Text = text, AutoSize = true, Height = 34, Margin = new Padding(4) };
@@ -421,28 +789,40 @@ internal sealed partial class A10DemoControl : UserControl
         if (_busy) return;
         if (!_client.IsConnected)
         {
-            MessageBox.Show(this, "Connect to a PINPAD first.", "A10 Demo", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            MessageBox.Show(this, "Connect to a PINPAD first.", "Pinpad Demo", MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
         _busy = true;
+        _operationCancellation = new CancellationTokenSource();
         SetActionsEnabled(false);
-        _status.Text = "Working...";
+        foreach (var control in _cancelControls) control.Enabled = true;
+        SetStatus("Working...");
         try
         {
             await action();
-            _status.Text = "Completed.";
+            SetStatus("Completed.");
+        }
+        catch (OperationCanceledException)
+        {
+            SetStatus("Canceled.");
         }
         catch (Exception error)
         {
-            _status.Text = "Failed: " + error.Message;
-            MessageBox.Show(this, error.Message, "A10 Demo", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            SetStatus("Failed: " + error.Message);
+            MessageBox.Show(this, error.Message, "Pinpad Demo", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
         finally
         {
+            _operationCancellation.Dispose();
+            _operationCancellation = null;
             _busy = false;
             SetActionsEnabled(true);
+            foreach (var control in _cancelControls) control.Enabled = false;
         }
     }
+
+    private CancellationToken CurrentOperationToken =>
+        _operationCancellation?.Token ?? CancellationToken.None;
 
     private void SetActionsEnabled(bool enabled)
     {
@@ -509,6 +889,37 @@ internal sealed partial class A10DemoControl : UserControl
         AutoCompleteMode = AutoCompleteMode.None,
     };
 
+    private TextBox SharedSessionKeyEditor()
+    {
+        var editor = SecretValue(_sharedSessionKey, 48);
+        editor.UseSystemPasswordChar = false;
+        _sessionKeyEditors.Add(editor);
+        editor.TextChanged += (_, _) => SynchronizeSessionKeys(editor);
+        editor.Disposed += (_, _) => _sessionKeyEditors.Remove(editor);
+        return editor;
+    }
+
+    private void SynchronizeSessionKeys(TextBox source)
+    {
+        if (_synchronizingSessionKeys) return;
+        _synchronizingSessionKeys = true;
+        try
+        {
+            _sharedSessionKey = source.Text;
+            foreach (var editor in _sessionKeyEditors)
+            {
+                if (!editor.IsDisposed && editor != source && editor.Text != _sharedSessionKey)
+                {
+                    editor.Text = _sharedSessionKey;
+                }
+            }
+        }
+        finally
+        {
+            _synchronizingSessionKeys = false;
+        }
+    }
+
     private static ComboBox Combo(params string[] values)
     {
         var combo = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Dock = DockStyle.Fill };
@@ -523,6 +934,39 @@ internal sealed partial class A10DemoControl : UserControl
         panel.Controls.Add(new Label { Text = label, AutoSize = true, Margin = new Padding(3, 9, 8, 3) }, 0, row);
         control.Margin = new Padding(3, 4, 3, 4);
         panel.Controls.Add(control, 1, row);
+    }
+
+    private static void AddKeyRow(TableLayoutPanel panel, int row, string label, TextBox keyField)
+    {
+        var wrapper = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            ColumnCount = 2,
+            RowCount = 1,
+            Margin = Padding.Empty,
+        };
+        wrapper.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        wrapper.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        keyField.Margin = Padding.Empty;
+        wrapper.Controls.Add(keyField, 0, 0);
+        wrapper.Controls.Add(CreateKeyLengthLabel(keyField), 1, 0);
+        AddRow(panel, row, label, wrapper);
+    }
+
+    private static Label CreateKeyLengthLabel(TextBox keyField)
+    {
+        var length = new Label
+        {
+            AutoSize = true,
+            Margin = new Padding(8, 4, 3, 0),
+            ForeColor = SystemColors.GrayText,
+        };
+        void UpdateLength() => length.Text = $"Length: {keyField.TextLength}";
+        keyField.TextChanged += (_, _) => UpdateLength();
+        UpdateLength();
+        return length;
     }
 
     private static void AddWideRow(TableLayoutPanel panel, int row, string label, Control control, Control action)

@@ -34,8 +34,9 @@ private const val DELAY_VIA_OWN_MS   = 2000L
  *  2. Auto-clicks the "Start now" button on the MediaProjection consent dialog so
  *     unattended terminals never require human interaction.
  *
- * Must be enabled in Settings → Accessibility → xTMSAgent → Remote Control
- * (or via MDM: DevicePolicyManager.setAccessibilityServices).
+ * Must be enabled in Settings → Accessibility → xTMSAgent → Remote Control.
+ * Standard Device Owner APIs can allow-list this service but cannot enable it;
+ * supported NEXGO terminals use [RemoteControlAccessibilityProvisioner] during setup.
  */
 class RemoteControlAccessibilityService : AccessibilityService() {
 

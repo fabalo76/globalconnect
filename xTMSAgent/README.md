@@ -2,6 +2,12 @@
 
 Android launcher application for NEXGO SmartPOS devices. It serves as the device home screen and integrates with Global Connect ONE for MQTT telemetry, terminal tasks, parameter/configuration updates, the Global Connect Store, software downloads, transaction reporting, and Kinesis WebRTC remote control.
 
+## Unified distribution
+
+xTMSAgent is built as one application (`one.globalconnect.xtmsagent.globalconnect`) without bank product flavors. This preserves in-place upgrades for the existing Global Connect distribution. Bank branding and launcher behavior are delivered by the launcher configuration in Global Connect ONE, including brand images, launcher colors, text size, system-password protection, app ordering, and navigation/control visibility.
+
+The first build receives a global download credential through the `XTMS_DOWNLOAD_CREDENTIAL_ID` and `XTMS_DOWNLOAD_CREDENTIAL_SECRET` Gradle properties or environment variables. Do not commit these values. After an authenticated launcher-config download, the agent adopts and persists the newest active global credential supplied by the portal, allowing credentials to overlap during rotation.
+
 ---
 
 ## Integration Target
@@ -25,7 +31,11 @@ The older `tms/terminal/{TermID}/...`, broker-password, TCP/FTP, `easy`, `paramr
 
 AWS IoT provisioning is device-scoped. A terminal can register its Thing/certificate and exchange MQTT on `tms/device/{serial}/...` as long as it is registered as a Global Connect ONE device with IoT enabled; it does not need to be assigned to a lane. For banks with Merchant Network enabled, lane context is used when resolving payment parameters and operator workflow. For banks without Merchant Network, parameter values and tree records are assigned directly to the device.
 
-The exported application licensing service is a generic broker for offline application licenses. It verifies the caller UID, package, and installed APK signer, then relays registration over the authenticated device MQTT connection. Licensed applications generate and retain their own Android Keystore private keys; xTMSAgent never receives application private keys.
+When the portal transfers a provisioned device to another bank, it sends a `deregister` command before revoking the current AWS IoT registration. xTMSAgent clears its local certificate and private key, disconnects, and retries credential provisioning until it can register under the destination bank.
+
+The TMS Config entry always requires the administrator or rotating super password, including in debug builds. Its **Reset TMS Registration** action requires an additional confirmation, revokes the server-side registration first, clears the local certificate, and reconnects to provision a replacement certificate.
+
+The exported application licensing service is a generic broker for offline application licenses. It verifies the caller UID, package, and installed APK signer, then relays registration over the authenticated device MQTT connection. On Android 11 and newer, a device-owner xTMSAgent generates each licensed application's identity in the managed Android KeyChain, grants the installed package access, and retains the signed license certificate in xTMSAgent no-backup private storage. Reinstalling the licensed APK therefore restores the same identity and certificate without exporting the private key or contacting the server again. Older Android versions fall back to an application-owned Android Keystore identity.
 
 Licensed applications can also request an allow-listed managed capability through the same UID-verified service. For `android.tts`, xTMSAgent sends the terminal model, Android SDK, and ABI list to the authenticated AWS device endpoint. AWS resolves the bank catalog's model-compatible RHVoice version and dispatches a normal `ApplicationDownload` task. After the APK is installed, xTMSAgent sends an explicit completion signal to the requesting package so it can verify and initialize the newly available Android service.
 

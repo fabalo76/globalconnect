@@ -64,6 +64,20 @@ rapid taps, supporting touchscreen-only models such as N6/N6S.
 
 Administration command `13` changes the persisted serial baud rate and line mode after its response flow completes. The PINPAD sends the command response and final EOT using the current settings, then reopens the transport with the new settings.
 
+## New PIN capture commands
+
+Transaction command `7G` implements the A10-P MK/SK PIN-change capture. It uses the same request payload as command `70`, prompts for `ENTER NEW PIN` and `CONFIRM NEW PIN`, and returns the confirmed first encrypted capture in response command `71`.
+
+Transaction command `7H` is the Global Connect DUKPT equivalent. Its request uses the DUKPT account payload accepted by the existing PIN-entry commands. Both entries are encrypted with the same reserved KSN so their encrypted PIN blocks can be compared inside PinpadApp. The KSN is advanced exactly once after each confirmation attempt, including cancellation or mismatch after the first capture. A match returns command `71` with `0 + KSN + encrypted PIN block`; a mismatch is displayed locally and starts a fresh two-entry attempt with the next KSN. No clear PIN or PIN block is logged.
+
+## Offline PIN change transaction
+
+Transaction command `T37 + SUB + 1` starts the change-PIN operation. It uses only the contact ICC interface, does not display or process a financial amount, and sends a zero amount through the EMV kernel. For the selected contact AID, terminal capabilities are restricted to the configured plaintext and enciphered offline-PIN CVMs so the card must verify its current offline PIN.
+
+After a successful current-PIN verification and ARQC, the PINPAD sends `T38` result `0A1`. The host can then use `7G` or `7H` to collect and confirm the new encrypted PIN, retrieve the EMV authorization data with `T27`, and submit processing code `920000` to the issuer. Issuer authentication and the PIN-change script are supplied through `T19`/`T17`. The operation ends with `T38 0V0` only when issuer response `85` produces the expected final AAC, TSI confirms issuer-script processing, and TVR reports no issuer-script failure. Other completed verification or script outcomes return `T38 0V1`.
+
+`T37 + SUB + 3` performs a contact-only offline-PIN verification and returns `T38 0V0` or `0V1` without exposing an online transaction. `T37 + SUB + 2` starts a forced-online, zero-amount unblock flow without requesting or verifying the blocked current PIN and returns `T38 0A1`. The host captures and confirms the new PIN with `7G` or `7H`, requests the new-PIN issuer script, sends it through `T19`, and finishes with `T17`. Cancellation returns T38 status `1`, reason `3` when the active operation is cancelled through the device UI. A host may also terminate and reset the operation with `T1C`, `72`, and `Z1`.
+
 The request payload is `[baud code][optional mode]`:
 
 | Baud code | Speed |
@@ -248,7 +262,7 @@ D:\Source\AndroidStudio\GLOBAL_CONNECT\PinpadApp\gradlew.bat `
 ```
 # Application licensing
 
-Pinpad requires the `PINPAD_APP` license issued by Global Connect ONE. It generates a non-exportable EC key in Android Keystore, requests registration through xTMSAgent, and validates the returned permanent certificate locally before starting USB/RS232 communications.
+Pinpad requires the `PINPAD_APP` license issued by Global Connect ONE. On Android 11 and newer, it requests a device-owner-managed EC identity from xTMSAgent. xTMSAgent grants the package access to the non-exportable KeyChain private key and retains the signed permanent license certificate, allowing Pinpad to recover its license after an APK uninstall/reinstall. Pinpad validates the restored certificate locally before starting USB/RS232 communications. When managed credentials are unavailable, it falls back to its legacy application-owned Android Keystore identity.
 
 The Android application ID and Kotlin namespace are `one.globalconnect.pinpad`.
 

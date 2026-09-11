@@ -43,6 +43,16 @@ data class TMS_EmvCtlsConfig(
     var onlinePinCap: Int = 1,
     var signatureCap: Boolean = true,
     var noCVMCap: Boolean = true,
+    var manualKeyEntryCap: Boolean = true,
+    var magneticStripeCap: Boolean = true,
+    var contactChipCap: Boolean = true,
+    var offlineClearPinCap: Boolean = true,
+    var offlineEncrPinCap: Boolean = true,
+    var sdaCap: Boolean = true,
+    var ddaCap: Boolean = true,
+    var cardCaptureCap: Boolean = false,
+    var cdaCap: Boolean = true,
+    var simplifiedCapabilityFlagsConfigured: Boolean = false,
     var extraTag01Name: String = "",
     var extraTag01Type: String = "",
     var extraTag01Value: String = "",
@@ -69,11 +79,28 @@ data class TMS_EmvCtlsConfig(
 
     companion object {
         fun fromJson(json: JSONObject): TMS_EmvCtlsConfig {
+            val aid = TMS_Json.readString(json, "aid")
+            val legacyTerminalCapabilities = TMS_Json.readString(json, "terminalCapabilities")
+            val onlinePinCap = TMS_Json.readBinaryFlagDefault(json, "onlinePinCap", 1)
+            val signatureCap = TMS_Json.readBinaryFlagDefault(json, "signatureCap", 1) == 1
+            val noCvmCap = TMS_Json.readBinaryFlagDefault(json, "noCVMCap", 1) == 1
+            val simplifiedFlagsConfigured = TMS_ContactlessCapabilityFlags.hasSimplifiedFlags(json)
+            val capabilityFlags = TMS_ContactlessCapabilityFlags.fromJson(
+                json = json,
+                legacyTerminalCapabilities = legacyTerminalCapabilities,
+                onlinePin = onlinePinCap == 1,
+                signature = signatureCap,
+                noCvm = noCvmCap,
+            )
+            val derived = capabilityFlags.deriveTechnicalValues(aid)
+            fun technicalValue(name: String, derivedValue: String): String =
+                if (simplifiedFlagsConfigured) derivedValue else TMS_Json.readString(json, name)
+
             return TMS_EmvCtlsConfig(
                 config_id = TMS_Json.readString(json, "config_id"),
                 description = TMS_Json.readString(json, "description"),
-                aid = TMS_Json.readString(json, "aid"),
-                kernelId = TMS_Json.readString(json, "kernelId"),
+                aid = aid,
+                kernelId = technicalValue("kernelId", derived.kernelIdentifier),
                 transactionType = TMS_Json.readString(json, "transactionType"),
                 currency = TMS_Json.readString(json, "currency"),
                 floorLimit = TMS_Json.readString(json, "floorLimit"),
@@ -90,24 +117,40 @@ data class TMS_EmvCtlsConfig(
                 cvn17Support = TMS_Json.readString(json, "cvn17Support"),
                 trackOutput = TMS_Json.readString(json, "trackOutput"),
                 zeroAmtCheck = TMS_Json.readString(json, "zeroAmtCheck"),
-                terminalCapabilities = TMS_Json.readString(json, "terminalCapabilities"),
-                terminalType = TMS_Json.readString(json, "terminalType"),
-                ttq = TMS_Json.readString(json, "ttq"),
-                cardDataInputCapa = TMS_Json.readString(json, "cardDataInputCapa"),
-                cvmCapaCvmRequired = TMS_Json.readString(json, "cvmCapaCvmRequired"),
-                cvmCapaNoCvmRequired = TMS_Json.readString(json, "cvmCapaNoCvmRequired"),
-                defaultUdol = TMS_Json.readString(json, "defaultUdol"),
-                kernelConfig = TMS_Json.readString(json, "kernelConfig"),
-                magstripeAvn = TMS_Json.readString(json, "magstripeAvn"),
-                magCvmCapaCvmRequired = TMS_Json.readString(json, "magCvmCapaCvmRequired"),
-                magCvmCapaNoCvmRequired = TMS_Json.readString(json, "magCvmCapaNoCvmRequired"),
-                tornLifeTime = TMS_Json.readString(json, "tornLifeTime"),
-                tornMaxRecords = TMS_Json.readString(json, "tornMaxRecords"),
-                secCapability = TMS_Json.readString(json, "secCapability"),
-                termRiskData = TMS_Json.readString(json, "termRiskData"),
-                onlinePinCap = TMS_Json.readBinaryFlagDefault(json, "onlinePinCap", 1),
-                signatureCap = TMS_Json.readBinaryFlagDefault(json, "signatureCap", 1) == 1,
-                noCVMCap = TMS_Json.readBinaryFlagDefault(json, "noCVMCap", 1) == 1,
+                terminalCapabilities = technicalValue("terminalCapabilities", derived.terminalCapabilities),
+                terminalType = technicalValue("terminalType", derived.terminalType),
+                ttq = technicalValue("ttq", derived.ttq),
+                cardDataInputCapa = technicalValue("cardDataInputCapa", derived.cardDataInputCapability),
+                cvmCapaCvmRequired = technicalValue("cvmCapaCvmRequired", derived.cvmCapabilityRequired),
+                cvmCapaNoCvmRequired = technicalValue("cvmCapaNoCvmRequired", derived.cvmCapabilityNoCvmRequired),
+                defaultUdol = technicalValue("defaultUdol", derived.defaultUdol),
+                kernelConfig = technicalValue("kernelConfig", derived.kernelConfiguration),
+                magstripeAvn = technicalValue("magstripeAvn", derived.magstripeApplicationVersion),
+                magCvmCapaCvmRequired = technicalValue(
+                    "magCvmCapaCvmRequired",
+                    derived.magstripeCvmCapabilityRequired,
+                ),
+                magCvmCapaNoCvmRequired = technicalValue(
+                    "magCvmCapaNoCvmRequired",
+                    derived.magstripeCvmCapabilityNoCvmRequired,
+                ),
+                tornLifeTime = technicalValue("tornLifeTime", derived.tornTransactionLifetime),
+                tornMaxRecords = technicalValue("tornMaxRecords", derived.tornTransactionMaxRecords),
+                secCapability = technicalValue("secCapability", derived.securityCapability),
+                termRiskData = technicalValue("termRiskData", derived.terminalRiskManagementData),
+                onlinePinCap = onlinePinCap,
+                signatureCap = signatureCap,
+                noCVMCap = noCvmCap,
+                manualKeyEntryCap = capabilityFlags.manualKeyEntry,
+                magneticStripeCap = capabilityFlags.magneticStripe,
+                contactChipCap = capabilityFlags.contactChip,
+                offlineClearPinCap = capabilityFlags.clearOfflinePin,
+                offlineEncrPinCap = capabilityFlags.encipheredOfflinePin,
+                sdaCap = capabilityFlags.sda,
+                ddaCap = capabilityFlags.dda,
+                cardCaptureCap = capabilityFlags.cardCapture,
+                cdaCap = capabilityFlags.cda,
+                simplifiedCapabilityFlagsConfigured = simplifiedFlagsConfigured,
                 extraTag01Name = TMS_Json.readString(json, "extraTag01Name"),
                 extraTag01Type = TMS_Json.readString(json, "extraTag01Type"),
                 extraTag01Value = TMS_Json.readString(json, "extraTag01Value"),

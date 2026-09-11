@@ -21,8 +21,8 @@ android {
         applicationId = "one.globalconnect.pinpad"
         minSdk = 26
         targetSdk = 36
-        versionCode = 148
-        versionName = "1.3.118"
+        versionCode = 151
+        versionName = "1.3.121"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         buildConfigField "String", "SERIAL_TRANSPORT", "\"SERIAL\""

@@ -59,12 +59,14 @@ object AppViewModelProvider {
         initializer {
             HotelCheckInViewModel(
                 uicApplication().container.tmsDatabase,
+                uicApplication().container.transactionRepository,
             )
         }
 
         initializer {
             HotelCheckOutViewModel(
                 uicApplication().container.transactionRepository,
+                uicApplication().container.tmsDatabase,
             )
         }
 

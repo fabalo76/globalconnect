@@ -38,7 +38,7 @@
     <field index="19" type="N3" align="LEFT" lenType="BCD" padding="00"/>
     <field index="20" type="N3" align="LEFT" lenType="BCD" padding="00"/>
     <field index="21" type="N3" align="LEFT" lenType="BCD" padding="00"/>
-    <field index="22" type="N3" align="LEFT" lenType="BCD" padding="00"/>
+    <field index="22" type="N3" align="RIGHT" lenType="BCD" padding="00"/>
     <field index="23" type="N3" align="RIGHT" lenType="BCD" padding="00"/>
     <field index="24" type="N3" align="RIGHT" lenType="BCD" padding="00"/>
     <field index="25" type="N2" align="RIGHT" lenType="BCD" padding="00"/>

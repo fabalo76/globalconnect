@@ -1,6 +1,7 @@
 ﻿using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using PinpadMediaManager.Core.Models;
 using PinpadMediaManager.Core.Protocol;
 
@@ -265,6 +266,38 @@ public sealed partial class PinpadClient
         }
     }
 
+    public async Task<A10PinEntryResult> StartA10NewPinEntryAsync(
+        A10PinEntryRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        if (request.TimeoutSeconds is < 30 or > 270) throw new ArgumentOutOfRangeException(nameof(request.TimeoutSeconds));
+        var account = new string(request.AccountNumber.Where(char.IsDigit).ToArray());
+        if (account.Length is < 12 or > 19) throw new ArgumentException("Account number must contain 12-19 digits.");
+        var session = request.KeyScheme == A10PinKeyScheme.MasterSession ? NormalizeHex(request.SessionKey) : "";
+        if (request.KeyScheme == A10PinKeyScheme.MasterSession && session.Length is not (16 or 32 or 48))
+            throw new ArgumentException("The encrypted session PIN key must contain 16, 32, or 48 hex characters.");
+        var units = Math.Clamp((int)Math.Ceiling(request.TimeoutSeconds / 30d), 1, 9).ToString(CultureInfo.InvariantCulture);
+        var payload = (request.KeyScheme == A10PinKeyScheme.MasterSession ? "." : "") +
+                      account + PinpadControl.Fs + session + PinpadControl.Fs + units;
+        var command = request.KeyScheme == A10PinKeyScheme.MasterSession ? "7G" : "7H";
+        try
+        {
+            var response = await ExecuteA10CommandAsync(
+                PinpadFrameType.Transaction,
+                command,
+                payload,
+                "71",
+                false,
+                TimeSpan.FromSeconds(request.TimeoutSeconds * 2 + 30),
+                cancellationToken);
+            return ParseA10PinResult(request.KeyScheme, response.Payload);
+        }
+        catch (PinpadProtocolException error) when (error.Message.Contains("0x04", StringComparison.OrdinalIgnoreCase))
+        {
+            return new A10PinEntryResult("Cancelled or timed out", "<EOT>", "", null, null, null);
+        }
+    }
+
     public async Task<A10PinEntryResult> StartA10SecretPinEntryAsync(
         A10SecretPinEntryRequest request,
         CancellationToken cancellationToken = default)
@@ -407,6 +440,51 @@ public sealed partial class PinpadClient
         }
     }
 
+    public async Task<A10EmvConfigurationSnapshot> QueryA10EmvConfigurationAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var response = await ExecuteA10CommandAsync(
+            PinpadFrameType.Transaction,
+            "T92",
+            "",
+            "T93",
+            false,
+            cancellationToken: cancellationToken);
+        var prefix = $"0{PinpadControl.Fs}";
+        if (!response.Payload.StartsWith(prefix, StringComparison.Ordinal))
+        {
+            throw new PinpadProtocolException($"The terminal could not query the EMV configuration ({response.Payload}).");
+        }
+
+        try
+        {
+            var json = Encoding.UTF8.GetString(Convert.FromBase64String(response.Payload[prefix.Length..]));
+            return JsonSerializer.Deserialize<A10EmvConfigurationSnapshot>(
+                       json,
+                       new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
+                   ?? throw new InvalidDataException("The terminal returned an empty EMV configuration response.");
+        }
+        catch (Exception error) when (error is FormatException or JsonException)
+        {
+            throw new InvalidDataException("The terminal returned an invalid EMV configuration response.", error);
+        }
+    }
+
+    public async Task ClearAllA10EmvConfigurationAsync(CancellationToken cancellationToken = default)
+    {
+        var response = await ExecuteA10CommandAsync(
+            PinpadFrameType.Transaction,
+            "T94",
+            "ALL",
+            "T95",
+            false,
+            cancellationToken: cancellationToken);
+        if (!response.Payload.StartsWith('0'))
+        {
+            throw new PinpadProtocolException($"The terminal could not clear the EMV configuration ({response.Payload}).");
+        }
+    }
+
     public async Task<A10EmvTransactionResult> RunA10ContactTransactionAsync(
         A10EmvTransactionRequest request,
         CancellationToken cancellationToken = default)
@@ -511,6 +589,214 @@ public sealed partial class PinpadClient
             onlineData,
             ParseA10TagResponse(tagResponse.Payload));
     }
+
+    /// <summary>Runs offline PIN verification, new-PIN capture, and PIN-change issuer-script processing.</summary>
+    public Task<A10OfflinePinChangeResult> RunA10OfflinePinChangeAsync(
+        A10OfflinePinChangeRequest request,
+        CancellationToken cancellationToken = default) =>
+        RunA10OfflinePinMaintenanceAsync(request, request.Api, '1', "changed", cancellationToken);
+
+    /// <summary>Runs the no-CVM, MAC-only offline PIN-unblock issuer-script flow without capturing a PIN.</summary>
+    public Task<A10OfflinePinChangeResult> RunA10OfflinePinUnblockAsync(
+        A10OfflinePinUnblockRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        return RunA10OfflinePinMaintenanceAsync(null, request.Api, '2', "unblocked", cancellationToken);
+    }
+
+    private async Task<A10OfflinePinChangeResult> RunA10OfflinePinMaintenanceAsync(
+        A10OfflinePinChangeRequest? changeRequest,
+        EmvOperationsApiOptions apiOptions,
+        char operation,
+        string completedAction,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(apiOptions);
+        if (operation == '1') ArgumentNullException.ThrowIfNull(changeRequest);
+        var initial = await ExecuteA10CommandAsync(
+            PinpadFrameType.Transaction,
+            "T37",
+            PinpadControl.Sub + operation.ToString(),
+            "T38",
+            readFinalEot: false,
+            responseTimeout: TimeSpan.FromSeconds(120),
+            cancellationToken: cancellationToken);
+        var terminalClosed = false;
+        try
+        {
+            if (!IsOnlineRequest(initial.Payload))
+            {
+                terminalClosed = true;
+                return new A10OfflinePinChangeResult(
+                    operation == '1'
+                        ? "Current offline PIN verification did not produce an online request."
+                        : "Offline PIN unblock did not produce an online request.",
+                    initial.Payload, initial.Payload, "", "", "", new Dictionary<string, string>());
+            }
+
+            var onlineData = (await ExecuteA10CommandAsync(
+                PinpadFrameType.Transaction, "T27", "", "T28", false,
+                cancellationToken: cancellationToken)).Payload;
+            var tags = ParseBerTlv(onlineData);
+            var supplemental = await ExecuteA10CommandAsync(
+                PinpadFrameType.Transaction,
+                "T21",
+                JoinTags("5A", "57", "5F34", "9F02", "9F03", "9F1A", "95", "5F2A", "9A", "9C", "9F37", "82", "9F36", "9F10", "9F26", "9F27", "9F34"),
+                "T22",
+                false,
+                cancellationToken: cancellationToken);
+            foreach (var item in ParseA10TagResponse(supplemental.Payload)) tags[item.Key] = item.Value;
+            var pan = ExtractPan(tags);
+
+            A10PinEntryResult? pin = null;
+            if (operation == '1')
+            {
+                pin = await StartA10NewPinEntryAsync(new A10PinEntryRequest(
+                    changeRequest!.PinKeyScheme,
+                    A10PinPromptMode.Standard,
+                    pan,
+                    changeRequest.EncryptedSessionKey,
+                    60,
+                    4,
+                    12,
+                    false,
+                    "ENTER NEW PIN",
+                    "CONFIRM NEW PIN",
+                    "PROCESSING"), cancellationToken);
+                if (string.IsNullOrWhiteSpace(pin.EncryptedPinBlock))
+                {
+                    return new A10OfflinePinChangeResult(
+                        pin.Status, initial.Payload, pin.RawResponse, pin.RawResponse, "", "", tags);
+                }
+            }
+
+            using var api = new EmvOperationsApiClient(apiOptions);
+            EmvOperationsResponse host;
+            if (operation == '2')
+            {
+                host = await api.UnblockOfflinePinAsync(
+                    Guid.NewGuid().ToString(),
+                    pan,
+                    tags.TryGetValue("5F34", out var unblockSequence) ? unblockSequence : "00",
+                    tags,
+                    cancellationToken);
+            }
+            else
+            {
+                host = await api.ChangeOfflinePinAsync(
+                    Guid.NewGuid().ToString(),
+                    pan,
+                    tags.TryGetValue("5F34", out var sequence) ? sequence : "00",
+                    pin!.EncryptedPinBlock,
+                    changeRequest!.PinProfileId,
+                    pin.Ksn,
+                    tags,
+                    cancellationToken);
+            }
+            if (!host.EmvTags.TryGetValue("71", out var scriptValue) ||
+                !host.EmvTags.TryGetValue("91", out var issuerAuthenticationData))
+            {
+                throw new InvalidDataException("The EMV Operations API response did not contain tags 71 and 91.");
+            }
+
+            var scriptTlv = EncodeTlv("71", scriptValue);
+            var scriptResponse = await ExecuteA10CommandAsync(
+                PinpadFrameType.Transaction, "T19", scriptTlv, "T20", false,
+                cancellationToken: cancellationToken);
+            if (!scriptResponse.Payload.StartsWith('0'))
+                throw new PinpadProtocolException($"The terminal rejected the issuer script ({scriptResponse.Payload}).");
+
+            var final = await ExecuteA10CommandAsync(
+                PinpadFrameType.Transaction,
+                "T17",
+                $"1{PinpadControl.Sub}{host.ResponseCode}{PinpadControl.Sub}{EncodeTlv("91", issuerAuthenticationData)}",
+                "T38",
+                readFinalEot: false,
+                responseTimeout: TimeSpan.FromSeconds(120),
+                cancellationToken: cancellationToken);
+            var completion = await ExecuteA10CommandAsync(
+                PinpadFrameType.Transaction,
+                "T21",
+                JoinTags("95", "9B", "9F27", "9F34", "9F26", "9F36"),
+                "T22",
+                false,
+                cancellationToken: cancellationToken);
+            var completionTags = ParseA10TagResponse(completion.Payload);
+
+            // T17 completes the ICC transaction and owns the terminal's sensory/success display.
+            // Q2 is an MSR completion command; sending it here replaces that display with THANK YOU.
+            terminalClosed = true;
+            return new A10OfflinePinChangeResult(
+                final.Payload.StartsWith("0V0", StringComparison.Ordinal)
+                    ? $"Offline PIN {completedAction}"
+                    : $"Offline PIN {(operation == '2' ? "unblock" : "change")} failed ({final.Payload})",
+                initial.Payload,
+                final.Payload,
+                pin?.RawResponse ?? "",
+                host.ResponseCode,
+                host.Field55,
+                completionTags);
+        }
+        finally
+        {
+            if (!terminalClosed)
+            {
+                try
+                {
+                    await ExecuteA10CommandAsync(
+                        PinpadFrameType.Transaction,
+                        "T1C",
+                        "",
+                        expectedResponseCommand: null,
+                        readFinalEot: false,
+                        cancellationToken: CancellationToken.None);
+                }
+                catch
+                {
+                    // Preserve the original operation failure when best-effort terminal cleanup also fails.
+                }
+            }
+        }
+    }
+
+    /// <summary>Runs the self-contained T37 offline-PIN verification operation.</summary>
+    public Task<A10CommandResponse> VerifyA10OfflinePinAsync(CancellationToken cancellationToken = default) =>
+        RunA10OfflinePinManagementAsync('3', cancellationToken);
+
+    /// <summary>
+    /// Starts the T37 offline-PIN unblock operation. A response of 0A1 means that the
+    /// host must provide the issuer's unblock script before the EMV transaction can finish.
+    /// </summary>
+    public Task<A10CommandResponse> StartA10OfflinePinUnblockAsync(CancellationToken cancellationToken = default) =>
+        RunA10OfflinePinManagementAsync('2', cancellationToken);
+
+    /// <summary>Cancels ICC processing, PIN entry, and finally restores the terminal idle state.</summary>
+    public async Task CancelA10PinManagementAsync(CancellationToken cancellationToken = default)
+    {
+        foreach (var command in new[] { "T1C", "72", "Z1" })
+        {
+            await ExecuteA10CommandAsync(
+                PinpadFrameType.Transaction,
+                command,
+                "",
+                expectedResponseCommand: null,
+                readFinalEot: false,
+                cancellationToken: cancellationToken);
+        }
+    }
+
+    private Task<A10CommandResponse> RunA10OfflinePinManagementAsync(
+        char operation,
+        CancellationToken cancellationToken) =>
+        ExecuteA10CommandAsync(
+            PinpadFrameType.Transaction,
+            "T37",
+            PinpadControl.Sub + operation.ToString(),
+            "T38",
+            readFinalEot: false,
+            responseTimeout: TimeSpan.FromSeconds(120),
+            cancellationToken: cancellationToken);
 
     public async Task<A10SmartCardResponse> CheckA10SmartCardAsync(CancellationToken cancellationToken = default) =>
         ParseSmartCardResponse(await ExecuteA10CommandAsync(
@@ -660,6 +946,9 @@ public sealed partial class PinpadClient
         var cashback = contactless && request.CashbackAmount == 0
             ? "FFFFFFFFFFFF"
             : ToMinorUnits(request.CashbackAmount);
+        var sessionKey = request.OnlinePinKeyScheme == A10PinKeyScheme.MasterSession
+            ? NormalizeOptionalSessionKey(request.EncryptedSessionKey)
+            : "";
         return string.Join(
             PinpadControl.Sub,
             "",
@@ -670,7 +959,8 @@ public sealed partial class PinpadClient
             request.TransactionInformation,
             request.AccountType,
             request.ForceOnline ? "1" : "0",
-            "");
+            sessionKey,
+            request.OnlinePinKeyScheme == A10PinKeyScheme.Dukpt ? "1" : "0");
     }
 
     private static string BuildHostResponse(A10HostDecision decision) => decision switch
@@ -701,6 +991,10 @@ public sealed partial class PinpadClient
             if (value.Length != 2 || !value.All(Uri.IsHexDigit))
                 throw new ArgumentException("Transaction and account codes must contain two hexadecimal characters.");
         }
+        if (!Enum.IsDefined(request.OnlinePinKeyScheme))
+            throw new ArgumentOutOfRangeException(nameof(request.OnlinePinKeyScheme));
+        if (request.OnlinePinKeyScheme == A10PinKeyScheme.MasterSession)
+            _ = NormalizeOptionalSessionKey(request.EncryptedSessionKey);
     }
 
     private static bool IsOnlineRequest(string payload) => payload.StartsWith("0A1", StringComparison.Ordinal);
@@ -730,6 +1024,54 @@ public sealed partial class PinpadClient
                 result[fields[0]] = fields[2];
         }
         return result;
+    }
+
+    private static Dictionary<string, string> ParseBerTlv(string hexadecimal)
+    {
+        var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var data = Convert.FromHexString(string.Concat(hexadecimal.Where(character => !char.IsWhiteSpace(character))));
+        var offset = 0;
+        while (offset < data.Length)
+        {
+            var tagStart = offset++;
+            if ((data[tagStart] & 0x1F) == 0x1F)
+            {
+                while (offset < data.Length && (data[offset++] & 0x80) != 0) { }
+            }
+            var tagEnd = offset;
+            if (offset >= data.Length) throw new InvalidDataException("The terminal returned malformed EMV TLV data.");
+            var length = (int)data[offset++];
+            if ((length & 0x80) != 0)
+            {
+                var count = length & 0x7F;
+                if (count is < 1 or > 2 || offset + count > data.Length) throw new InvalidDataException("The terminal returned an unsupported EMV length.");
+                length = 0;
+                for (var index = 0; index < count; index++) length = (length << 8) | data[offset++];
+            }
+            if (offset + length > data.Length) throw new InvalidDataException("The terminal returned truncated EMV TLV data.");
+            result[Convert.ToHexString(data[tagStart..tagEnd])] = Convert.ToHexString(data.AsSpan(offset, length));
+            offset += length;
+        }
+        return result;
+    }
+
+    private static string ExtractPan(IReadOnlyDictionary<string, string> tags)
+    {
+        var pan = tags.TryGetValue("5A", out var tag5A)
+            ? tag5A.TrimEnd('F')
+            : tags.TryGetValue("57", out var tag57)
+                ? tag57.Split('D', 2)[0].TrimEnd('F')
+                : "";
+        if (pan.Length is < 13 or > 19 || !pan.All(char.IsDigit))
+            throw new InvalidDataException("The terminal did not return a valid PAN in tag 5A or 57.");
+        return pan;
+    }
+
+    private static string EncodeTlv(string tag, string value)
+    {
+        var bytes = value.Length / 2;
+        var length = bytes < 0x80 ? bytes.ToString("X2") : "81" + bytes.ToString("X2");
+        return tag + length + value;
     }
 
     private static A10SmartCardResponse ParseSmartCardResponse(A10CommandResponse response)
@@ -769,6 +1111,19 @@ public sealed partial class PinpadClient
         var normalized = string.Concat(value.Where(ch => !char.IsWhiteSpace(ch))).ToUpperInvariant();
         if (normalized.Length is not (16 or 32) || !normalized.All(Uri.IsHexDigit))
             throw new ArgumentException("Secret keys must contain 16 or 32 hexadecimal characters.", parameterName);
+        return normalized;
+    }
+
+    private static string NormalizeOptionalSessionKey(string value)
+    {
+        var normalized = string.Concat((value ?? "").Where(ch => !char.IsWhiteSpace(ch))).ToUpperInvariant();
+        if (normalized.Length != 0 &&
+            (normalized.Length is not (16 or 32 or 48) || !normalized.All(Uri.IsHexDigit)))
+        {
+            throw new ArgumentException(
+                "The encrypted session PIN key must be empty or contain 16, 32, or 48 hexadecimal characters.",
+                nameof(value));
+        }
         return normalized;
     }
 

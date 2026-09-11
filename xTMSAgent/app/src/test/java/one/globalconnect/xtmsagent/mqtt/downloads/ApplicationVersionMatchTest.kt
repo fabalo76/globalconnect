@@ -11,9 +11,21 @@ class ApplicationVersionMatchTest {
     }
 
     @Test
-    fun `different version does not skip the download`() {
+    fun `newer installed version does not satisfy a downgrade request`() {
         assertFalse(isSameApplicationVersion(installedVersionCode = 59, requestedVersionCode = 58))
+    }
+
+    @Test
+    fun `older installed version does not satisfy an upgrade request`() {
         assertFalse(isSameApplicationVersion(installedVersionCode = 57, requestedVersionCode = 58))
+    }
+
+    @Test
+    fun `lower requested version selects the privileged rollback path`() {
+        assertTrue(isApplicationDowngrade(installedVersionCode = 60, requestedVersionCode = 58))
+        assertFalse(isApplicationDowngrade(installedVersionCode = 58, requestedVersionCode = 58))
+        assertFalse(isApplicationDowngrade(installedVersionCode = 57, requestedVersionCode = 58))
+        assertFalse(isApplicationDowngrade(installedVersionCode = null, requestedVersionCode = 58))
     }
 
     @Test

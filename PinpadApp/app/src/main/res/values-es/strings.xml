@@ -5,7 +5,8 @@
     <string name="keyload_authentication_invalid">Contraseña incorrecta. Quedan %1$d intento(s).</string>
     <string name="keyload_authentication_cooldown">La carga de llaves está bloqueada. Intente de nuevo en %1$d segundos.</string>
     <string name="keyload_authentication_confirm">Aceptar</string>
-    <string name="key_injection_mode_active">Modo de inyección de llaves\nAutorizado para comandos de llave en claro.\nPresione CANCELAR para salir.</string>
+    <string name="key_injection_mode_active">Modo de inyección de llaves activo</string>
+    <string name="key_injection_mode_hint">Llaves en claro habilitadas • Presione CANCELAR para salir</string>
     <string name="app_name">PINPAD</string>
     <string name="license_required_title">Se requiere autorizacion de PINPAD</string>
     <string name="license_required_message">Conecte el dispositivo al TMS para registrar esta aplicacion.</string>
@@ -24,6 +25,15 @@
     <string name="transaction_type_refund">DEVOLUCION</string>
     <string name="transaction_type_generic">TIPO %1$s</string>
     <string name="prompt_enter_pin">INGRESE PIN</string>
+    <string name="prompt_enter_pin_icc">INGRESE PIN (ICC)</string>
+    <string name="prompt_enter_new_pin">INGRESE NUEVO PIN</string>
+    <string name="prompt_confirm_new_pin">CONFIRME NUEVO PIN</string>
+    <string name="prompt_pin_mismatch">LA CONFIRMACION DEL PIN NO COINCIDE</string>
+    <string name="prompt_pin_entry_error">ERROR AL INGRESAR PIN</string>
+    <plurals name="prompt_offline_pin_incorrect_with_tries">
+        <item quantity="one">PIN INCORRECTO\nQUEDA %1$d INTENTO</item>
+        <item quantity="other">PIN INCORRECTO\nQUEDAN %1$d INTENTOS</item>
+    </plurals>
     <string name="prompt_enter_data">INGRESE DATOS</string>
     <string name="prompt_select_application">SELECCIONE APLICACION</string>
     <string name="prompt_selecting_application">Seleccionando App\n%1$s</string>
@@ -36,8 +46,10 @@
     <string name="prompt_pin_key_scheme_error">ESQUEMA DE CLAVE PIN INCORRECTO EN MK ACTIVA %1$s</string>
     <string name="prompt_key_metadata_missing">FALTA METADATA DE CLAVE PARA MK ACTIVA %1$s</string>
     <string name="prompt_thank_you">GRACIAS</string>
-    <string name="setup_title">Configuración de comunicación</string>
-    <string name="setup_hint">Configure USB Serial, RS232 o IP. Guardar reinicia el servicio de comunicación con los valores seleccionados.</string>
+    <string name="prompt_pin_changed_successfully">PIN CAMBIADO EXITOSAMENTE</string>
+    <string name="prompt_pin_unblocked_successfully">PIN DESBLOQUEADO EXITOSAMENTE</string>
+    <string name="setup_title">Config. comunicación</string>
+    <string name="setup_hint">Configure USB Serial, RS232 o IP.</string>
     <string name="setup_transport">Comunicación</string>
     <string name="setup_usb_serial">USB Serial</string>
     <string name="setup_ip">IP (Wi-Fi/Ethernet)</string>
@@ -52,7 +64,7 @@
     <string name="setup_close">Cerrar</string>
     <string name="settings_menu_title">Configuracion</string>
     <string name="settings_menu_hint">Seleccione una opcion de configuracion.</string>
-    <string name="settings_serial_settings">Configuración de comunicación</string>
+    <string name="settings_serial_settings">Config. comunicación</string>
     <string name="settings_android_settings">Configuracion Android</string>
     <string name="settings_wifi_settings">Configuracion Wi-Fi</string>
     <string name="settings_cloud_update">Actualización desde la nube</string>

@@ -16,11 +16,19 @@ object EntryModeMapper {
      *
      * @param transLog transaction data containing the card capture method.
      * @param onlinePinCap whether terminal-level online PIN capability is enabled.
-     * @return the four-character POS entry mode used by the ISSwitch host protocol.
+     * @param offlineEncrPinCap whether encrypted offline PIN capability is enabled.
+     * @param offlineClearPinCap whether clear-text offline PIN capability is enabled.
+     * @return the three-character POS entry mode used by the ISSwitch host protocol.
      */
-    fun from(transLog: TransLog, onlinePinCap: Boolean): String {
-        val entryMode = CharArray(4) { '0' }
-        entryMode[3] = if (onlinePinCap) '1' else '2'
+    fun from(
+        transLog: TransLog,
+        onlinePinCap: Boolean,
+        offlineEncrPinCap: Boolean,
+        offlineClearPinCap: Boolean,
+    ): String {
+        val entryMode = CharArray(3) { '0' }
+        val pinCapable = onlinePinCap || offlineEncrPinCap || offlineClearPinCap
+        entryMode[2] = if (pinCapable) '1' else '2'
         val source = (transLog.CardDataSource.ifBlank { transLog.TxnInterface ?: "" })
             .trim()
             .uppercase()
@@ -29,24 +37,24 @@ object EntryModeMapper {
 
         when {
             "CTLS" in source || "CONTACTLESS" in source -> {
-                entryMode[1] = '0'
-                entryMode[2] = '7'
+                entryMode[0] = '0'
+                entryMode[1] = '7'
             }
             "CHIP" in source || "ICC" in source -> {
-                entryMode[1] = '0'
-                entryMode[2] = '5'
+                entryMode[0] = '0'
+                entryMode[1] = '5'
             }
             "SWIPE" in source || "MAG" in source || source == "02" -> {
-                entryMode[1] = '0'
-                entryMode[2] = '2'
+                entryMode[0] = '0'
+                entryMode[1] = '2'
             }
             "MANUAL" in source || source == "01" -> {
-                entryMode[1] = '0'
-                entryMode[2] = '1'
+                entryMode[0] = '0'
+                entryMode[1] = '1'
             }
             else -> {
+                entryMode[0] = '0'
                 entryMode[1] = '0'
-                entryMode[2] = '0'
             }
         }
 

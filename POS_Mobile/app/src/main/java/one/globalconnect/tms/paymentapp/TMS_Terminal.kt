@@ -14,6 +14,8 @@ data class TMS_Terminal(
     var enablePayment: Boolean = false,
     var enableRefund: Boolean = false,
     var enableLoyalty: Boolean = false,
+    var sendAppVersion: Boolean = false,
+    var ctlsLoyaltyEnabled: Boolean = false,
     var enableInstallments: Boolean = false,
     var enableCheckInOut: Boolean = false,
     var tax1Enabled: Boolean = false,
@@ -34,6 +36,12 @@ data class TMS_Terminal(
     var noCVMCap: Boolean = true,
     var offlineEncrPinCap: Boolean = true,
     var offlineClearPinCap: Boolean = true,
+    var enableOfflinePinChange: Boolean = false,
+    var enableOfflinePinUnblock: Boolean = false,
+    var checkInType: String = DEFAULT_CHECK_IN_TYPE,
+    var autoFolio: Boolean = false,
+    var folioInputMode: String = DEFAULT_FOLIO_INPUT_MODE,
+    var allowCheckinManualDataEntry: Boolean = false,
     var tranReportingMethod: String = "",
     var tranReportingBatchSize: Double = 0.0,
     var tranReportingIntervalSeconds: Double = 0.0,
@@ -59,7 +67,8 @@ data class TMS_Terminal(
     val CAPKKEyConfig: String get() = capkMode
     val IsBCDLength: Boolean get() = false
     val password: Long get() = bankPassword.toLongOrNull() ?: 0L
-    val AutoFolio: Boolean get() = false
+    @get:JvmName("getLegacyAutoFolio")
+    val AutoFolio: Boolean get() = autoFolio
     val MerchantTitle1: String get() = headerLine1
     val MerchantTitle2: String get() = headerLine2
     val MerchantTitle3: String get() = headerLine3
@@ -93,6 +102,8 @@ data class TMS_Terminal(
                 enablePayment = TMS_Json.readBoolean(json, "enablePayment"),
                 enableRefund = TMS_Json.readBoolean(json, "enableRefund"),
                 enableLoyalty = TMS_Json.readBoolean(json, "enableLoyalty"),
+                sendAppVersion = TMS_Json.readBoolean(json, "sendAppVersion"),
+                ctlsLoyaltyEnabled = TMS_Json.readBoolean(json, "ctlsLoyaltyEnabled"),
                 enableInstallments = TMS_Json.readBoolean(json, "enableInstallments"),
                 enableCheckInOut = TMS_Json.readBoolean(json, "enableCheckInOut"),
                 tax1Enabled = TMS_Json.readBoolean(json, "tax1Enabled"),
@@ -113,6 +124,12 @@ data class TMS_Terminal(
                 noCVMCap = readCapabilityFlag(json, "noCVMCap", "noCVMPinCap"),
                 offlineEncrPinCap = readCapabilityFlag(json, "offlineEncrPinCap", "offlineEncPinCap"),
                 offlineClearPinCap = TMS_Json.readBinaryFlagDefault(json, "offlineClearPinCap", 1) == 1,
+                enableOfflinePinChange = TMS_Json.readBoolean(json, "enableOfflinePinChange"),
+                enableOfflinePinUnblock = TMS_Json.readBoolean(json, "enableOfflinePinUnblock"),
+                checkInType = TMS_Json.readString(json, "checkInType").ifBlank { DEFAULT_CHECK_IN_TYPE },
+                autoFolio = TMS_Json.readBoolean(json, "autoFolio"),
+                folioInputMode = TMS_Json.readString(json, "folioInputMode").ifBlank { DEFAULT_FOLIO_INPUT_MODE },
+                allowCheckinManualDataEntry = TMS_Json.readBoolean(json, "allowCheckinManualDataEntry"),
                 tranReportingMethod = TMS_Json.readString(json, "tranReportingMethod"),
                 tranReportingBatchSize = TMS_Json.readDouble(json, "tranReportingBatchSize"),
                 tranReportingIntervalSeconds = TMS_Json.readDouble(json, "tranReportingIntervalSeconds"),
@@ -150,5 +167,8 @@ data class TMS_Terminal(
             val name = if (json.has(canonicalName)) canonicalName else alias
             return TMS_Json.readBinaryFlagDefault(json, name, 1) == 1
         }
+
+        private const val DEFAULT_CHECK_IN_TYPE = "01"
+        private const val DEFAULT_FOLIO_INPUT_MODE = "numeric"
     }
 }

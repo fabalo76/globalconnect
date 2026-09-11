@@ -40,6 +40,7 @@ object TMSFunc {
         // HTTP(S) file download (replaces FTPS) — provisioned via Launcher_Config.JSON
         var web_port_ssl:Boolean = true,
         var web_port:Int = 44388,
+        var download_credential_id:String = "",
         var download_secret:String = "",
     ) {
         val webScheme: String get() = if (web_port_ssl) "https" else "http"
@@ -114,6 +115,11 @@ object TMSFunc {
         data.tms.conn_timeout = data.tms.conn_timeout.coerceIn(1, 300)
         data.tms.resp_timeout = data.tms.resp_timeout.coerceIn(1, 600)
         data.tms.attempt_counter = data.tms.attempt_counter.coerceIn(1, 20)
+        data.tms.download_credential_id = data.tms.download_credential_id.trim()
+        if (data.tms.download_secret.isBlank() && BuildConfig.DOWNLOAD_CREDENTIAL_SECRET.isNotBlank()) {
+            data.tms.download_credential_id = BuildConfig.DOWNLOAD_CREDENTIAL_ID
+            data.tms.download_secret = BuildConfig.DOWNLOAD_CREDENTIAL_SECRET
+        }
         data.tms.sn = serialNumber.trim()
         data.mqtt.mqtt_port = normalizePort(data.mqtt.mqtt_port, 8883)
         data.mqtt.keepalive = data.mqtt.keepalive.coerceIn(30, 3600)
@@ -131,5 +137,22 @@ object TMSFunc {
         val candidate = value?.trim().orEmpty()
         val prefixed = if (candidate.startsWith('#')) candidate else "#$candidate"
         return if (prefixed.matches(Regex("#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?"))) prefixed else fallback
+    }
+
+    @Synchronized
+    fun updateDownloadCredential(id: String, secret: String) {
+        if (id.isBlank() || secret.isBlank()) return
+        tmsCfg.download_credential_id = id.trim()
+        tmsCfg.download_secret = secret.trim()
+        val target = File(MainActivity.vg_sXtmsParam).takeIf { it.isFile }
+            ?: File("$vg_sIntrenalPath/cfg/Launcher_Config.JSON")
+        if (!target.isFile) return
+        runCatching {
+            val current = Gson().fromJson(target.readText(), cfg::class.java) ?: return@runCatching
+            current.tms.download_credential_id = tmsCfg.download_credential_id
+            current.tms.download_secret = tmsCfg.download_secret
+            target.writeText(Gson().toJson(current))
+            cfgLastModify = target.lastModified()
+        }.onFailure { Log.e(TAG, "Could not persist rotated download credential", it) }
     }
 }

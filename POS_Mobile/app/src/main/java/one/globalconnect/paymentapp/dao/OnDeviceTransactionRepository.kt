@@ -32,6 +32,15 @@ class OnDeviceTransactionRepository(private val transactionDao: TransactionDao):
         transactionDao.delete(*transactions)
     }
 
+    /**
+     * Deletes every transaction in the active terminal batch on the database dispatcher.
+     *
+     * @return the number of transaction rows removed.
+     */
+    override suspend fun deleteAllTransactions(): Int = withContext(Dispatchers.IO) {
+        transactionDao.deleteAllTransactions()
+    }
+
     override suspend fun update(vararg transactions: Transaction) {
         transactionDao.update(*transactions)
     }
@@ -139,7 +148,20 @@ class OnDeviceTransactionRepository(private val transactionDao: TransactionDao):
         transactionDao.deleteReversal(reversal)
     }
 
+    /**
+     * Deletes every queued reversal on the database dispatcher.
+     *
+     * @return the number of pending reversal rows removed.
+     */
+    override suspend fun deleteAllPendingReversals(): Int = withContext(Dispatchers.IO) {
+        transactionDao.deleteAllPendingReversals()
+    }
+
     override suspend fun getPendingReversals(acquirerId: String): List<PendingReversal> = withContext(Dispatchers.IO) {
         transactionDao.getPendingReversals(acquirerId)
+    }
+
+    override suspend fun getAllPendingReversals(): List<PendingReversal> = withContext(Dispatchers.IO) {
+        transactionDao.getAllPendingReversals()
     }
 }

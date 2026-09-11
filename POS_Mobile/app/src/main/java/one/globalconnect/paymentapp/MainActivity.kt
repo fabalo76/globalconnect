@@ -78,13 +78,18 @@ import one.globalconnect.paymentapp.navigation.AMOUNT_KEY
 import one.globalconnect.paymentapp.navigation.CHECK_IN_ID_KEY
 import one.globalconnect.paymentapp.navigation.FOLIO_KEY
 import one.globalconnect.paymentapp.navigation.NavigationManager
+import one.globalconnect.paymentapp.navigation.HotelHomeScreen
+import one.globalconnect.paymentapp.navigation.shouldUseHotelHome
 import one.globalconnect.paymentapp.navigation.ORIGINAL_TRANSACTION_ID_KEY
 import one.globalconnect.paymentapp.navigation.dst_Batch
 import one.globalconnect.paymentapp.navigation.dst_Sale
+import one.globalconnect.paymentapp.navigation.dst_SaleTransaction
 import one.globalconnect.paymentapp.navigation.dst_CardTransaction
 import one.globalconnect.paymentapp.navigation.DESTINATION_KEY
 import one.globalconnect.paymentapp.navigation.dst_CheckIn
 import one.globalconnect.paymentapp.navigation.dst_CheckInReport
+import one.globalconnect.paymentapp.navigation.dst_OpenCheckIns
+import one.globalconnect.paymentapp.navigation.dst_IncrementalCheckIn
 import one.globalconnect.paymentapp.navigation.dst_CheckOut
 import one.globalconnect.paymentapp.navigation.dst_EditTransaction
 import one.globalconnect.paymentapp.navigation.dst_EndOfDay
@@ -111,8 +116,10 @@ import one.globalconnect.paymentapp.navigation.dst_CardReaderTest
 import one.globalconnect.paymentapp.navigation.dst_ApplicationInfo
 import one.globalconnect.paymentapp.navigation.dst_EchoTest
 import one.globalconnect.paymentapp.navigation.dst_TerminalCounters
+import one.globalconnect.paymentapp.navigation.dst_AudioTest
 import one.globalconnect.paymentapp.navigation.dst_ExtrasSale
 import one.globalconnect.paymentapp.navigation.dst_LoyaltySale
+import one.globalconnect.paymentapp.navigation.dst_LoyaltyBalance
 import one.globalconnect.paymentapp.navigation.dst_Payment
 import one.globalconnect.paymentapp.navigation.dst_QuotaSale
 import one.globalconnect.paymentapp.navigation.dst_ReportAudit
@@ -132,6 +139,7 @@ import one.globalconnect.paymentapp.signature.SignatureScreen
 import one.globalconnect.paymentapp.transaction.AmountPromptConfig
 import one.globalconnect.paymentapp.transaction.ONSCREEN
 import one.globalconnect.paymentapp.transaction.HostProcessingStateMachine
+import one.globalconnect.paymentapp.transaction.OfflinePinChangeContract
 import one.globalconnect.paymentapp.transaction.ProcessingStatusStrings
 import one.globalconnect.paymentapp.transaction.SaleScreen
 import one.globalconnect.paymentapp.transaction.TipScreen
@@ -145,6 +153,7 @@ import one.globalconnect.paymentapp.settlement.SettlementCoordinator
 import one.globalconnect.paymentapp.settlement.SettlementProcessingDialog
 import one.globalconnect.paymentapp.settlement.SettlementResult
 import one.globalconnect.paymentapp.transaction.SettlementProcessingState
+import one.globalconnect.paymentapp.transaction.BatchUploadProgress
 import one.globalconnect.paymentapp.transaction.SettlementResultsUiState
 import one.globalconnect.paymentapp.uicpos.pos.host.formatHostErrorMessage
 import one.globalconnect.paymentapp.uicpos.pos.model.SignatureMode
@@ -293,13 +302,6 @@ class MainActivity : ComponentActivity() {
                             }
 
                             appContent()
-                        }
-
-                        settlementState?.let { state ->
-                            SettlementProcessingDialog(
-                                state = state,
-                                onDismiss = { settlementState = null },
-                            )
                         }
 
                     }
@@ -946,7 +948,23 @@ fun UICApp(
                 )
         ) {
                 composable(route = dst_Sale.route) {
-                    dst_Sale.screen { transactionType, baseAmount, tax1Amount, tax2Amount, tipAmount, _ ->
+                    if (shouldUseHotelHome(tmsDatabase)) {
+                        HotelHomeScreen(
+                            onDestinationSelected = navigationManager::onHotelHomeDestinationSelected,
+                        )
+                    } else {
+                        dst_Sale.screen { transactionType, baseAmount, tax1Amount, tax2Amount, tipAmount, _ ->
+                            if (SysParam.getInstance().transactionMode == TransactionMode.Cafe) {
+                                navController.navigate("TipScreen?$TRANSACTION_TYPE_KEY=$transactionType&" +
+                                        "$AMOUNT_KEY=$baseAmount")
+                            } else {
+                                navController.navigate("CardTransaction/$transactionType/$baseAmount/?$TAX1_KEY=$tax1Amount&$TAX2_KEY=$tax2Amount&$TIP_KEY=$tipAmount&$FOLIO_KEY=&$CHECK_IN_ID_KEY=&$ORIGINAL_TRANSACTION_ID_KEY=")
+                            }
+                        }
+                    }
+                }
+                composable(route = dst_SaleTransaction.route) {
+                    dst_SaleTransaction.screen { transactionType, baseAmount, tax1Amount, tax2Amount, tipAmount, _ ->
                         if (SysParam.getInstance().transactionMode == TransactionMode.Cafe) {
                             navController.navigate("TipScreen?$TRANSACTION_TYPE_KEY=$transactionType&" +
                                     "$AMOUNT_KEY=$baseAmount")
@@ -986,18 +1004,36 @@ fun UICApp(
                     dst_NewTransaction.screen(navigationManager::onDestinationSelected)
                 }
                 composable(route = dst_CheckIn.route) {
-                    dst_CheckIn.screen { transactionType, baseAmount, tax1Amount, tax2Amount, tipAmount, folio ->
-                        navController.navigate(
-                            "CardTransaction/$transactionType/$baseAmount/?$TAX1_KEY=$tax1Amount&$TAX2_KEY=$tax2Amount&$TIP_KEY=$tipAmount&$FOLIO_KEY=$folio&$CHECK_IN_ID_KEY=&$ORIGINAL_TRANSACTION_ID_KEY="
-                        )
-                    }
+                    dst_CheckIn.screen(
+                        { transactionType, baseAmount, tax1Amount, tax2Amount, tipAmount, folio ->
+                            navController.navigate(
+                                "CardTransaction/$transactionType/$baseAmount/?$TAX1_KEY=$tax1Amount&$TAX2_KEY=$tax2Amount&$TIP_KEY=$tipAmount&$FOLIO_KEY=$folio&$CHECK_IN_ID_KEY=&$ORIGINAL_TRANSACTION_ID_KEY="
+                            )
+                        },
+                        { navController.popBackStack() },
+                    )
                 }
-                composable(route = dst_CheckOut.route) {
-                    dst_CheckOut.screen { transactionType, baseAmount, tax1Amount, tax2Amount, tipAmount, folio, checkInId, originalTransactionId ->
-                        navController.navigate(
-                            "CardTransaction/$transactionType/$baseAmount/?$TAX1_KEY=$tax1Amount&$TAX2_KEY=$tax2Amount&$TIP_KEY=$tipAmount&$FOLIO_KEY=$folio&$CHECK_IN_ID_KEY=$checkInId&$ORIGINAL_TRANSACTION_ID_KEY=$originalTransactionId"
-                        )
-                    }
+                composable(
+                    route = "${dst_CheckOut.route}?$CHECK_IN_ID_KEY={$CHECK_IN_ID_KEY}",
+                    arguments = listOf(
+                        navArgument(CHECK_IN_ID_KEY) {
+                            type = NavType.IntType
+                            defaultValue = -1
+                        },
+                    ),
+                ) { backStackEntry ->
+                    val selectedCheckInId = backStackEntry.arguments
+                        ?.getInt(CHECK_IN_ID_KEY)
+                        ?.takeIf { it >= 0 }
+                    dst_CheckOut.screen(
+                        selectedCheckInId,
+                        { transactionType, baseAmount, tax1Amount, tax2Amount, tipAmount, folio, checkInId, originalTransactionId ->
+                            navController.navigate(
+                                "CardTransaction/$transactionType/$baseAmount/?$TAX1_KEY=$tax1Amount&$TAX2_KEY=$tax2Amount&$TIP_KEY=$tipAmount&$FOLIO_KEY=$folio&$CHECK_IN_ID_KEY=$checkInId&$ORIGINAL_TRANSACTION_ID_KEY=$originalTransactionId"
+                            )
+                        },
+                        { navController.popBackStack() },
+                    )
                 }
                 composable(route = dst_CardReaderTest.route) {
                     dst_CardReaderTest.screen()
@@ -1052,7 +1088,7 @@ fun UICApp(
                 composable(route = dst_CheckInReport.route) {
                     dst_CheckInReport.screen(
                         { navController.popBackStack() },
-                        { navigationManager.onDestinationSelected(dst_CheckOut) }
+                        { transaction -> navigationManager.onCheckOutSelected(transaction.id) }
                     )
                 }
                 composable(route = dst_ReportTotals.route) {
@@ -1064,6 +1100,30 @@ fun UICApp(
                     dst_ReportAudit.screen {
                         navController.popBackStack()
                     }
+                }
+                composable(route = dst_AudioTest.route) {
+                    dst_AudioTest.screen { navController.popBackStack() }
+                }
+                composable(route = dst_LoyaltyBalance.route) {
+                    LaunchedEffect(Unit) {
+                        navController.navigate(
+                            "CardTransaction/${TransactionType.LOYALTY_BALANCE.toTransactionString()}/0.00/?$TAX1_KEY=0.00&$TAX2_KEY=0.00&$TIP_KEY=0.00&$FOLIO_KEY=&$CHECK_IN_ID_KEY=&$ORIGINAL_TRANSACTION_ID_KEY="
+                        ) {
+                            popUpTo(dst_LoyaltyBalance.route) { inclusive = true }
+                        }
+                    }
+                }
+                composable(route = dst_OpenCheckIns.route) {
+                    dst_OpenCheckIns.screen(
+                        { navController.popBackStack() },
+                        { transaction -> navigationManager.onCheckOutSelected(transaction.id) },
+                    )
+                }
+                composable(route = dst_IncrementalCheckIn.route) {
+                    dst_IncrementalCheckIn.screen(
+                        { navController.popBackStack() },
+                        { transaction -> navigationManager.onCheckOutSelected(transaction.id) },
+                    )
                 }
                 composable(route = dst_ReportReprintLast.route) {
                     dst_ReportReprintLast.screen {
@@ -1186,6 +1246,16 @@ fun UICApp(
                                                 onSettlementProcessingStateChanged(updatedState)
                                             }
                                         },
+                                        onBatchUploadProgress = { current, total ->
+                                            coroutineScope.launch {
+                                                val currentState = localSettlementState ?: return@launch
+                                                val updatedState = currentState.copy(
+                                                    batchUploadProgress = BatchUploadProgress(current, total),
+                                                )
+                                                localSettlementState = updatedState
+                                                onSettlementProcessingStateChanged(updatedState)
+                                            }
+                                        },
                                         onTargetResult = { message, success ->
                                             coroutineScope.launch {
                                                 val machine = settlementProcessingMachine ?: return@launch
@@ -1201,7 +1271,10 @@ fun UICApp(
                                                     )
                                                     return@launch
                                                 }
-                                                val updatedState = current.copy(processingStatus = updated)
+                                                val updatedState = current.copy(
+                                                    processingStatus = updated,
+                                                    batchUploadProgress = null,
+                                                )
                                                 localSettlementState = updatedState
                                                 onSettlementProcessingStateChanged(updatedState)
                                             }
@@ -1215,6 +1288,7 @@ fun UICApp(
                                                 }
                                                 val updatedState = current.copy(
                                                     processingStatus = machine.onFailure(message),
+                                                    batchUploadProgress = null,
                                                     results = SettlementResultsUiState.Message(message),
                                                 )
                                                 localSettlementState = updatedState
@@ -1327,9 +1401,13 @@ fun UICApp(
                     )
                 ) {
                     dst_CardTransaction.screen(
-                        { transactionId, isRefund ->
+                        { transactionId, transactionType ->
+                            val navigateDirectlyToResult =
+                                transactionType == TransactionType.REFUND ||
+                                    transactionType == TransactionType.LOYALTY_BALANCE ||
+                                    OfflinePinChangeContract.isPinMaintenance(transactionType)
                             val postPaymentRoute =
-                                if (isRefund) {
+                                if (navigateDirectlyToResult) {
                                     "TransactionFinished/$transactionId"
                                 } else if (SysParam.getInstance().transactionMode == TransactionMode.Restaurant && SysParam.getInstance().TipMethod == ONSCREEN) {
                                     "TipScreen?$TRANSACTION_ID_KEY=$transactionId"
@@ -1345,7 +1423,10 @@ fun UICApp(
                             }
                         }
                     ) {
-                        navController.popBackStack()
+                        // Replace the pending sale with a fresh destination after cancellation.
+                        // The outgoing sale intentionally retains its confirmed amount so it
+                        // cannot flash the zero-amount keypad while CardTransaction starts.
+                        navigationManager.onDestinationSelected(dst_Sale)
                     }
                 }
                 composable(
@@ -1446,6 +1527,17 @@ fun UICApp(
                     )
                 }
             }
+        }
+
+        settlementProcessingState?.let { state ->
+            SettlementProcessingDialog(
+                state = state,
+                onDismiss = {
+                    localSettlementState = null
+                    onSettlementProcessingStateChanged(null)
+                    navigationManager.onDestinationSelected(dst_Sale)
+                },
+            )
         }
     }
 

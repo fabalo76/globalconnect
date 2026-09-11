@@ -63,6 +63,9 @@ class PixiePinEntryActivity : ComponentActivity() {
     private var isOnlinePin: Boolean = false
     private var pinScheme: OnlinePinScheme = OnlinePinScheme.DUKPT
     private var compatibleAcquirerIds: Set<String> = emptySet()
+    private var entryPurpose: SecurePinEntryPurpose = SecurePinEntryPurpose.EMV_CVM
+    private var resultRequestId: String = ""
+    private var manualResultDelivered: Boolean = false
 
     private val maskBuilder = StringBuilder()
 
@@ -132,8 +135,13 @@ class PixiePinEntryActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        if (isManualPinChange() && !manualResultDelivered) {
+            deliverManualResult(SecurePinEntryResult(SecurePinEntryStatus.CANCELED))
+        }
         super.onDestroy()
-        NexgoApi.pinEntryDone = true
+        if (!isManualPinChange()) {
+            NexgoApi.pinEntryDone = true
+        }
     }
 
     private fun configurePinPad() {
@@ -165,17 +173,30 @@ class PixiePinEntryActivity : ComponentActivity() {
             compatibleAcquirerIds = bundle.getStringArrayList(EXTRA_COMPATIBLE_ACQUIRERS)
                 ?.toSet()
                 .orEmpty()
+            entryPurpose = bundle.getString(EXTRA_PIN_ENTRY_PURPOSE)
+                ?.let { runCatching { SecurePinEntryPurpose.valueOf(it) }.getOrNull() }
+                ?: SecurePinEntryPurpose.EMV_CVM
+            resultRequestId = bundle.getString(EXTRA_RESULT_REQUEST_ID).orEmpty()
         }
-        titleText = if (isOnlinePin) {
-            getString(R.string.pin_entry_online)
-        } else {
-            getString(R.string.pin_entry_offline)
+        if (isManualPinChange()) {
+            isOnlinePin = true
+        }
+        titleText = when (entryPurpose) {
+            SecurePinEntryPurpose.NEW_PIN -> getString(R.string.pin_change_enter_new_pin)
+            SecurePinEntryPurpose.CONFIRM_NEW_PIN -> getString(R.string.pin_change_confirm_new_pin)
+            SecurePinEntryPurpose.EMV_CVM -> if (isOnlinePin) {
+                getString(R.string.pin_entry_online)
+            } else {
+                getString(R.string.pin_entry_offline)
+            }
         }
     }
 
+    /** Resets either the EMV PIN result or the isolated manual-entry display state. */
     private fun prepareForPinEntry() {
         maskBuilder.clear()
         pinMaskText = ""
+        if (isManualPinChange()) return
         NexgoApi.pinData.clear()
         NexgoApi.pinData.onlinePinRequested = isOnlinePin
         NexgoApi.pinData.scheme = pinScheme
@@ -218,6 +239,17 @@ class PixiePinEntryActivity : ComponentActivity() {
                             failPinEntry(retCode = retCode)
                             return@runOnUiThread
                         }
+                        if (isManualPinChange()) {
+                            deliverManualResult(
+                                SecurePinEntryResult(
+                                    status = SecurePinEntryStatus.ENTERED,
+                                    pinBlock = pinBlock,
+                                    ksn = ksn,
+                                ),
+                            )
+                            finish()
+                            return@runOnUiThread
+                        }
                         NexgoApi.pinData.status = PinStatus.ENTERED
                         NexgoApi.pinData.pinBlock = pinBlock
                         NexgoApi.pinData.ksn = ksn
@@ -228,11 +260,26 @@ class PixiePinEntryActivity : ComponentActivity() {
                     NexgoApi.emvHandler?.onSetPinInputResponse(true, false)
                 }
                 SdkResult.PinPad_No_Pin_Input -> {
+                    if (isManualPinChange()) {
+                        deliverManualResult(SecurePinEntryResult(SecurePinEntryStatus.BYPASSED))
+                        finish()
+                        return@runOnUiThread
+                    }
                     NexgoApi.pinData.status = PinStatus.BYPASSED
                     NexgoApi.pinData.pinBlock = data?.let { ByteUtils.byteArray2HexString(it) } ?: ""
                     NexgoApi.emvHandler?.onSetPinInputResponse(true, true)
                 }
                 SdkResult.PinPad_Input_Cancel, SdkResult.PinPad_Input_Timeout -> {
+                    if (isManualPinChange()) {
+                        val status = if (retCode == SdkResult.PinPad_Input_Timeout) {
+                            SecurePinEntryStatus.TIMED_OUT
+                        } else {
+                            SecurePinEntryStatus.CANCELED
+                        }
+                        deliverManualResult(SecurePinEntryResult(status))
+                        finish()
+                        return@runOnUiThread
+                    }
                     NexgoApi.pinData.status = PinStatus.CANCELED
                     NexgoApi.emvHandler?.onSetPinInputResponse(false, false)
                 }
@@ -256,6 +303,16 @@ class PixiePinEntryActivity : ComponentActivity() {
             "$message${retCode?.let { " (code=$it)" }.orEmpty()}",
             error,
         )
+        if (isManualPinChange()) {
+            deliverManualResult(
+                SecurePinEntryResult(
+                    status = SecurePinEntryStatus.ERROR,
+                    errorMessage = message,
+                ),
+            )
+            finish()
+            return
+        }
         NexgoApi.pinData.status = PinStatus.ERROR
         NexgoApi.pinData.errorMessage = message
         NexgoApi.pinEntryDone = true
@@ -300,12 +357,23 @@ class PixiePinEntryActivity : ComponentActivity() {
         ""
     }
 
+    /** Returns true when this activity is collecting a new PIN outside an EMV CVM callback. */
+    private fun isManualPinChange(): Boolean = entryPurpose != SecurePinEntryPurpose.EMV_CVM
+
+    /** Delivers one encrypted manual-entry result without touching the EMV PIN callback. */
+    private fun deliverManualResult(result: SecurePinEntryResult) {
+        if (manualResultDelivered) return
+        manualResultDelivered = SecurePinEntryResultBroker.complete(resultRequestId, result)
+    }
+
     companion object {
         const val EXTRA_PAN = "PAN"
         const val EXTRA_IS_ONLINE_PIN = "IsOnlinePIN"
         const val EXTRA_KEY_INDEX = "KeyIndex"
         const val EXTRA_PIN_SCHEME = "PinScheme"
         const val EXTRA_COMPATIBLE_ACQUIRERS = "CompatibleAcquirers"
+        const val EXTRA_PIN_ENTRY_PURPOSE = "PinEntryPurpose"
+        const val EXTRA_RESULT_REQUEST_ID = "ResultRequestId"
 
         private const val DEFAULT_TIMEOUT_SECONDS = 60
         private const val MASK_TOKEN = "* "

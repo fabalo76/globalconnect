@@ -932,7 +932,7 @@ public sealed partial class PinpadClient(IPinpadTransport transport) : IDisposab
 
         var encoded = frame.ToArray();
         var decoded = PinpadFrameCodec.Decode(encoded);
-        Log($"RX {FormatTraceFrame(encoded, decoded)}");
+        Log($"RX {PinpadProtocolText.FormatBytes(encoded)}");
         return decoded;
     }
 
@@ -1019,35 +1019,9 @@ public sealed partial class PinpadClient(IPinpadTransport transport) : IDisposab
 
     private void WriteWithTrace(ReadOnlySpan<byte> data)
     {
-        var formatted = PinpadProtocolText.FormatBytes(data);
-        if (data.Length >= 5 && data[0] is PinpadControl.Stx or PinpadControl.Si)
-        {
-            try
-            {
-                var frame = PinpadFrameCodec.Decode(data);
-                formatted = FormatTraceFrame(data, frame);
-            }
-            catch (PinpadProtocolException)
-            {
-                // Preserve normal trace output for partial or intentionally non-frame writes.
-            }
-        }
-        Log($"TX {formatted}");
+        Log($"TX {PinpadProtocolText.FormatBytes(data)}");
         _transport.Write(data);
     }
-
-    private static string FormatTraceFrame(ReadOnlySpan<byte> encoded, PinpadFrame frame)
-    {
-        if (!SensitiveTraceCommands.Contains(frame.CommandId)) return PinpadProtocolText.FormatBytes(encoded);
-        var start = frame.Type == PinpadFrameType.Transaction ? "<STX>" : "<SI>";
-        var end = frame.Type == PinpadFrameType.Transaction ? "<ETX>" : "<SO>";
-        return $"{start}{frame.CommandId}<REDACTED:{frame.Payload.Length} bytes>{end}<LRC:{encoded[^1]:X2}>";
-    }
-
-    private static readonly HashSet<string> SensitiveTraceCommands = new(StringComparer.Ordinal)
-    {
-        "02", "20", "21", "22", "23", "24", "70", "71", "78", "90", "94", "Z60", "Z62",
-    };
 
     private void Log(string message) => Trace?.Invoke($"{DateTime.Now:HH:mm:ss.fff}  {message}");
 }

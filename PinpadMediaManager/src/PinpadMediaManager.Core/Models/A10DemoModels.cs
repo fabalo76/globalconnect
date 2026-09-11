@@ -18,6 +18,15 @@ public enum A10EmvConfigurationType
     ContactlessApplication,
 }
 
+public sealed record A10EmvConfigurationSnapshot(
+    bool TerminalConfigurationPresent,
+    int TerminalConfigurationBytes,
+    IReadOnlyList<string> DataFormatTags,
+    IReadOnlyList<string> CapkIds,
+    IReadOnlyList<string> ContactAidIds,
+    IReadOnlyList<string> ContactlessAidIds,
+    IReadOnlyList<string> ContactlessDrlIds);
+
 public enum A10HostDecision
 {
     Approve,
@@ -33,6 +42,8 @@ public sealed record A10EmvTransactionRequest(
     string TransactionInformation,
     string AccountType,
     bool ForceOnline,
+    A10PinKeyScheme OnlinePinKeyScheme,
+    string EncryptedSessionKey,
     A10HostDecision HostDecision)
 {
     public static A10EmvTransactionRequest Default => new(
@@ -43,6 +54,8 @@ public sealed record A10EmvTransactionRequest(
         TransactionInformation: "40",
         AccountType: "00",
         ForceOnline: false,
+        OnlinePinKeyScheme: A10PinKeyScheme.MasterSession,
+        EncryptedSessionKey: "",
         HostDecision: A10HostDecision.Approve);
 }
 
@@ -111,3 +124,26 @@ public sealed record A10PinEntryResult(
     string? Ksn,
     int? PinLength,
     string? KeyIdentifier);
+
+public sealed record EmvOperationsApiOptions(
+    string BaseAddress,
+    string ApiKey,
+    string? ClientCertificatePath = null,
+    string? ClientCertificatePassword = null);
+
+public sealed record A10OfflinePinChangeRequest(
+    A10PinKeyScheme PinKeyScheme,
+    string EncryptedSessionKey,
+    string PinProfileId,
+    EmvOperationsApiOptions Api);
+
+public sealed record A10OfflinePinUnblockRequest(EmvOperationsApiOptions Api);
+
+public sealed record A10OfflinePinChangeResult(
+    string Status,
+    string InitialResponse,
+    string FinalResponse,
+    string PinEntryResponse,
+    string ApiResponseCode,
+    string Field55,
+    IReadOnlyDictionary<string, string> Tags);

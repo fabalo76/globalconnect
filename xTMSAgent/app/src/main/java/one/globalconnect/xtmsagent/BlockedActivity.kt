@@ -12,6 +12,7 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import one.globalconnect.xtmsagent.mqtt.TmsMqttManager
 import one.globalconnect.xtmsagent.mqtt.persistence.TmsCredentialStore
+import one.globalconnect.xtmsagent.nexgo.PhysicalKeypadInputPolicy
 
 /**
  * Full-screen activity shown when the TMS operator blocks this terminal.
@@ -98,6 +99,7 @@ class BlockedActivity : AppCompatActivity() {
             maxLines = 1
             filters = arrayOf(android.text.InputFilter.LengthFilter(10))
         }
+        PhysicalKeypadInputPolicy.configure(input)
 
         AlertDialog.Builder(this)
             .setTitle(R.string.unlock_code_title)

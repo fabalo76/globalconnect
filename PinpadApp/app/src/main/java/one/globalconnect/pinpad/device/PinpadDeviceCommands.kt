@@ -32,6 +32,7 @@ import com.nexgo.oaf.apiv3.device.reader.CardReader
 import com.nexgo.oaf.apiv3.device.reader.CardSlotTypeEnum
 import com.nexgo.oaf.apiv3.device.reader.OnCardInfoListener
 import com.nexgo.oaf.apiv3.emv.EmvEntryModeEnum
+import one.globalconnect.pinpad.R
 import one.globalconnect.pinpad.logging.PinpadTraceLog
 import one.globalconnect.pinpad.model.PinpadTransactionDisplay
 import one.globalconnect.pinpad.protocol.PinpadKeypadKey
@@ -384,6 +385,42 @@ class PinpadDeviceCommands(
         return startPinEntry(request, onResult)
     }
 
+    /**
+     * Starts a two-entry new-PIN capture encrypted under the active MK/SK PIN key.
+     *
+     * @param commandId source protocol command, normally `7G`.
+     * @param payload command payload containing the account and session-key data.
+     * @param onResult receives one confirmed encrypted PIN block, an error, or cancellation.
+     * @return whether capture started or an immediate protocol response; starts secure keypad input as a side effect.
+     */
+    fun startMasterSessionNewPinEntry(
+        commandId: String,
+        payload: String,
+        onResult: (PinEntryResult) -> Unit,
+    ): PinEntryStartResult {
+        val request = parsePinEntryRequest(commandId, payload, PinKeyScheme.MASTER_SESSION)
+            ?: return PinEntryStartResult.ImmediateResponse("E")
+        return startNewPinEntry(request, onResult)
+    }
+
+    /**
+     * Starts a two-entry new-PIN capture encrypted under the active DUKPT PIN key.
+     *
+     * @param commandId source protocol command, normally `7H`.
+     * @param payload command payload containing the card account.
+     * @param onResult receives one confirmed encrypted PIN block and KSN, an error, or cancellation.
+     * @return whether capture started or an immediate protocol response; reserves one KSN as a side effect.
+     */
+    fun startDukptNewPinEntry(
+        commandId: String,
+        payload: String,
+        onResult: (PinEntryResult) -> Unit,
+    ): PinEntryStartResult {
+        val request = parsePinEntryRequest(commandId, payload, PinKeyScheme.DUKPT)
+            ?: return PinEntryStartResult.ImmediateResponse("8")
+        return startNewPinEntry(request, onResult)
+    }
+
     fun startSecretPinEntry(
         commandId: String,
         payload: String,
@@ -433,11 +470,11 @@ class PinpadDeviceCommands(
         val activeKeyId = prefs.activeMasterKeyId().firstOrNull() ?: '0'
         val usage = storedMasterKeyAttribute(activeKeyId)?.usage ?: return sessionKey
         if (usage != "P0") return sessionKey
-        val zeroLength = sessionKey.length.takeIf { it in SESSION_KEY_HEX_LENGTHS } ?: DEFAULT_SESSION_KEY_HEX_CHARS
+        if (sessionKey.isNotBlank()) return sessionKey
         PinpadTraceLog.device(
-            "EMV PIN using active P0 working key keyId=$activeKeyId ignoredSessionKeyChars=${sessionKey.length}",
+            "EMV PIN using active P0 working key keyId=$activeKeyId with zero session-key placeholder",
         )
-        return "0".repeat(zeroLength)
+        return "0".repeat(DEFAULT_SESSION_KEY_HEX_CHARS)
     }
 
     fun cancelPinEntry(sendResult: Boolean = false): Boolean {
@@ -466,7 +503,9 @@ class PinpadDeviceCommands(
         PinpadTraceLog.device("loadDukptInitialKey keySet=$keySet chars=${material.length}")
         return if (material.length == DUKPT_CLEAR_KEY_CHARS && material.isHex()) {
             injectClearDukptKey(keySet, material).also { result ->
-                if (result.success) showKeyLoadCue(KEY_LOAD_IPEK_MESSAGE)
+                if (result.success) {
+                    showKeyLoadCue(KEY_LOAD_IPEK_MESSAGE, returnToKeyInjectionMode = true)
+                }
             }
         } else {
             PinpadTraceLog.device("loadDukptInitialKey keySet=$keySet TR31 deferred/unsupported in current SDK build")
@@ -935,7 +974,7 @@ class PinpadDeviceCommands(
         PinpadTraceLog.device("MSR transaction completed")
         clearTransactionState()
         stopMsrSearch()
-        PinpadDisplayController.showThankYouThenIdle()
+        PinpadDisplayController.showThankYouAfterTransactionComplete()
     }
 
     fun ignoreCardSwipe() {
@@ -1452,6 +1491,14 @@ class PinpadDeviceCommands(
         return contactEmv.queryPcdConfigIds(configType)
     }
 
+    fun queryCurrentEmvConfiguration(): PinpadEmvConfigStore.EmvConfigurationSnapshot {
+        return contactEmv.queryCurrentConfiguration()
+    }
+
+    fun clearAllEmvConfiguration(): PinpadContactEmvController.EmvCommandResult {
+        return contactEmv.clearAllConfiguration()
+    }
+
     fun deleteEmvConfig(payload: String): PinpadContactEmvController.EmvConfigDelete {
         return contactEmv.deleteConfig(payload)
     }
@@ -1550,6 +1597,14 @@ class PinpadDeviceCommands(
         )
     }
 
+    /** Starts a documented T37 contact ICC PIN-management operation. */
+    internal fun startContactPinManagement(
+        operation: PinManagementPolicy.Operation,
+        onResult: (PinpadContactEmvController.EmvCommandResult) -> Unit,
+    ): Boolean {
+        return contactEmv.startPinManagement(operation, onResult)
+    }
+
     fun startContactlessTransaction(
         payload: String,
         sourceCommand: String,
@@ -1618,10 +1673,6 @@ class PinpadDeviceCommands(
 
     fun forceCompleteNonEmvTransaction(): PinpadContactEmvController.EmvCommandResult {
         return contactEmv.forceCompleteNonEmvTransaction()
-    }
-
-    fun contactPinManagementUnsupported(): PinpadContactEmvController.EmvCommandResult {
-        return contactEmv.pinManagementUnsupported()
     }
 
     fun overwriteEmvTransactionData(payload: String): PinpadContactEmvController.EmvCommandResult {
@@ -2110,6 +2161,136 @@ class PinpadDeviceCommands(
         }
     }
 
+    /**
+     * Captures a new PIN and a confirmation using identical key material and account data.
+     *
+     * @param request parsed secure PIN-entry request.
+     * @param onResult receives the confirmed first capture or the terminal error.
+     * @param retryAfterMismatch includes the mismatch notice in the next secure-entry prompt.
+     * @return whether the first entry started; starts a second secure entry asynchronously on success.
+     */
+    private fun startNewPinEntry(
+        request: PinEntryRequest,
+        onResult: (PinEntryResult) -> Unit,
+        retryAfterMismatch: Boolean = false,
+    ): PinEntryStartResult {
+        val firstPromptLines = if (retryAfterMismatch) {
+            listOf(
+                applicationContext.getString(R.string.prompt_pin_mismatch),
+                applicationContext.getString(R.string.prompt_enter_new_pin),
+            )
+        } else {
+            listOf(applicationContext.getString(R.string.prompt_enter_new_pin))
+        }
+        val firstRequest = request.copy(
+            allowNullPin = false,
+            promptLines = firstPromptLines,
+            completionPrompt = "",
+            advanceDukptKsnOnSuccess = false,
+        )
+        return startPinEntry(firstRequest) { firstResult ->
+            if (firstResult !is PinEntryResult.Response || firstResult.payload.length == 1) {
+                onResult(firstResult)
+                return@startPinEntry
+            }
+            val scheme = request.newPinConfirmationScheme()
+            if (!NewPinConfirmationPolicy.isCapture(firstResult.payload, scheme)) {
+                completeNewPinEntry(request, firstResult, PinEntryResult.Response("B"), onResult)
+                return@startPinEntry
+            }
+            val confirmationRequest = firstRequest.copy(
+                promptLines = listOf(applicationContext.getString(R.string.prompt_confirm_new_pin)),
+            )
+            when (val confirmationStart = startPinEntry(confirmationRequest) { confirmationResult ->
+                completeNewPinEntry(request, firstResult, confirmationResult, onResult)
+            }) {
+                PinEntryStartResult.Started -> Unit
+                is PinEntryStartResult.ImmediateResponse -> completeNewPinEntry(
+                    request,
+                    firstResult,
+                    PinEntryResult.Response(confirmationStart.payload),
+                    onResult,
+                )
+            }
+        }
+    }
+
+    /**
+     * Finalizes new-PIN confirmation and consumes the reserved DUKPT KSN exactly once when applicable.
+     *
+     * @param request original parsed request.
+     * @param firstResult successful first encrypted capture.
+     * @param confirmationResult result of the confirmation capture.
+     * @param onResult receives the final protocol result.
+     */
+    private fun completeNewPinEntry(
+        request: PinEntryRequest,
+        firstResult: PinEntryResult.Response,
+        confirmationResult: PinEntryResult,
+        onResult: (PinEntryResult) -> Unit,
+    ) {
+        if (request.scheme == PinKeyScheme.DUKPT && !advanceReservedDukptKsn()) {
+            PinpadTraceLog.device("New-PIN capture could not advance reserved DUKPT KSN")
+            PinpadDisplayController.showMessageThenIdle(applicationContext.getString(R.string.prompt_pin_entry_error))
+            onResult(PinEntryResult.Response("B"))
+            return
+        }
+        if (confirmationResult !is PinEntryResult.Response || confirmationResult.payload.length == 1) {
+            onResult(confirmationResult)
+            return
+        }
+        when (
+            NewPinConfirmationPolicy.compare(
+                firstResult.payload,
+                confirmationResult.payload,
+                request.newPinConfirmationScheme(),
+            )
+        ) {
+            is NewPinConfirmationPolicy.Result.Confirmed -> {
+                PinpadDisplayController.showProcessing()
+                onResult(firstResult)
+            }
+            NewPinConfirmationPolicy.Result.Mismatch -> {
+                PinpadTraceLog.device("New-PIN confirmation mismatch scheme=${request.scheme}")
+                when (val restart = startNewPinEntry(request, onResult, retryAfterMismatch = true)) {
+                    PinEntryStartResult.Started -> Unit
+                    is PinEntryStartResult.ImmediateResponse -> onResult(PinEntryResult.Response(restart.payload))
+                }
+            }
+            NewPinConfirmationPolicy.Result.Invalid -> {
+                PinpadTraceLog.device("New-PIN confirmation response invalid scheme=${request.scheme}")
+                PinpadDisplayController.showMessageThenIdle(applicationContext.getString(R.string.prompt_pin_entry_error))
+                onResult(PinEntryResult.Response("B"))
+            }
+        }
+    }
+
+    /**
+     * Advances the active DUKPT KSN and verifies that the device reports a different value.
+     *
+     * @return `true` only when the active KSN changed; mutates the secure DUKPT counter.
+     */
+    private fun advanceReservedDukptKsn(): Boolean {
+        val keySet = activeDukptKeySet
+        val before = currentDukptKsn(keySet)
+        if (before.isBlank()) return false
+        val incremented = runCatching { pinPad.dukptKsnIncrease(keySet) }
+            .onFailure { Log.w(TAG, "Unable to advance reserved DUKPT KSN", it) }
+            .isSuccess
+        if (!incremented) return false
+        val after = currentDukptKsn(keySet)
+        return after.isNotBlank() && !after.equals(before, ignoreCase = true)
+    }
+
+    /** Maps an internal PIN-key scheme to the confirmation policy scheme. */
+    private fun PinEntryRequest.newPinConfirmationScheme(): NewPinConfirmationPolicy.Scheme {
+        return when (scheme) {
+            PinKeyScheme.DUKPT -> NewPinConfirmationPolicy.Scheme.DUKPT
+            PinKeyScheme.MASTER_SESSION,
+            PinKeyScheme.SECRET_MASTER_SESSION -> NewPinConfirmationPolicy.Scheme.MASTER_SESSION
+        }
+    }
+
     private fun completePinEntry(
         completed: AtomicBoolean,
         result: PinEntryResult,
@@ -2137,8 +2318,10 @@ class PinpadDeviceCommands(
         return when (request.scheme) {
             PinKeyScheme.DUKPT -> {
                 val ksn = currentDukptKsn(keyIndex)
-                runCatching { pinPad.dukptKsnIncrease(keyIndex) }
-                    .onFailure { Log.w(TAG, "Unable to advance DUKPT KSN", it) }
+                if (request.advanceDukptKsnOnSuccess) {
+                    runCatching { pinPad.dukptKsnIncrease(keyIndex) }
+                        .onFailure { Log.w(TAG, "Unable to advance DUKPT KSN", it) }
+                }
                 PinEntryResult.Response("0${formatDukptKsn(ksn)}$pinBlock")
             }
             PinKeyScheme.MASTER_SESSION,
@@ -2379,21 +2562,12 @@ class PinpadDeviceCommands(
         val attribute = storedMasterKeyAttribute(activeKeyId)
             ?: return SessionPinKeyResult.Error('9').also { showKeyMetadataMissing(activeKeyId) }
         if (!masterKeyLoaded(activeKeyId)) return SessionPinKeyResult.Error('9')
-        return when (attribute.usage) {
-            "P0" -> {
-                if (sessionKey.isBlank() || sessionKey.any { it != '0' }) {
-                    showPinKeySchemeError(activeKeyId, attribute.usage)
-                    SessionPinKeyResult.Error('1')
-                } else {
-                    SessionPinKeyResult.Ready(slot)
-                }
+        return when (val action = masterSessionPinKeyAction(attribute.usage, sessionKey)) {
+            MasterSessionPinKeyAction.UseResidentPinKey -> {
+                PinpadTraceLog.device("PINKEY reused slot=$slot usage=${attribute.usage}")
+                SessionPinKeyResult.Ready(slot)
             }
-            "K0" -> {
-                if (sessionKey.isBlank()) return SessionPinKeyResult.Error('5')
-                if (sessionKey.all { it == '0' }) {
-                    showPinKeySchemeError(activeKeyId, attribute.usage)
-                    return SessionPinKeyResult.Error('1')
-                }
+            MasterSessionPinKeyAction.LoadEncryptedSessionKey -> {
                 val sessionBytes = sessionKey.hexToBytesOrNull() ?: return SessionPinKeyResult.Error('5')
                 val result = runCatching {
                     pinPad.setAlgorithmMode(AlgorithmModeEnum.DES)
@@ -2404,7 +2578,10 @@ class PinpadDeviceCommands(
                 PinpadTraceLog.device("writeWKey PINKEY slot=$slot usage=${attribute.usage} sdkResult=$result")
                 if (result == SdkResult.Success) SessionPinKeyResult.Ready(slot) else SessionPinKeyResult.Error('B')
             }
-            else -> SessionPinKeyResult.Error('A')
+            is MasterSessionPinKeyAction.Reject -> {
+                if (action.schemeMismatch) showPinKeySchemeError(activeKeyId, attribute.usage)
+                SessionPinKeyResult.Error(action.responseCode)
+            }
         }
     }
 
@@ -2646,6 +2823,7 @@ class PinpadDeviceCommands(
         val promptLines: List<String>,
         val completionPrompt: String,
         val secretKeySlot: Int? = null,
+        val advanceDukptKsnOnSuccess: Boolean = true,
     )
 
     private enum class PinKeyScheme {

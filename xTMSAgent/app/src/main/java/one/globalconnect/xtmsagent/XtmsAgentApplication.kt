@@ -11,6 +11,7 @@ import one.globalconnect.xtmsagent.diagnostics.NexgoDiagnosticsManager
 import one.globalconnect.xtmsagent.mqtt.TmsMqttService
 import one.globalconnect.xtmsagent.mqtt.persistence.TmsCredentialStore
 import one.globalconnect.xtmsagent.nexgo.NexgoDeviceOwnerProvisioner
+import one.globalconnect.xtmsagent.nexgo.PhysicalKeypadInputPolicy
 import one.globalconnect.xtmsagent.policy.FactoryTmsManager
 
 private const val TAG = "XtmsAgentApplication"
@@ -36,6 +37,8 @@ class XtmsAgentApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         Log.i(TAG, "Application started")
+
+        PhysicalKeypadInputPolicy.install(this)
 
         runSafely("credential provisioning") { provisionCredentials() }
         applicationScope.launch {

@@ -24,7 +24,18 @@ data class ReceiptPreviewLine(
     val secondary: String? = null,
     val emphasis: Boolean = false,
     val alignment: TextAlign = TextAlign.Center,
+    val fontSize: ReceiptPreviewFontSize = ReceiptPreviewFontSize.SMALL,
 )
+
+/** Printer font category used by the corresponding physical receipt line. */
+enum class ReceiptPreviewFontSize {
+    MIN,
+    TINY,
+    SMALL,
+    MEDIUM,
+    LARGE,
+    MASSIVE,
+}
 
 @VisibleForTesting
 internal fun emptyReceiptPreviewState(): ReceiptPreviewState =

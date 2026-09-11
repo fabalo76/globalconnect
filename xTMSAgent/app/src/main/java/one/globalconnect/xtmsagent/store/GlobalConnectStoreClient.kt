@@ -33,7 +33,7 @@ internal data class StoreApplication(
 internal class GlobalConnectStoreClient(private val context: Context) {
     private val config get() = TMSFunc.tmsCfg
     private val serial get() = config.sn.ifBlank { MainActivity.vg_sSN }.trim().uppercase()
-    private val token get() = DeviceApi.deviceToken(serial, config.download_secret)
+    private val token get() = DeviceApi.deviceToken(serial, config)
 
     fun loadCatalog(): StoreCatalog {
         ensureConfigured()

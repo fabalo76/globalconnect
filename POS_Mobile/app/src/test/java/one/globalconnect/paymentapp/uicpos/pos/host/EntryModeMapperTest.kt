@@ -14,7 +14,15 @@ class EntryModeMapperTest {
             PINBlock = null,
         )
 
-        assertEquals("0051", EntryModeMapper.from(transLog, onlinePinCap = true))
+        assertEquals(
+            "051",
+            EntryModeMapper.from(
+                transLog,
+                onlinePinCap = true,
+                offlineEncrPinCap = false,
+                offlineClearPinCap = false,
+            ),
+        )
     }
 
     /** Verifies that disabling online PIN changes only the capability digit. */
@@ -22,7 +30,47 @@ class EntryModeMapperTest {
     fun `chip entry mode reports no PIN capability when terminal setting is disabled`() {
         val transLog = TransLog(CardDataSource = "CHIP")
 
-        assertEquals("0052", EntryModeMapper.from(transLog, onlinePinCap = false))
+        assertEquals(
+            "052",
+            EntryModeMapper.from(
+                transLog,
+                onlinePinCap = false,
+                offlineEncrPinCap = false,
+                offlineClearPinCap = false,
+            ),
+        )
+    }
+
+    /** Verifies that encrypted offline PIN is enough to advertise PIN capability. */
+    @Test
+    fun `chip entry mode reports PIN capability when encrypted offline PIN is enabled`() {
+        val transLog = TransLog(CardDataSource = "CHIP")
+
+        assertEquals(
+            "051",
+            EntryModeMapper.from(
+                transLog,
+                onlinePinCap = false,
+                offlineEncrPinCap = true,
+                offlineClearPinCap = false,
+            ),
+        )
+    }
+
+    /** Verifies that clear offline PIN is enough to advertise PIN capability. */
+    @Test
+    fun `chip entry mode reports PIN capability when clear offline PIN is enabled`() {
+        val transLog = TransLog(CardDataSource = "CHIP")
+
+        assertEquals(
+            "051",
+            EntryModeMapper.from(
+                transLog,
+                onlinePinCap = false,
+                offlineEncrPinCap = false,
+                offlineClearPinCap = true,
+            ),
+        )
     }
 
     /** Verifies that contactless capture uses the same terminal capability rule. */
@@ -30,6 +78,14 @@ class EntryModeMapperTest {
     fun `contactless entry mode reports terminal PIN capability`() {
         val transLog = TransLog(CardDataSource = "CONTACTLESS")
 
-        assertEquals("0071", EntryModeMapper.from(transLog, onlinePinCap = true))
+        assertEquals(
+            "071",
+            EntryModeMapper.from(
+                transLog,
+                onlinePinCap = false,
+                offlineEncrPinCap = true,
+                offlineClearPinCap = false,
+            ),
+        )
     }
 }

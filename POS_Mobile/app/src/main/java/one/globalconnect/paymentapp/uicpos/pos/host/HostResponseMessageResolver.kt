@@ -47,6 +47,7 @@ object HostResponseMessageResolver {
         "62" to R.string.host_result_incorrect_mac,
         "63" to R.string.host_result_security_violation,
         "65" to R.string.host_result_use_chip,
+        "123" to R.string.host_result_use_chip,
         "75" to R.string.host_result_pin_exceeded,
         "77" to R.string.host_result_settlement_error,
         "78" to R.string.host_result_original_not_found,

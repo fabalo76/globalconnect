@@ -71,8 +71,19 @@ data class ProcessingStatusStrings(
 data class SettlementProcessingState(
     val acquirerName: String,
     val processingStatus: ProcessingStatusUi,
+    val batchUploadProgress: BatchUploadProgress? = null,
     val results: SettlementResultsUiState? = null,
 )
+
+data class BatchUploadProgress(
+    val current: Int,
+    val total: Int,
+) {
+    init {
+        require(total > 0) { "Batch upload total must be greater than zero" }
+        require(current in 1..total) { "Batch upload current must be within 1..total" }
+    }
+}
 
 sealed class SettlementResultsUiState {
     data class Summary(val results: List<SettlementResult>) : SettlementResultsUiState()

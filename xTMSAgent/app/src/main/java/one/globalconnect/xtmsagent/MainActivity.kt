@@ -57,6 +57,9 @@ import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import one.globalconnect.xtmsagent.mqtt.TmsTaskStatus
 import one.globalconnect.xtmsagent.nexgo.NexgoSystemServiceInitializer
+import one.globalconnect.xtmsagent.nexgo.PhysicalKeypadInputPolicy
+import one.globalconnect.xtmsagent.remote.RemoteControlAccessibilityProvisioner
+import one.globalconnect.xtmsagent.diagnostics.NexgoDiagnosticsManager
 import one.globalconnect.xtmsagent.mqtt.TmsStatusSeverity
 import kotlin.io.path.Path
 import kotlin.io.path.listDirectoryEntries
@@ -65,6 +68,7 @@ import android.content.BroadcastReceiver
 import android.content.IntentFilter
 import one.globalconnect.xtmsagent.launcher.ACTION_LAUNCHER_CONFIG_UPDATED
 import one.globalconnect.xtmsagent.launcher.LauncherConfigManager
+import one.globalconnect.xtmsagent.launcher.PaymentAppAutoLauncher
 import one.globalconnect.xtmsagent.mqtt.TmsMqttManager
 import one.globalconnect.xtmsagent.mqtt.TmsMqttService
 import one.globalconnect.xtmsagent.mqtt.shouldShowTmsConnectionStatus
@@ -340,9 +344,6 @@ class MainActivity : AppCompatActivity() {
             checkForPermission()
         }, 100)
 
-        Handler(Looper.getMainLooper()).postDelayed({
-            checkRemoteControlSetup()
-        }, 3_000)
     }
 
     override fun onDestroy() {
@@ -397,6 +398,19 @@ class MainActivity : AppCompatActivity() {
             startActivity(Intent(this, BlockedActivity::class.java).apply {
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
             })
+        } else if (!store.isBlocked()) {
+            launchPaymentAppAfterBootIfPending()
+        }
+    }
+
+    /** Called from onResume and BootReceiver to close either boot-order race. */
+    fun launchPaymentAppAfterBootIfPending() {
+        window.decorView.post {
+            if (lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) &&
+                !TmsCredentialStore(this).isBlocked()
+            ) {
+                PaymentAppAutoLauncher.launchIfPending(this)
+            }
         }
     }
 
@@ -775,6 +789,7 @@ class MainActivity : AppCompatActivity() {
         view.findViewById<TextView>(R.id.title).text = getString(R.string.input_pwd)
         val edit1 = view.findViewById<EditText>(R.id.password1)
         val edit2 = view.findViewById<EditText>(R.id.password2)
+        PhysicalKeypadInputPolicy.configure(edit1, edit2)
         val builder: AlertDialog.Builder = AlertDialog.Builder(this)
         builder
             .setView(view)
@@ -953,6 +968,7 @@ class MainActivity : AppCompatActivity() {
         val new2 = view.findViewById<EditText>(R.id.newpassword2)
         val renew1 = view.findViewById<EditText>(R.id.renewpassword1)
         val renew2 = view.findViewById<EditText>(R.id.renewpassword2)
+        PhysicalKeypadInputPolicy.configure(new1, new2, renew1, renew2)
         val builder: AlertDialog.Builder = AlertDialog.Builder(this)
         builder
             .setView(view)
@@ -1362,6 +1378,24 @@ class MainActivity : AppCompatActivity() {
                 }
             } catch (e: Exception) {
                 Logd(Exception("SystemServiceHelper.init failed: ${e.message}"))
+            }
+
+            val remoteControlSetup =
+                RemoteControlAccessibilityProvisioner.ensureEnabled(this@MainActivity)
+            Log.i(
+                "RemoteControlSetup",
+                "Accessibility setup success=${remoteControlSetup.success} " +
+                    "code=${remoteControlSetup.code} deviceOwner=" +
+                    TmsDeviceAdminReceiver.isDeviceOwner(this@MainActivity),
+            )
+            NexgoDiagnosticsManager.record(
+                this@MainActivity,
+                "remoteControlAccessibility success=${remoteControlSetup.success} " +
+                    "code=${remoteControlSetup.code} deviceOwner=" +
+                    TmsDeviceAdminReceiver.isDeviceOwner(this@MainActivity),
+            )
+            if (!remoteControlSetup.success) {
+                checkRemoteControlSetup()
             }
         }
     }

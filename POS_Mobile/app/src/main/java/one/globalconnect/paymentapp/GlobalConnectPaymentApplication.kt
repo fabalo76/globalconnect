@@ -41,6 +41,8 @@ import kotlinx.coroutines.launch
 import java.io.File
 import java.util.Locale
 
+internal fun isUsableTmsDatabase(database: TMSDATA): Boolean = database.Terminal.isNotEmpty()
+
 class GlobalConnectPaymentApplication : Application() {
 
     private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -297,6 +299,11 @@ class GlobalConnectPaymentApplication : Application() {
      * `true` when the update is accepted and applied.
      */
     fun applyTmsUpdate(newDatabase: TMSDATA, persistToDisk: Boolean = true): Boolean {
+        if (!isUsableTmsDatabase(newDatabase)) {
+            Log.e("GlobalConnectPaymentApplication", "TMS parameter update rejected: terminal configuration is missing")
+            return false
+        }
+
         val pinKeyResult = NexgoPinKeyManager.apply(deviceEngine, newDatabase.Acquirer)
         if (!pinKeyResult.success) {
             Log.e("GlobalConnectPaymentApplication", "TMS PIN key application failed: ${pinKeyResult.message}")
@@ -370,7 +377,9 @@ class GlobalConnectPaymentApplication : Application() {
                     "tipMode=${terminal.tipProcessingMode} capkMode=${terminal.capkMode} " +
                     "cvmCaps=online:${terminal.onlinePinCap},signature:${terminal.signatureCap}," +
                     "noCvm:${terminal.noCVMCap},offlineEnc:${terminal.offlineEncrPinCap}," +
-                    "offlineClear:${terminal.offlineClearPinCap} " +
+                    "offlineClear:${terminal.offlineClearPinCap}," +
+                    "pinChange:${terminal.enableOfflinePinChange}," +
+                    "pinUnblock:${terminal.enableOfflinePinUnblock} " +
                     "tranReporting=${terminal.tranReportingMethod} batchSize=${terminal.tranReportingBatchSize} " +
                     "intervalSeconds=${terminal.tranReportingIntervalSeconds} acquirers=${terminal.acquirer.size}"
             )

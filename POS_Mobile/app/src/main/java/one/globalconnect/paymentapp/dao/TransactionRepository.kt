@@ -9,6 +9,13 @@ interface TransactionRepository {
 
     suspend fun delete(vararg transactions: Transaction)
 
+    /**
+     * Deletes every transaction in the active terminal batch.
+     *
+     * @return the number of transaction rows removed.
+     */
+    suspend fun deleteAllTransactions(): Int
+
     suspend fun update(vararg transactions: Transaction)
 
     fun getAllTransactionsStream(): Flow<List<Transaction>>
@@ -55,5 +62,15 @@ interface TransactionRepository {
 
     suspend fun deleteReversal(reversal: PendingReversal)
 
+    /**
+     * Deletes every queued reversal awaiting transmission.
+     *
+     * @return the number of pending reversal rows removed.
+     */
+    suspend fun deleteAllPendingReversals(): Int
+
     suspend fun getPendingReversals(acquirerId: String): List<PendingReversal>
+
+    /** Returns every reversal currently awaiting transmission, oldest first. */
+    suspend fun getAllPendingReversals(): List<PendingReversal>
 }

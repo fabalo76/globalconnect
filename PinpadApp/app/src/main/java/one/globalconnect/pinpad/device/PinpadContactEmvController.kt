@@ -1,6 +1,8 @@
 package one.globalconnect.pinpad.device
 
 import android.content.Context
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import com.nexgo.oaf.apiv3.DeviceEngine
 import com.nexgo.oaf.apiv3.SdkResult
@@ -26,6 +28,7 @@ import com.nexgo.oaf.apiv3.emv.EmvTransConfigurationEntity
 import com.nexgo.oaf.apiv3.emv.OnEmvProcessListener2
 import com.nexgo.oaf.apiv3.emv.PromptEnum
 import one.globalconnect.pinpad.BuildConfig
+import one.globalconnect.pinpad.R
 import one.globalconnect.pinpad.logging.PinpadTraceLog
 import one.globalconnect.pinpad.model.PinpadTransactionDisplay
 import one.globalconnect.pinpad.ui.ContactlessLedState
@@ -46,6 +49,7 @@ class PinpadContactEmvController(
     private val deviceEngine: DeviceEngine,
     private val onlinePinEntryStarter: ((EmvOnlinePinRequest, (EmvOnlinePinResult) -> Unit) -> Boolean)? = null,
 ) {
+    private val applicationContext = context.applicationContext
     private val store = PinpadEmvConfigStore(context)
     private val sequencePrefs = context.getSharedPreferences(EMV_SEQUENCE_PREFS, Context.MODE_PRIVATE)
     private val contactSearchRunning = AtomicBoolean(false)
@@ -69,7 +73,12 @@ class PinpadContactEmvController(
     private val transactionRunning = AtomicBoolean(false)
     private val onlineAuthorizationPending = AtomicBoolean(false)
     private val offlinePinRunning = AtomicBoolean(false)
+    private val offlinePinAttemptTracker = OfflinePinAttemptTracker()
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val offlinePinPromptGeneration = AtomicInteger(0)
     @Volatile private var lastOnlineApproved: Boolean? = null
+    @Volatile private var lastOnlineResponseCode: String? = null
+    @Volatile private var activePinManagementOperation: PinManagementPolicy.Operation? = null
     @Volatile private var pendingAppSelectCompleted: AtomicBoolean? = null
     @Volatile private var pendingAppSelectResult: ((String) -> Unit)? = null
     @Volatile private var pendingTransactionCompleted: AtomicBoolean? = null
@@ -265,6 +274,30 @@ class PinpadContactEmvController(
             else -> '0'
         }
         return EmvConfigQuery(configType, status, ids)
+    }
+
+    fun queryCurrentConfiguration(): PinpadEmvConfigStore.EmvConfigurationSnapshot = store.snapshot()
+
+    fun clearAllConfiguration(): EmvCommandResult {
+        return runCatching {
+            store.clearAllConfiguration()
+            terminalPacketTlvs.clear()
+            aidPacketTlvs.clear()
+            pcdAidPacketTlvs.clear()
+            pendingCapkHeaders.clear()
+            pendingAid = null
+            pendingAidTotalPackets = null
+            pendingPcdAid = null
+            pendingPcdAidTotalPackets = null
+            markEmvConfigReloadRequired("all EMV configuration cleared")
+            check(reloadStoredConfiguration("all EMV configuration cleared")) {
+                "Unable to reload the cleared EMV configuration"
+            }
+            EmvCommandResult.ok()
+        }.getOrElse { error ->
+            PinpadTraceLog.device("EMV configuration clear failed=${error.message}")
+            EmvCommandResult.failure('5', error.message.orEmpty())
+        }
     }
 
     fun deleteConfig(payload: String): EmvConfigDelete {
@@ -506,9 +539,14 @@ class PinpadContactEmvController(
             }
             pendingTransactionCompleted?.let { completed ->
                 pendingTransactionResult?.let { onResult ->
+                    val pinManagementCancelled = activePinManagementOperation != null
                     completeContactTransaction(
                         onResult,
-                        EmvCommandResult.failure('1', EMV_CANCELLED_ERROR),
+                        if (pinManagementCancelled) {
+                            EmvCommandResult.failure('3')
+                        } else {
+                            EmvCommandResult.failure('1', EMV_CANCELLED_ERROR)
+                        },
                         completed,
                     )
                 }
@@ -519,6 +557,7 @@ class PinpadContactEmvController(
         } else {
             clearPendingAppSelect()
             clearPendingTransaction()
+            activePinManagementOperation = null
             PinpadDisplayController.showIdle()
         }
         return true
@@ -532,6 +571,56 @@ class PinpadContactEmvController(
         transactionDisplay: PinpadTransactionDisplay? = null,
         onResult: (EmvCommandResult) -> Unit,
     ): Boolean {
+        return startTransaction(
+            request = ContactTransactionRequest.parse(payload, transactionDisplay),
+            sourceCommand = sourceCommand,
+            cardSlot = cardSlot,
+            entryMode = entryMode,
+            transactionDisplay = transactionDisplay,
+            onResult = onResult,
+        )
+    }
+
+    /**
+     * Starts the contact-only, zero-amount EMV lifecycle used by T37 PIN management.
+     *
+     * @param operation documented change, unblock, or verify operation.
+     * @param onResult callback invoked for the management result or an online request.
+     * @return true when the card search was started or a transaction was already active.
+     */
+    internal fun startPinManagement(
+        operation: PinManagementPolicy.Operation,
+        onResult: (EmvCommandResult) -> Unit,
+    ): Boolean {
+        return startTransaction(
+            request = ContactTransactionRequest.pinManagement(operation),
+            sourceCommand = "T37",
+            cardSlot = CardSlotTypeEnum.ICC1,
+            entryMode = EmvEntryModeEnum.EMV_ENTRY_MODE_CONTACT,
+            transactionDisplay = null,
+            onResult = onResult,
+        )
+    }
+
+    /**
+     * Starts an EMV card search using an already normalized transaction request.
+     *
+     * @param request normalized transaction data and optional PIN-management purpose.
+     * @param sourceCommand A10 command that initiated the operation.
+     * @param cardSlot required physical card interface.
+     * @param entryMode kernel entry mode matching the selected interface.
+     * @param transactionDisplay optional financial amount and currency display context.
+     * @param onResult callback for intermediate and final EMV results.
+     * @return true when the card search starts successfully.
+     */
+    private fun startTransaction(
+        request: ContactTransactionRequest,
+        sourceCommand: String,
+        cardSlot: CardSlotTypeEnum,
+        entryMode: EmvEntryModeEnum,
+        transactionDisplay: PinpadTransactionDisplay?,
+        onResult: (EmvCommandResult) -> Unit,
+    ): Boolean {
         if (!ensureEmvConfigurationLoaded("before $sourceCommand")) return false
         if (!transactionRunning.compareAndSet(false, true)) {
             PinpadTraceLog.device("EMV $sourceCommand transaction already running")
@@ -542,15 +631,22 @@ class PinpadContactEmvController(
         onlinePinTlvHex = ""
         reversalTlvHex = ""
         lastOnlineApproved = null
+        lastOnlineResponseCode = null
+        activePinManagementOperation = request.pinManagementOperation
+        offlinePinAttemptTracker.reset()
+        offlinePinPromptGeneration.incrementAndGet()
         val completed = AtomicBoolean(false)
         pendingTransactionCompleted = completed
         pendingTransactionResult = onResult
-        val request = ContactTransactionRequest.parse(payload, transactionDisplay)
-        val promptTransaction = transactionDisplay ?: PinpadTransactionDisplay.fromEmv(
-            request.transactionType,
-            request.currencyCode,
-            request.amountAuthorized,
-        )
+        val promptTransaction = if (request.pinManagementOperation == null) {
+            transactionDisplay ?: PinpadTransactionDisplay.fromEmv(
+                request.transactionType,
+                request.currencyCode,
+                request.amountAuthorized,
+            )
+        } else {
+            null
+        }
         activeTransactionType = request.transactionType
         activeEntryMode = entryMode
         if (cardSlot == CardSlotTypeEnum.RF) {
@@ -592,6 +688,7 @@ class PinpadContactEmvController(
         }.onFailure {
             transactionRunning.set(false)
             clearPendingTransaction()
+            activePinManagementOperation = null
             Log.w(TAG, "Unable to start contact transaction search", it)
             PinpadTraceLog.device("EMV $sourceCommand contact search failed=${it.message}")
             showTransactionWarning(sourceCommand, "search exception")
@@ -599,6 +696,7 @@ class PinpadContactEmvController(
         if (result != SdkResult.Success) {
             transactionRunning.set(false)
             clearPendingTransaction()
+            activePinManagementOperation = null
             PinpadTraceLog.device("EMV $sourceCommand contact search sdkResult=$result")
             showTransactionWarning(sourceCommand, "search sdkResult=$result")
             return false
@@ -613,6 +711,7 @@ class PinpadContactEmvController(
         }
         val response = HostOnlineResponse.parse(payload)
         lastOnlineApproved = response.approved
+        lastOnlineResponseCode = response.arc
         val entity = EmvOnlineResultEntity().apply {
             setAuthCode(response.authCode)
             setRejCode(response.arc)
@@ -683,11 +782,6 @@ class PinpadContactEmvController(
         t31ReadDataReady = null
         PinpadDisplayController.showIdle()
         return EmvCommandResult.ok(transactionCode = RESULT_ONLINE_REQUEST, financialNeed = '0')
-    }
-
-    fun pinManagementUnsupported(): EmvCommandResult {
-        PinpadTraceLog.device("EMV T37 PIN management is not implemented yet")
-        return EmvCommandResult.failure('1', "00000000")
     }
 
     private fun startReadAppDataApplicationSelect(
@@ -959,7 +1053,14 @@ class PinpadContactEmvController(
                     }
                 }
                 if (runtimeTlvHex.isNotBlank()) applyRuntimeTlv(runtimeTlvHex)
-                runCatching { emvHandler.onSetTransInitBeforeGPOResponse(true) }
+                val mayContinue = when (request.pinManagementOperation) {
+                    PinManagementPolicy.Operation.CHANGE,
+                    PinManagementPolicy.Operation.VERIFY,
+                    -> configureOfflinePinTerminalCapabilities()
+                    PinManagementPolicy.Operation.UNBLOCK -> configurePinUnblockTerminalCapabilities()
+                    null -> true
+                }
+                runCatching { emvHandler.onSetTransInitBeforeGPOResponse(mayContinue) }
                     .onFailure { PinpadTraceLog.device("EMV $sourceCommand beforeGPO response failed=${it.message}") }
             }
 
@@ -979,7 +1080,11 @@ class PinpadContactEmvController(
                 if (isOnlinePin) {
                     startOnlinePinEntryForEmv(request, sourceCommand, confirmedPan)
                 } else {
-                    startOfflinePinEntryForEmv(sourceCommand, leftTimes)
+                    startOfflinePinEntryForEmv(
+                        sourceCommand,
+                        leftTimes,
+                        offlinePinAttemptTracker.recordPrompt(leftTimes),
+                    )
                 }
             }
 
@@ -997,12 +1102,45 @@ class PinpadContactEmvController(
                 onlineAuthorizationTlvHex = mergeTlvs(onlinePinTlvHex, runtimeTlvHex, collectKnownKernelTlvs(ONLINE_AUTH_TAGS))
                 reversalTlvHex = mergeTlvs(runtimeTlvHex, collectKnownKernelTlvs(REVERSAL_TAGS))
                 transactionTlvHex = mergeTlvs(transactionTlvHex, onlineAuthorizationTlvHex)
+                if (request.pinManagementOperation == PinManagementPolicy.Operation.VERIFY) {
+                    val result = pinVerificationResult(emvTagMap(onlineAuthorizationTlvHex))
+                    PinpadTraceLog.device(
+                        "EMV_STEP $sourceCommand completed local offline PIN verification result=${result.transactionCode}",
+                    )
+                    completeContactTransaction(onResult, result, completed)
+                    runCatching { emvHandler.emvProcessCancel() }
+                        .onFailure { PinpadTraceLog.device("EMV $sourceCommand verify completion cancel failed=${it.message}") }
+                    return
+                }
+                val pinMaintenanceTags = emvTagMap(onlineAuthorizationTlvHex)
+                val invalidPinMaintenanceArqc = when (request.pinManagementOperation) {
+                    PinManagementPolicy.Operation.CHANGE -> !PinManagementPolicy.isValidChangeArqc(pinMaintenanceTags)
+                    PinManagementPolicy.Operation.UNBLOCK -> !PinManagementPolicy.isValidUnblockArqc(pinMaintenanceTags)
+                    else -> false
+                }
+                if (invalidPinMaintenanceArqc) {
+                    PinpadTraceLog.device(
+                        "EMV_STEP $sourceCommand rejected invalid PIN-maintenance ARQC " +
+                            "amount=${tlvValueHex(onlineAuthorizationTlvHex, "9F02").orEmpty()} " +
+                            "cid=${tlvValueHex(onlineAuthorizationTlvHex, EMV_CID_TAG).orEmpty()} " +
+                            "cvm=${tlvValueHex(onlineAuthorizationTlvHex, "9F34").orEmpty()}",
+                    )
+                    completeContactTransaction(
+                        onResult,
+                        EmvCommandResult.failure('1', PIN_CHANGE_INVALID_ARQC_ERROR),
+                        completed,
+                    )
+                    runCatching { emvHandler.emvProcessCancel() }
+                        .onFailure { PinpadTraceLog.device("EMV $sourceCommand invalid ARQC cancel failed=${it.message}") }
+                    return
+                }
                 onlineAuthorizationPending.set(true)
                 PinpadTraceLog.device(
                     "EMV_STEP $sourceCommand onOnlineProc onlineTlvChars=${onlineAuthorizationTlvHex.length} " +
                         "onlinePinTlvChars=${onlinePinTlvHex.length}",
                 )
-                onResult(EmvCommandResult.ok(transactionCode = RESULT_ONLINE_REQUEST, financialNeed = '1'))
+                val financialNeed = if (request.pinManagementOperation == null) '1' else '0'
+                onResult(EmvCommandResult.ok(transactionCode = RESULT_ONLINE_REQUEST, financialNeed = financialNeed))
             }
 
             override fun onPrompt(prompt: PromptEnum?) {
@@ -1032,7 +1170,12 @@ class PinpadContactEmvController(
                 transactionTlvHex = data
                 reversalTlvHex = mergeTlvs(reversalTlvHex, data)
                 if (data.isNotBlank()) batchRecords += data
-                val result = resultFromSdkResult(resultCode, tlvValueHex(data, EMV_CID_TAG))
+                val result = when (request.pinManagementOperation) {
+                    PinManagementPolicy.Operation.CHANGE -> pinChangeResultFromCompletion(resultCode, data)
+                    PinManagementPolicy.Operation.VERIFY -> pinVerificationResultFromCompletion(resultCode, data)
+                    PinManagementPolicy.Operation.UNBLOCK -> pinChangeResultFromCompletion(resultCode, data)
+                    null -> resultFromSdkResult(resultCode, tlvValueHex(data, EMV_CID_TAG))
+                }
                 completeContactTransaction(onResult, result, completed)
             }
         }
@@ -1079,7 +1222,11 @@ class PinpadContactEmvController(
         }
     }
 
-    private fun startOfflinePinEntryForEmv(sourceCommand: String, leftTimes: Int) {
+    private fun startOfflinePinEntryForEmv(
+        sourceCommand: String,
+        leftTimes: Int,
+        retryTriesRemaining: Int?,
+    ) {
         val enteredDigits = AtomicInteger(0)
         val listener = object : OnPinPadInputListener {
             override fun onInputResult(retCode: Int, data: ByteArray?) {
@@ -1118,27 +1265,48 @@ class PinpadContactEmvController(
             }
         }
 
-        val startResult = runCatching {
-            pinPad.setPinKeyboardMode(PinKeyboardModeEnum.FIXED)
-            beepForPinPrompt(sourceCommand)
-            PinpadDisplayController.showEnterPin()
-            PinpadDisplayController.updatePinDigits(0)
-            offlinePinRunning.set(true)
-            pinPad.inputOfflinePin(EMV_PIN_LENGTHS, EMV_PIN_TIMEOUT_SECONDS, listener)
-        }.onFailure {
-            Log.w(TAG, "Unable to start offline PIN entry", it)
-            PinpadTraceLog.device("EMV_PIN $sourceCommand offline start failed=${it.message}")
-        }.getOrDefault(SdkResult.Fail)
+        val promptGeneration = offlinePinPromptGeneration.get()
+        val beginInput = Runnable {
+            if (promptGeneration != offlinePinPromptGeneration.get() || !transactionRunning.get()) {
+                PinpadTraceLog.device("EMV_PIN $sourceCommand suppressed stale offline PIN retry prompt")
+            } else {
+                val startResult = runCatching {
+                    pinPad.setPinKeyboardMode(PinKeyboardModeEnum.FIXED)
+                    beepForPinPrompt(sourceCommand)
+                    PinpadDisplayController.showEnterPin(
+                        listOf(applicationContext.getString(R.string.prompt_enter_pin_icc)),
+                    )
+                    PinpadDisplayController.updatePinDigits(0)
+                    offlinePinRunning.set(true)
+                    pinPad.inputOfflinePin(EMV_PIN_LENGTHS, EMV_PIN_TIMEOUT_SECONDS, listener)
+                }.onFailure {
+                    Log.w(TAG, "Unable to start offline PIN entry", it)
+                    PinpadTraceLog.device("EMV_PIN $sourceCommand offline start failed=${it.message}")
+                }.getOrDefault(SdkResult.Fail)
 
-        PinpadTraceLog.device(
-            "EMV_PIN $sourceCommand offline start timeout=$EMV_PIN_TIMEOUT_SECONDS " +
-                "pinLengths=${EMV_PIN_LENGTHS.joinToString(",")} left=$leftTimes " +
-                "result=${NexgoSdkResultNames.format(startResult)}",
-        )
-        if (startResult != SdkResult.Success) {
-            offlinePinRunning.set(false)
-            PinpadDisplayController.showBadReadThenIdle()
-            respondToEmvPinRequest(sourceCommand, isConfirm = false, isBypass = false)
+                PinpadTraceLog.device(
+                    "EMV_PIN $sourceCommand offline start timeout=$EMV_PIN_TIMEOUT_SECONDS " +
+                        "pinLengths=${EMV_PIN_LENGTHS.joinToString(",")} left=$leftTimes " +
+                        "retry=${retryTriesRemaining != null} result=${NexgoSdkResultNames.format(startResult)}",
+                )
+                if (startResult != SdkResult.Success) {
+                    offlinePinRunning.set(false)
+                    PinpadDisplayController.showBadReadThenIdle()
+                    respondToEmvPinRequest(sourceCommand, isConfirm = false, isBypass = false)
+                }
+            }
+        }
+        if (retryTriesRemaining != null) {
+            val message = applicationContext.resources.getQuantityString(
+                R.plurals.prompt_offline_pin_incorrect_with_tries,
+                retryTriesRemaining,
+                retryTriesRemaining,
+            )
+            beepForOfflinePinError(sourceCommand)
+            PinpadDisplayController.showMessage(message)
+            mainHandler.postDelayed(beginInput, OFFLINE_PIN_RETRY_MESSAGE_MS)
+        } else {
+            beginInput.run()
         }
     }
 
@@ -1146,6 +1314,12 @@ class PinpadContactEmvController(
         runCatching { deviceEngine.beeper.beep(PIN_PROMPT_BEEP_MS) }
             .onSuccess { PinpadTraceLog.device("EMV_PIN $sourceCommand prompt beep=${PIN_PROMPT_BEEP_MS}ms") }
             .onFailure { PinpadTraceLog.device("EMV_PIN $sourceCommand prompt beep failed=${it.message}") }
+    }
+
+    private fun beepForOfflinePinError(sourceCommand: String) {
+        runCatching { deviceEngine.beeper.beep(ERROR_BEEP_MS) }
+            .onSuccess { PinpadTraceLog.device("EMV_PIN $sourceCommand incorrect PIN beep=${ERROR_BEEP_MS}ms") }
+            .onFailure { PinpadTraceLog.device("EMV_PIN $sourceCommand incorrect PIN beep failed=${it.message}") }
     }
 
     private fun beepForCardPrompt(sourceCommand: String) {
@@ -1573,6 +1747,110 @@ class PinpadContactEmvController(
         }.getOrNull()
     }
 
+    /**
+     * Applies the offline-PIN-only CVM policy to the selected contact AID.
+     *
+     * @return true when tag 9F33 exposes at least one supported offline PIN method.
+     */
+    private fun configureOfflinePinTerminalCapabilities(): Boolean {
+        val configured = getKernelTlvBytes("9F33")
+        val restricted = PinManagementPolicy.restrictTerminalCapabilities(configured)
+        if (restricted == null) {
+            PinpadTraceLog.device(
+                "EMV T37 cannot continue; selected AID has no plaintext or enciphered offline PIN capability",
+            )
+            return false
+        }
+        setKernelTlv("9F33", restricted)
+        PinpadTraceLog.device("EMV T37 restricted terminal capabilities 9F33=${restricted.toHexString()}")
+        return true
+    }
+
+    /** Prevents a blocked PIN from being requested while obtaining the issuer unblock script. */
+    private fun configurePinUnblockTerminalCapabilities(): Boolean {
+        val configured = getKernelTlvBytes("9F33")
+        val restricted = PinManagementPolicy.restrictToNoCvmTerminalCapabilities(configured)
+        if (restricted == null) {
+            PinpadTraceLog.device("EMV T37 unblock cannot continue; terminal capabilities 9F33 are unavailable")
+            return false
+        }
+        setKernelTlv("9F33", restricted)
+        PinpadTraceLog.device("EMV T37 unblock restricted terminal capabilities 9F33=${restricted.toHexString()}")
+        return true
+    }
+
+    /** Maps the card's 9F34 result to the T38 V0/V1 vocabulary. */
+    private fun pinVerificationResult(tags: Map<String, String>): EmvCommandResult =
+        EmvCommandResult.ok(
+            transactionCode = if (PinManagementPolicy.isSuccessfulOfflinePinCvm(tags["9F34"])) {
+                RESULT_PIN_VERIFIED
+            } else {
+                RESULT_PIN_VERIFICATION_FAILED
+            },
+            financialNeed = '0',
+        )
+
+    /** Maps a completed verify operation, including blocked-card outcomes, to T38. */
+    private fun pinVerificationResultFromCompletion(resultCode: Int, data: String): EmvCommandResult {
+        if (resultCode == SdkResult.Emv_App_Block || resultCode == SdkResult.Emv_Card_Block) {
+            return EmvCommandResult.ok(transactionCode = RESULT_APP_RESELECT, financialNeed = '0')
+        }
+        val tags = emvTagMap(data)
+        return if (tags.containsKey("9F34")) {
+            pinVerificationResult(tags)
+        } else {
+            EmvCommandResult.failure('1', "%08X".format(resultCode))
+        }
+    }
+
+    /**
+     * Maps a completed PIN-maintenance kernel flow to the A10 T38 result vocabulary.
+     *
+     * @param resultCode NEXGO SDK completion code.
+     * @param data encoded completion TLVs.
+     * @return V0 for a successful script/AAC result, V1 for a completed operation failure, or a fatal result.
+     */
+    private fun pinChangeResultFromCompletion(resultCode: Int, data: String): EmvCommandResult {
+        val tags = emvTagMap(data)
+        if (PinManagementPolicy.isSuccessfulMaintenanceCompletion(
+                activePinManagementOperation,
+                lastOnlineResponseCode,
+                tags,
+            )
+        ) {
+            PinpadTraceLog.device(
+                "EMV T37 PIN maintenance completed operation=$activePinManagementOperation " +
+                    "response=${lastOnlineResponseCode.orEmpty()} " +
+                    "cid=${tags[EMV_CID_TAG].orEmpty()} tvr=${tags["95"].orEmpty()} tsi=${tags["9B"].orEmpty()}",
+            )
+            return EmvCommandResult.ok(transactionCode = RESULT_PIN_VERIFIED, financialNeed = '0')
+        }
+        if (resultCode == SdkResult.Emv_App_Block || resultCode == SdkResult.Emv_Card_Block) {
+            return EmvCommandResult.ok(transactionCode = RESULT_APP_RESELECT, financialNeed = '0')
+        }
+        if (lastOnlineResponseCode != null || tags.containsKey("9F34")) {
+            PinpadTraceLog.device(
+                "EMV T37 PIN maintenance failed operation=$activePinManagementOperation " +
+                    "sdk=${NexgoSdkResultNames.format(resultCode)} " +
+                    "response=${lastOnlineResponseCode.orEmpty()} cid=${tags[EMV_CID_TAG].orEmpty()} " +
+                    "tvr=${tags["95"].orEmpty()} tsi=${tags["9B"].orEmpty()}",
+            )
+            return EmvCommandResult.ok(transactionCode = RESULT_PIN_VERIFICATION_FAILED, financialNeed = '0')
+        }
+        return EmvCommandResult.failure('1', "%08X".format(resultCode))
+    }
+
+    /**
+     * Converts encoded TLV records into an uppercase tag/value map.
+     *
+     * @param tlvHex encoded EMV data.
+     * @return the last value encountered for each tag.
+     */
+    private fun emvTagMap(tlvHex: String): Map<String, String> =
+        PinpadEmvDataObjects.parseTlvRecords(tlvHex).associate { record ->
+            record.tag to PinpadEmvDataObjects.run { record.value.toHex() }
+        }
+
     private fun completeContactTransaction(
         onResult: (EmvCommandResult) -> Unit,
         result: EmvCommandResult,
@@ -1586,13 +1864,34 @@ class PinpadContactEmvController(
                 if (result.isDeclined()) {
                     showTransactionDeclined(result)
                 } else {
-                    val sensoryBrand = approvedSaleSensoryBrand(result)
+                    val pinMaintenanceOperation = activePinManagementOperation
+                    val pinMaintenanceSucceeded = pinMaintenanceOperation in setOf(
+                        PinManagementPolicy.Operation.CHANGE,
+                        PinManagementPolicy.Operation.UNBLOCK,
+                    ) &&
+                        result.transactionCode == RESULT_PIN_VERIFIED
+                    val pinMaintenanceMessage = when (pinMaintenanceOperation) {
+                        PinManagementPolicy.Operation.CHANGE -> R.string.prompt_pin_changed_successfully
+                        PinManagementPolicy.Operation.UNBLOCK -> R.string.prompt_pin_unblocked_successfully
+                        else -> null
+                    }
+                    val sensoryBrand = approvedSensoryBrand(result)
                     if (sensoryBrand != null) {
                         PinpadTraceLog.device(
                             "EMV sensory brand=$sensoryBrand result=${result.transactionCode} " +
                                 "transType=%02X".format(activeTransactionType.toInt() and 0xFF),
                         )
-                        PinpadDisplayController.showBrandSensory(sensoryBrand)
+                        PinpadDisplayController.showBrandSensory(
+                            brand = sensoryBrand,
+                            completionMessage = pinMaintenanceMessage
+                                ?.let(applicationContext::getString)
+                                .takeIf { pinMaintenanceSucceeded },
+                            completionMessageDurationMillis = PIN_CHANGE_SUCCESS_MESSAGE_MS,
+                            preserveOnTransactionComplete = pinMaintenanceSucceeded,
+                            onComplete = ::beepForPinChangeSuccess.takeIf { pinMaintenanceSucceeded },
+                        )
+                    } else if (pinMaintenanceSucceeded) {
+                        showPinMaintenanceSuccess(pinMaintenanceOperation)
                     } else {
                         PinpadDisplayController.showIdle()
                     }
@@ -1601,18 +1900,46 @@ class PinpadContactEmvController(
                 showTransactionWarning("EMV", "result reason=${result.reason} error=${result.errorMessage}")
             }
         }
+        activePinManagementOperation = null
         onResult(result)
     }
 
-    private fun approvedSaleSensoryBrand(result: EmvCommandResult): SensoryBrand? {
+    private fun approvedSensoryBrand(result: EmvCommandResult): SensoryBrand? {
         if (!BuildConfig.SENSORY_KITS_ENABLED) return null
-        if (activeTransactionType != SALE_TRANS_TYPE) return null
-        if (result.transactionCode !in APPROVED_SENSORY_RESULTS) return null
+        val eligible = if (activePinManagementOperation in setOf(
+                PinManagementPolicy.Operation.CHANGE,
+                PinManagementPolicy.Operation.UNBLOCK,
+            )
+        ) {
+            result.transactionCode == RESULT_PIN_VERIFIED
+        } else {
+            activeTransactionType == SALE_TRANS_TYPE && result.transactionCode in APPROVED_SENSORY_RESULTS
+        }
+        if (!eligible) return null
         val aid = selectedAidFromKernel()
             ?: tlvValueHex(transactionTlvHex, "4F")
             ?: tlvValueHex(transactionTlvHex, "84")
             ?: tlvValueHex(transactionTlvHex, "9F06")
         return sensoryBrandFromAid(aid)
+    }
+
+    private fun showPinMaintenanceSuccess(operation: PinManagementPolicy.Operation?) {
+        val message = when (operation) {
+            PinManagementPolicy.Operation.UNBLOCK -> R.string.prompt_pin_unblocked_successfully
+            else -> R.string.prompt_pin_changed_successfully
+        }
+        PinpadDisplayController.showMessageThenIdle(
+            applicationContext.getString(message),
+            PIN_CHANGE_SUCCESS_MESSAGE_MS,
+            preserveOnTransactionComplete = true,
+        )
+        beepForPinChangeSuccess()
+    }
+
+    private fun beepForPinChangeSuccess() {
+        runCatching { deviceEngine.beeper.beep(PIN_CHANGE_SUCCESS_BEEP_MS) }
+            .onSuccess { PinpadTraceLog.device("EMV T37 PIN change success beep=${PIN_CHANGE_SUCCESS_BEEP_MS}ms") }
+            .onFailure { PinpadTraceLog.device("EMV T37 PIN change success beep failed=${it.message}") }
     }
 
     private fun handleApplicationSelection(
@@ -2320,6 +2647,7 @@ class PinpadContactEmvController(
         val timeoutSeconds: Int,
         val encryptedSessionKey: String,
         val pinScheme: EmvPinScheme,
+        val pinManagementOperation: PinManagementPolicy.Operation? = null,
     ) {
         companion object {
             fun parse(
@@ -2332,7 +2660,6 @@ class PinpadContactEmvController(
                 val sessionKey = parts.getOrNull(7)
                     ?.replace(" ", "")
                     ?.uppercase(Locale.US)
-                    ?.takeIf { it.length in SESSION_KEY_HEX_LENGTHS && it.all { ch -> ch.digitToIntOrNull(16) != null } }
                     .orEmpty()
                 return ContactTransactionRequest(
                     amountAuthorized = transactionDisplay?.emvAmount
@@ -2351,6 +2678,19 @@ class PinpadContactEmvController(
                     pinScheme = EmvPinScheme.fromCode(parts.drop(8).lastOrNull()?.singleOrNull()),
                 )
             }
+
+            /** Creates a contact-only, zero-amount T37 PIN-management request. */
+            fun pinManagement(operation: PinManagementPolicy.Operation): ContactTransactionRequest = ContactTransactionRequest(
+                amountAuthorized = PinManagementPolicy.ZERO_AMOUNT,
+                amountOther = PinManagementPolicy.ZERO_AMOUNT,
+                currencyCode = DEFAULT_CURRENCY_CODE,
+                transactionType = DEFAULT_EMV_TRANS_TYPE,
+                forceOnline = operation == PinManagementPolicy.Operation.UNBLOCK,
+                timeoutSeconds = CONTACT_SEARCH_TIMEOUT_SECONDS,
+                encryptedSessionKey = "",
+                pinScheme = EmvPinScheme.MASTER_SESSION,
+                pinManagementOperation = operation,
+            )
         }
     }
 
@@ -2411,7 +2751,10 @@ class PinpadContactEmvController(
         private const val EMV_PIN_TIMEOUT_SECONDS = 60
         private const val EMV_OFFLINE_MAX_PIN = 12
         private const val PIN_PROMPT_BEEP_MS = 120
+        private const val OFFLINE_PIN_RETRY_MESSAGE_MS = 2_000L
         private const val CARD_PROMPT_BEEP_MS = 90
+        private const val PIN_CHANGE_SUCCESS_BEEP_MS = 180
+        private const val PIN_CHANGE_SUCCESS_MESSAGE_MS = 15_000L
         private const val DATA_FORMAT_TRACE_LIMIT = 8
         private const val ERROR_BEEP_MS = 200
         private const val DECLINED_BEEP_MS = 600
@@ -2447,6 +2790,8 @@ class PinpadContactEmvController(
         private const val RESULT_ONLINE_DECLINED = "Z4"
         private const val RESULT_ONLINE_REQUEST = "A1"
         private const val RESULT_APP_RESELECT = "A4"
+        private const val RESULT_PIN_VERIFIED = "V0"
+        private const val RESULT_PIN_VERIFICATION_FAILED = "V1"
         private const val VISA_RID = "A000000003"
         private const val MASTERCARD_RID = "A000000004"
         private val APPROVED_SENSORY_RESULTS = setOf(
@@ -2463,6 +2808,7 @@ class PinpadContactEmvController(
         private const val T12_FATAL_ERROR = "11"
         private const val T12_MSR_FALLBACK = "14"
         private const val EMV_CANCELLED_ERROR = "EFFFFFFF"
+        private const val PIN_CHANGE_INVALID_ARQC_ERROR = "E1000037"
         private const val T12_CANCELLED_ERROR = "11$EMV_CANCELLED_ERROR"
         private const val AID_TAG = "9F06"
         private const val TERMINAL_TRANSACTION_SEQUENCE_TAG = "9F41"

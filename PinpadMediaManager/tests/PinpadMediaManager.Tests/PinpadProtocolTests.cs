@@ -273,7 +273,95 @@ public sealed class PinpadProtocolTests
     }
 
     [Fact]
-    public async Task A10ClearKeyInjectionUses02AndRedactsTrace()
+    public async Task A10ConfigurationQueryUsesT92AndParsesCompleteSnapshot()
+    {
+        const string json =
+            """{"terminalConfigurationPresent":true,"terminalConfigurationBytes":42,"dataFormatTags":["9F02","9F03"],"capkIds":["A000000004F1"],"contactAidIds":["A0000000041010"],"contactlessAidIds":["A0000000031010"],"contactlessDrlIds":[]}""";
+        var payload = $"0{PinpadControl.Fs}{Convert.ToBase64String(Encoding.UTF8.GetBytes(json))}";
+        using var transport = new ScriptedTransport(command => command == "T92"
+            ? PinpadFrame.Ascii(PinpadFrameType.Transaction, "T93", payload)
+            : throw new InvalidOperationException(command));
+        transport.Open("TEST", 9_600);
+        using var client = new PinpadClient(transport);
+
+        var snapshot = await client.QueryA10EmvConfigurationAsync();
+
+        var request = PinpadFrameCodec.Decode(transport.Writes[0]);
+        Assert.Equal("T92", request.CommandId);
+        Assert.Empty(request.PayloadAscii);
+        Assert.True(snapshot.TerminalConfigurationPresent);
+        Assert.Equal(42, snapshot.TerminalConfigurationBytes);
+        Assert.Equal(["9F02", "9F03"], snapshot.DataFormatTags);
+        Assert.Equal(["A000000004F1"], snapshot.CapkIds);
+        Assert.Equal(["A0000000041010"], snapshot.ContactAidIds);
+        Assert.Equal(["A0000000031010"], snapshot.ContactlessAidIds);
+        Assert.Empty(snapshot.ContactlessDrlIds);
+    }
+
+    [Fact]
+    public async Task A10ConfigurationClearRequiresExplicitAllPayload()
+    {
+        using var transport = new ScriptedTransport(command => command == "T94"
+            ? PinpadFrame.Ascii(PinpadFrameType.Transaction, "T95", "0")
+            : throw new InvalidOperationException(command));
+        transport.Open("TEST", 9_600);
+        using var client = new PinpadClient(transport);
+
+        await client.ClearAllA10EmvConfigurationAsync();
+
+        var request = PinpadFrameCodec.Decode(transport.Writes[0]);
+        Assert.Equal("T94", request.CommandId);
+        Assert.Equal("ALL", request.PayloadAscii);
+    }
+
+    [Theory]
+    [InlineData(A10PinKeyScheme.MasterSession, "0123456789ABCDEFFEDCBA9876543210", "0123456789ABCDEFFEDCBA9876543210", "0")]
+    [InlineData(A10PinKeyScheme.Dukpt, "0123456789ABCDEFFEDCBA9876543210", "", "1")]
+    public async Task A10ContactTransactionIncludesOnlinePinScheme(
+        A10PinKeyScheme scheme,
+        string configuredSessionKey,
+        string expectedSessionKey,
+        string expectedSchemeCode)
+    {
+        using var transport = new ScriptedTransport(command => command switch
+        {
+            "T11" => PinpadFrame.Ascii(PinpadFrameType.Transaction, "T12", "0"),
+            "T15" => PinpadFrame.Ascii(PinpadFrameType.Transaction, "T16", "0Z4"),
+            "T21" => PinpadFrame.Ascii(PinpadFrameType.Transaction, "T22", "0"),
+            "Q2" => PinpadFrame.Ascii(PinpadFrameType.Transaction, "Q2", ""),
+            _ => throw new InvalidOperationException(command),
+        });
+        transport.Open("TEST", 9_600);
+        using var client = new PinpadClient(transport);
+        var transaction = A10EmvTransactionRequest.Default with
+        {
+            OnlinePinKeyScheme = scheme,
+            EncryptedSessionKey = configuredSessionKey,
+        };
+
+        await client.RunA10ContactTransactionAsync(transaction);
+
+        var request = transport.Writes
+            .Where(write => write.Length > 1)
+            .Select(write => PinpadFrameCodec.Decode(write))
+            .Single(frame => frame.CommandId == "T15");
+        var expectedPayload = string.Join(
+            PinpadControl.Sub,
+            "",
+            "000000005000",
+            "000000000000",
+            "2840",
+            "00",
+            "40",
+            "00",
+            "0",
+            expectedSessionKey,
+            expectedSchemeCode);
+        Assert.Equal(expectedPayload, request.PayloadAscii);
+    }
+
+    [Fact]
+    public async Task A10ClearKeyInjectionUses02AndShowsCompleteTrace()
     {
         const string clearKey = "0123456789ABCDEFFEDCBA9876543210";
         using var transport = new ScriptedTransport(command => command == "02"
@@ -289,12 +377,12 @@ public sealed class PinpadProtocolTests
         var request = PinpadFrameCodec.Decode(transport.Writes[0]);
         Assert.Equal("02", request.CommandId);
         Assert.Equal($"0{clearKey}{PinpadControl.Fs}P0ET", request.PayloadAscii);
-        Assert.DoesNotContain(trace, line => line.Contains(clearKey, StringComparison.Ordinal));
-        Assert.Contains(trace, line => line.Contains("<REDACTED:", StringComparison.Ordinal));
+        Assert.Contains(trace, line => line.Contains(clearKey, StringComparison.Ordinal));
+        Assert.DoesNotContain(trace, line => line.Contains("<REDACTED:", StringComparison.Ordinal));
     }
 
     [Fact]
-    public async Task A10SecretKeyInjectionUses20And21AndRedactsTrace()
+    public async Task A10SecretKeyInjectionUses20And21AndShowsCompleteTrace()
     {
         const string masterKey = "0123456789ABCDEFFEDCBA9876543210";
         const string sessionKey = "89ABCDEF012345670123456789ABCDEF";
@@ -319,9 +407,9 @@ public sealed class PinpadProtocolTests
         Assert.Equal(["20", "21"], requests.Select(request => request.CommandId));
         Assert.Equal($"0{masterKey}", requests[0].PayloadAscii);
         Assert.Equal($"3{sessionKey}", requests[1].PayloadAscii);
-        Assert.DoesNotContain(trace, line => line.Contains(masterKey, StringComparison.Ordinal));
-        Assert.DoesNotContain(trace, line => line.Contains(sessionKey, StringComparison.Ordinal));
-        Assert.Contains(trace, line => line.Contains("<REDACTED:", StringComparison.Ordinal));
+        Assert.Contains(trace, line => line.Contains(masterKey, StringComparison.Ordinal));
+        Assert.Contains(trace, line => line.Contains(sessionKey, StringComparison.Ordinal));
+        Assert.DoesNotContain(trace, line => line.Contains("<REDACTED:", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -364,8 +452,8 @@ public sealed class PinpadProtocolTests
         Assert.Equal(pinBlock, result.EncryptedPinBlock);
         Assert.Equal(4, result.PinLength);
         Assert.Equal("00", result.KeyIdentifier);
-        Assert.DoesNotContain(trace, line => line.Contains(sessionKey, StringComparison.Ordinal));
-        Assert.DoesNotContain(trace, line => line.Contains(pinBlock, StringComparison.Ordinal));
+        Assert.Contains(trace, line => line.Contains(sessionKey, StringComparison.Ordinal));
+        Assert.Contains(trace, line => line.Contains(pinBlock, StringComparison.Ordinal));
     }
 
     [Fact]
@@ -390,8 +478,8 @@ public sealed class PinpadProtocolTests
         Assert.Equal("PIN captured", result.Status);
         Assert.Equal(pinBlock, result.EncryptedPinBlock);
         Assert.Equal(4, result.PinLength);
-        Assert.DoesNotContain(trace, line => line.Contains("4111111111111111", StringComparison.Ordinal));
-        Assert.DoesNotContain(trace, line => line.Contains(pinBlock, StringComparison.Ordinal));
+        Assert.Contains(trace, line => line.Contains("4111111111111111", StringComparison.Ordinal));
+        Assert.Contains(trace, line => line.Contains(pinBlock, StringComparison.Ordinal));
     }
 
     [Fact]
@@ -457,6 +545,41 @@ public sealed class PinpadProtocolTests
         Assert.Equal(Encoding.UTF8.GetBytes("Línea 1"), request.Payload);
         Assert.Equal(0x32, requestBytes[^1]);
         Assert.Equal("<STX>Z2Línea 1<ETX><LRC:32>", PinpadProtocolText.FormatBytes(requestBytes));
+    }
+
+    [Fact]
+    public async Task A10OfflinePinVerifyUsesDocumentedT37Operation()
+    {
+        using var transport = new ScriptedTransport(command => command == "T37"
+            ? PinpadFrame.Ascii(PinpadFrameType.Transaction, "T38", "0V0")
+            : throw new InvalidOperationException(command));
+        transport.Open("TEST", 9_600);
+        using var client = new PinpadClient(transport);
+
+        var result = await client.VerifyA10OfflinePinAsync();
+
+        var request = PinpadFrameCodec.Decode(transport.Writes[0]);
+        Assert.Equal("T37", request.CommandId);
+        Assert.Equal(PinpadControl.Sub + "3", request.PayloadAscii);
+        Assert.Equal("0V0", result.Payload);
+    }
+
+    [Fact]
+    public async Task A10PinManagementCancelSendsIccPinAndIdleResetSequence()
+    {
+        using var transport = new ScriptedTransport(command =>
+            PinpadFrame.Ascii(PinpadFrameType.Transaction, command));
+        transport.Open("TEST", 9_600);
+        using var client = new PinpadClient(transport);
+
+        await client.CancelA10PinManagementAsync();
+
+        var requests = transport.Writes
+            .Where(write => write.Length > 1)
+            .Select(write => PinpadFrameCodec.Decode(write))
+            .ToArray();
+        Assert.Equal(["T1C", "72", "Z1"], requests.Select(request => request.CommandId));
+        Assert.All(requests, request => Assert.Empty(request.Payload));
     }
 
     [Fact]

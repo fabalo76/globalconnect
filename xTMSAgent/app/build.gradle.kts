@@ -23,6 +23,14 @@ val productionSigningConfigured = listOf(
     releaseKeyAlias,
     releaseKeyPassword,
 ).all { !it.isNullOrBlank() }
+val downloadCredentialId = providers.gradleProperty("XTMS_DOWNLOAD_CREDENTIAL_ID")
+    .orElse(providers.environmentVariable("XTMS_DOWNLOAD_CREDENTIAL_ID"))
+    .orElse("")
+    .get()
+val downloadCredentialSecret = providers.gradleProperty("XTMS_DOWNLOAD_CREDENTIAL_SECRET")
+    .orElse(providers.environmentVariable("XTMS_DOWNLOAD_CREDENTIAL_SECRET"))
+    .orElse("")
+    .get()
 
 android {
     namespace = "one.globalconnect.xtmsagent"
@@ -31,40 +39,19 @@ android {
 
     buildFeatures.buildConfig = true
 
-    flavorDimensions += "client"
-
-    productFlavors {
-        create("globalconnect") {
-            dimension = "client"
-            applicationIdSuffix = ".globalconnect"
-            buildConfigField("String",  "DEFAULT_SEED_0",    "\"22687075\"")
-            buildConfigField("String",  "DEFAULT_SEED_1",    "\"27071287\"")
-            buildConfigField("boolean", "FORCE_PWD_CHANGE",  "false")
-        }
-        create("banpais") {
-            dimension = "client"
-            applicationIdSuffix = ".banpais"
-            buildConfigField("String",  "DEFAULT_SEED_0",    "\"22687075\"")
-            buildConfigField("String",  "DEFAULT_SEED_1",    "\"27071287\"")
-            buildConfigField("boolean", "FORCE_PWD_CHANGE",  "false")
-        }
-        create("banrural") {
-            dimension = "client"
-            applicationIdSuffix = ".banrural"
-            buildConfigField("String",  "DEFAULT_SEED_0",    "\"22687075\"")
-            buildConfigField("String",  "DEFAULT_SEED_1",    "\"27071287\"")
-            buildConfigField("boolean", "FORCE_PWD_CHANGE",  "false")
-        }
-    }
-
     defaultConfig {
-        applicationId = "one.globalconnect.xtmsagent"
+        applicationId = "one.globalconnect.xtmsagent.globalconnect"
         minSdk = 29
         //noinspection OldTargetApi
         targetSdk = 35
-        versionCode = 60
-        versionName = "2.1.2.60"
+        versionCode = 61
+        versionName = "2.1.2.61"
         buildConfigField("String", "GLOBAL_CONNECT_ENV", "\"dev\"")
+        buildConfigField("String", "DEFAULT_SEED_0", "\"22687075\"")
+        buildConfigField("String", "DEFAULT_SEED_1", "\"27071287\"")
+        buildConfigField("boolean", "FORCE_PWD_CHANGE", "false")
+        buildConfigField("String", "DOWNLOAD_CREDENTIAL_ID", "\"${downloadCredentialId.replace("\\", "\\\\").replace("\"", "\\\"")}\"")
+        buildConfigField("String", "DOWNLOAD_CREDENTIAL_SECRET", "\"${downloadCredentialSecret.replace("\\", "\\\\").replace("\"", "\\\"")}\"")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -133,8 +120,7 @@ android {
             .map { it as com.android.build.gradle.internal.api.ApkVariantOutputImpl }
             .forEach { output ->
                 val signed = signingLabels[this.signingConfig] ?: this.signingConfig?.keyAlias ?: "unsigned"
-                val flavor = this.flavorName.replaceFirstChar { it.uppercase() }
-                output.outputFileName = "xTMSAgent-${flavor}-${versionName}-${generateGitInfo()}-${this.buildType.name}-${signed}.apk"
+                output.outputFileName = "xTMSAgent-${versionName}-${generateGitInfo()}-${this.buildType.name}-${signed}.apk"
             }
     }
 }

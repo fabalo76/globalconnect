@@ -79,6 +79,28 @@ class PINPADSessionControllerTest {
     }
 
     @Test
+    fun setLocalTimeIsCompatibilityDummyThatReturnsSuccess() {
+        val responses = controller.onInbound(
+            PINPADInbound.Frame(
+                PINPADFrame(
+                    PINPADFrameType.Administration,
+                    "18",
+                    "202608241164614".toByteArray(),
+                ),
+            ),
+        )
+
+        assertEquals(PINPADControl.ACK, responses[0].single())
+        val response = assertIs<PINPADFrameCodec.DecodeResult.Valid>(codec.decode(responses[1]))
+        assertEquals(PINPADFrameType.Administration, response.frame.frameType)
+        assertEquals("18", response.frame.commandId)
+        assertEquals("0", response.frame.payloadAscii)
+
+        val finalResponses = controller.onInbound(PINPADInbound.Control(PINPADControl.ACK))
+        assertEquals(PINPADControl.EOT, finalResponses.single().single())
+    }
+
+    @Test
     fun firmwareComponentFourReturnsApplicationVersion() {
         val responses = controller.onInbound(
             PINPADInbound.Frame(PINPADFrame(PINPADFrameType.Administration, "19", "4".toByteArray())),
@@ -178,6 +200,28 @@ class PINPADSessionControllerTest {
     }
 
     @Test
+    fun dukptKeyLoadsWithoutAuthorizedModeReturnOnlyEot() {
+        val payload = "EA4A38ADB99BEFEA7ACB13F4312CE0DAFFFF2BED86174F000000"
+
+        listOf("90", "94").forEach { commandId ->
+            val authorizer = FakeKeyLoadAuthorizer()
+            val commandController = PINPADSessionController(
+                deviceInfoProvider = FakeDeviceInfoProvider(),
+                keyLoadAuthorizer = authorizer,
+                codec = codec,
+            )
+
+            val responses = commandController.onInbound(
+                PINPADInbound.Frame(PINPADFrame(PINPADFrameType.Transaction, commandId, payload.toByteArray())),
+            )
+
+            assertEquals(1, responses.size, commandId)
+            assertEquals(PINPADControl.EOT, responses.single().single(), commandId)
+            assertEquals(0, authorizer.clearKeyActivityCount, commandId)
+        }
+    }
+
+    @Test
     fun clearKeyLoadExecutesOnlyAfterModeWasAuthorized() {
         val asyncResponses = CopyOnWriteArrayList<ByteArray>()
         val authorizer = FakeKeyLoadAuthorizer(clearKeyModeActive = true)
@@ -235,6 +279,48 @@ class PINPADSessionControllerTest {
         assertEquals(PINPADControl.ACK, responses[0].single())
         val response = assertIs<PINPADFrameCodec.DecodeResult.Valid>(codec.decode(responses[1]))
         assertEquals("06", response.frame.commandId)
+        assertEquals(1, authorizer.clearKeyActivityCount)
+    }
+
+    @Test
+    fun keyInjectionModeAllowsDukptKeyLoadsAndRecordsActivity() {
+        val payload = "EA4A38ADB99BEFEA7ACB13F4312CE0DAFFFF2BED86174F000000"
+
+        listOf("90", "94").forEach { commandId ->
+            val authorizer = FakeKeyLoadAuthorizer(clearKeyModeActive = true)
+            val commandController = PINPADSessionController(
+                deviceInfoProvider = FakeDeviceInfoProvider(),
+                keyLoadAuthorizer = authorizer,
+                codec = codec,
+            )
+
+            val responses = commandController.onInbound(
+                PINPADInbound.Frame(PINPADFrame(PINPADFrameType.Transaction, commandId, payload.toByteArray())),
+            )
+
+            assertEquals(PINPADControl.ACK, responses[0].single(), commandId)
+            val response = assertIs<PINPADFrameCodec.DecodeResult.Valid>(codec.decode(responses[1]))
+            assertEquals("91", response.frame.commandId, commandId)
+            assertEquals(1, authorizer.clearKeyActivityCount, commandId)
+        }
+    }
+
+    @Test
+    fun keyInjectionModeAllowsDukptStatusQueryAndRecordsActivity() {
+        val authorizer = FakeKeyLoadAuthorizer(clearKeyModeActive = true)
+        val commandController = PINPADSessionController(
+            deviceInfoProvider = FakeDeviceInfoProvider(),
+            keyLoadAuthorizer = authorizer,
+            codec = codec,
+        )
+
+        val responses = commandController.onInbound(
+            PINPADInbound.Frame(PINPADFrame(PINPADFrameType.Transaction, "98", "01".toByteArray())),
+        )
+
+        assertEquals(PINPADControl.ACK, responses[0].single())
+        val response = assertIs<PINPADFrameCodec.DecodeResult.Valid>(codec.decode(responses[1]))
+        assertEquals("99", response.frame.commandId)
         assertEquals(1, authorizer.clearKeyActivityCount)
     }
 
@@ -423,6 +509,32 @@ class PINPADSessionControllerTest {
     }
 
     @Test
+    fun completeEmvConfigQueryReturnsT93WhenDeviceIsUnavailable() {
+        val responses = controller.onInbound(
+            PINPADInbound.Frame(PINPADFrame(PINPADFrameType.Transaction, "T92")),
+        )
+
+        assertEquals(PINPADControl.ACK, responses[0].single())
+        val response = assertIs<PINPADFrameCodec.DecodeResult.Valid>(codec.decode(responses[1]))
+        assertEquals(PINPADFrameType.Transaction, response.frame.frameType)
+        assertEquals("T93", response.frame.commandId)
+        assertEquals("1", response.frame.payloadAscii)
+    }
+
+    @Test
+    fun completeEmvConfigClearReturnsT95WhenDeviceIsUnavailable() {
+        val responses = controller.onInbound(
+            PINPADInbound.Frame(PINPADFrame(PINPADFrameType.Transaction, "T94", "ALL".toByteArray())),
+        )
+
+        assertEquals(PINPADControl.ACK, responses[0].single())
+        val response = assertIs<PINPADFrameCodec.DecodeResult.Valid>(codec.decode(responses[1]))
+        assertEquals(PINPADFrameType.Transaction, response.frame.frameType)
+        assertEquals("T95", response.frame.commandId)
+        assertEquals("11", response.frame.payloadAscii)
+    }
+
+    @Test
     fun displayFontSizeReturnsB2Status() {
         val responses = controller.onInbound(
             PINPADInbound.Frame(PINPADFrame(PINPADFrameType.Transaction, "B1", "2".toByteArray())),
@@ -521,6 +633,7 @@ class PINPADSessionControllerTest {
             CommandCase(PINPADFrameType.Administration, "12", "0"),
             CommandCase(PINPADFrameType.Administration, "13", "4"),
             CommandCase(PINPADFrameType.Administration, "17"),
+            CommandCase(PINPADFrameType.Administration, "18", "202608241164614"),
             CommandCase(PINPADFrameType.Administration, "19", "1"),
             CommandCase(PINPADFrameType.Administration, "1C"),
             CommandCase(PINPADFrameType.Administration, "1F"),
@@ -579,6 +692,7 @@ class PINPADSessionControllerTest {
             CommandCase(PINPADFrameType.Transaction, "24", "12345678\u001C00412NPIN\u001CTHANKS\u001CPROCESSING"),
             CommandCase(PINPADFrameType.Transaction, "70", "1234567890123456\u001CD0001"),
             CommandCase(PINPADFrameType.Transaction, "7G", ".1234567890123456\u001C00000000000000000001"),
+            CommandCase(PINPADFrameType.Transaction, "7H", "1234567890123456"),
             CommandCase(PINPADFrameType.Transaction, "90", "ABCDEF0123456789FEDCBA9876543210FFFF9876543210E00000"),
             CommandCase(PINPADFrameType.Transaction, "94", "ABCDEF0123456789FEDCBA9876543210FFFF9876543210E00000"),
             CommandCase(PINPADFrameType.Transaction, "98", "01"),
@@ -638,7 +752,7 @@ class PINPADSessionControllerTest {
             CommandCase(PINPADFrameType.Transaction, "T33"),
             CommandCase(PINPADFrameType.Transaction, "T34"),
             CommandCase(PINPADFrameType.Transaction, "T35"),
-            CommandCase(PINPADFrameType.Transaction, "T37"),
+            CommandCase(PINPADFrameType.Transaction, "T37", "\u001A1"),
             CommandCase(PINPADFrameType.Transaction, "T38"),
             CommandCase(PINPADFrameType.Transaction, "T3C"),
             CommandCase(PINPADFrameType.Transaction, "T61", "\u001A000000001000"),
@@ -657,6 +771,8 @@ class PINPADSessionControllerTest {
                 "T90",
                 "T\u001CZmlsZS50eHQ=\u001COUYzMyBiIDA4",
             ),
+            CommandCase(PINPADFrameType.Transaction, "T92"),
+            CommandCase(PINPADFrameType.Transaction, "T94", "ALL"),
         )
 
         commands.forEach { command ->
@@ -675,6 +791,45 @@ class PINPADSessionControllerTest {
 
             val finalResponses = commandController.onInbound(PINPADInbound.Control(PINPADControl.ACK))
             assertTrue(finalResponses.isEmpty(), "${command.commandId} STX/ETX response should not release final EOT")
+        }
+    }
+
+    /** Verifies malformed T37 payloads return the A10 format-error result. */
+    @Test
+    fun t37RejectsMissingOperationDelimiter() {
+        val responses = controller.onInbound(
+            PINPADInbound.Frame(
+                PINPADFrame(PINPADFrameType.Transaction, "T37", "1".toByteArray()),
+            ),
+        )
+
+        assertEquals(PINPADControl.ACK, responses[0].single())
+        val response = assertIs<PINPADFrameCodec.DecodeResult.Valid>(codec.decode(responses[1]))
+        assertEquals("T38", response.frame.commandId)
+        assertEquals("12", response.frame.payloadAscii)
+    }
+
+    /** Without a device command layer, documented unblock and verify operations report startup failure. */
+    @Test
+    fun t37ReportsUnsupportedOperationsAsFatal() {
+        listOf('2', '3').forEach { operation ->
+            val operationController = PINPADSessionController(
+                deviceInfoProvider = FakeDeviceInfoProvider(),
+                codec = codec,
+            )
+            val responses = operationController.onInbound(
+                PINPADInbound.Frame(
+                    PINPADFrame(
+                        PINPADFrameType.Transaction,
+                        "T37",
+                        "\u001A$operation".toByteArray(),
+                    ),
+                ),
+            )
+
+            val response = assertIs<PINPADFrameCodec.DecodeResult.Valid>(codec.decode(responses[1]))
+            assertEquals("T38", response.frame.commandId)
+            assertEquals("1100000000", response.frame.payloadAscii)
         }
     }
 

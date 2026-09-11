@@ -23,8 +23,8 @@ internal sealed partial class A10DemoControl
         var help = InfoLabel(
             "Commands 20 and 21 use the PINPAD's separate Secret MK/SK key family. The terminal may request " +
             "dual-password authorization before accepting each key. Commands 22, 23, and 24 request a PIN " +
-            "using a loaded secret session-key slot. Key material, account data, and PIN blocks are redacted " +
-            "from the shared protocol trace.");
+            "using a loaded secret session-key slot. This demo displays complete request and response frames " +
+            "in the shared protocol trace.");
         root.Controls.Add(help, 0, 1);
         root.SetColumnSpan(help, 2);
         return root;
@@ -45,17 +45,17 @@ internal sealed partial class A10DemoControl
         var masterKey = SecretValue("0123456789ABCDEFFEDCBA9876543210", 32);
         var sessionKeyId = Combo(Enumerable.Range(0, 10).Select(value => value.ToString()).ToArray());
         var sessionKey = SecretValue("0123456789ABCDEFFEDCBA9876543210", 32);
-        var showKeys = new CheckBox { Text = "Show secret key material", AutoSize = true };
+        sessionKey.UseSystemPasswordChar = false;
+        var showKeys = new CheckBox { Text = "Show secret master key", AutoSize = true };
         showKeys.CheckedChanged += (_, _) =>
         {
             masterKey.UseSystemPasswordChar = !showKeys.Checked;
-            sessionKey.UseSystemPasswordChar = !showKeys.Checked;
         };
 
         AddRow(form, 0, "Secret MK option", masterOption);
-        AddRow(form, 1, "Secret master key", masterKey);
+        AddKeyRow(form, 1, "Secret master key", masterKey);
         AddRow(form, 2, "Secret SK slot", sessionKeyId);
-        AddRow(form, 3, "Encrypted session key", sessionKey);
+        AddKeyRow(form, 3, "Encrypted session key", sessionKey);
         AddRow(form, 4, "", showKeys);
         var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, WrapContents = true };
         var output = OutputBox();
@@ -148,7 +148,7 @@ internal sealed partial class A10DemoControl
                 $"PIN length: {result.PinLength?.ToString() ?? "Not returned"}",
                 $"Key identifier: {result.KeyIdentifier ?? "Not returned"}",
                 "",
-                "Sensitive request and response material is redacted from the shared protocol trace.");
+                "Complete request and response frames are available in the shared protocol trace.");
         });
         form.Controls.Add(start, 0, 10);
         form.SetColumnSpan(start, 2);

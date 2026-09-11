@@ -261,8 +261,9 @@
 
         <!--
             Accessibility service for injecting touch gestures and key events.
-            Must be enabled in Settings → Accessibility → xTMSAgent → Remote Control,
-            or silently via MDM: DevicePolicyManager.setAccessibilityServices().
+            Must be enabled in Settings → Accessibility → xTMSAgent → Remote Control.
+            Standard Device Owner APIs cannot enable an accessibility service; supported
+            NEXGO terminals use the vendor system service with a manual Settings fallback.
         -->
         <service
             android:name=".remote.RemoteControlAccessibilityService"
@@ -284,6 +285,7 @@
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <action android:name="one.globalconnect.paymentapp.ACTION_AUTO_START_AFTER_BOOT" />
             </intent-filter>
         </receiver>
 

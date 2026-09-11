@@ -8,6 +8,19 @@ import org.json.JSONObject
 
 class TMSDataTest {
     @Test
+    fun `terminal parses loyalty protocol switches`() {
+        val terminal = TMS_Terminal.fromJson(
+            JSONObject(
+                """{"enableLoyalty":true,"sendAppVersion":true,"ctlsLoyaltyEnabled":true}""",
+            ),
+        )
+
+        assertTrue(terminal.enableLoyalty)
+        assertTrue(terminal.sendAppVersion)
+        assertTrue(terminal.ctlsLoyaltyEnabled)
+    }
+
+    @Test
     fun terminal_enablesTaxDiscountWhenPercentageIsGreaterThanZero() {
         val terminal = TMS_Terminal(tax1DiscountPercentage = 8.0)
 
@@ -37,6 +50,59 @@ class TMSDataTest {
         val terminal = TMS_Terminal.fromJson(JSONObject("""{"onlinePinCap":false}"""))
 
         assertFalse(terminal.onlinePinCap)
+    }
+
+    @Test
+    fun terminal_disablesOfflinePinChangeByDefaultAndMapsExplicitEnablement() {
+        val legacyTerminal = TMS_Terminal.fromJson(JSONObject("{}"))
+        val enabledTerminal = TMS_Terminal.fromJson(
+            JSONObject("""{"enableOfflinePinChange":true}"""),
+        )
+
+        assertFalse(legacyTerminal.enableOfflinePinChange)
+        assertTrue(enabledTerminal.enableOfflinePinChange)
+    }
+
+    @Test
+    fun terminal_disablesOfflinePinUnblockByDefaultAndMapsExclusiveEnablement() {
+        val legacyTerminal = TMS_Terminal.fromJson(JSONObject("{}"))
+        val enabledTerminal = TMS_Terminal.fromJson(
+            JSONObject("""{"enableOfflinePinUnblock":true}"""),
+        )
+
+        assertFalse(legacyTerminal.enableOfflinePinUnblock)
+        assertTrue(enabledTerminal.enableOfflinePinUnblock)
+        assertFalse(enabledTerminal.enableOfflinePinChange)
+    }
+
+    @Test
+    fun terminal_mapsHotelTransactionConfiguration() {
+        val terminal = TMS_Terminal.fromJson(
+            JSONObject(
+                """{
+                    "checkInType":"03",
+                    "autoFolio":true,
+                    "folioInputMode":"alphanumeric",
+                    "allowCheckinManualDataEntry":true
+                }""",
+            ),
+        )
+
+        assertEquals("03", terminal.checkInType)
+        assertTrue(terminal.autoFolio)
+        assertTrue(terminal.AutoFolio)
+        assertEquals("alphanumeric", terminal.folioInputMode)
+        assertTrue(terminal.allowCheckinManualDataEntry)
+    }
+
+    @Test
+    fun terminal_usesBackwardCompatibleHotelDefaults() {
+        val terminal = TMS_Terminal.fromJson(JSONObject("{}"))
+
+        assertEquals("01", terminal.checkInType)
+        assertFalse(terminal.autoFolio)
+        assertEquals("numeric", terminal.folioInputMode)
+        assertFalse(terminal.allowCheckinManualDataEntry)
     }
 
     @Test
@@ -111,6 +177,134 @@ class TMSDataTest {
             .forEach(::assertFalse)
         listOf(contact.offlineClearPinCap, terminal.offlineClearPinCap)
             .forEach(::assertTrue)
+    }
+
+    @Test
+    fun simplifiedContactlessFlagsGenerateVisaKernelValues() {
+        val config = TMS_EmvCtlsConfig.fromJson(
+            JSONObject(
+                """{
+                    "aid":"A0000000031010",
+                    "manualKeyEntryCap":true,
+                    "magneticStripeCap":true,
+                    "contactChipCap":true,
+                    "offlineClearPinCap":true,
+                    "onlinePinCap":true,
+                    "signatureCap":true,
+                    "offlineEncrPinCap":true,
+                    "noCVMCap":true,
+                    "sdaCap":true,
+                    "ddaCap":true,
+                    "cardCaptureCap":false,
+                    "cdaCap":true
+                }""",
+            ),
+        )
+
+        assertTrue(config.simplifiedCapabilityFlagsConfigured)
+        assertEquals("E0F8C8", config.terminalCapabilities)
+        assertEquals("E0", config.cardDataInputCapa)
+        assertEquals("60", config.cvmCapaCvmRequired)
+        assertEquals("08", config.cvmCapaNoCvmRequired)
+        assertEquals("36004000", config.ttq)
+        assertEquals("030000", config.kernelId)
+        assertEquals("22", config.terminalType)
+    }
+
+    @Test
+    fun simplifiedContactlessFlagsGenerateMastercardKernelDefaults() {
+        val config = TMS_EmvCtlsConfig.fromJson(
+            JSONObject(
+                """{
+                    "aid":"A0000000041010",
+                    "manualKeyEntryCap":true,
+                    "magneticStripeCap":true,
+                    "contactChipCap":true,
+                    "offlineClearPinCap":true,
+                    "offlineEncrPinCap":true,
+                    "sdaCap":true,
+                    "ddaCap":true,
+                    "cardCaptureCap":false,
+                    "cdaCap":true
+                }""",
+            ),
+        )
+
+        assertEquals("E0F8C8", config.terminalCapabilities)
+        assertEquals("020000", config.kernelId)
+        assertEquals("9F6A04", config.defaultUdol)
+        assertEquals("B0", config.kernelConfig)
+        assertEquals("08", config.secCapability)
+        assertEquals("6C7A800000000000", config.termRiskData)
+        assertEquals("10", config.magCvmCapaCvmRequired)
+    }
+
+    @Test
+    fun mastercardTerminalRiskDataDoesNotAdvertiseDisabledContactlessOnlinePin() {
+        val config = TMS_EmvCtlsConfig.fromJson(
+            JSONObject(
+                """{
+                    "aid":"A0000000041010",
+                    "onlinePinCap":false,
+                    "signatureCap":true,
+                    "noCVMCap":true,
+                    "offlineClearPinCap":true,
+                    "offlineEncrPinCap":true
+                }""",
+            ),
+        )
+
+        assertEquals("2C7A800000000000", config.termRiskData)
+    }
+
+    @Test
+    fun simplifiedContactlessFlagsClearDependentTechnicalBits() {
+        val config = TMS_EmvCtlsConfig.fromJson(
+            JSONObject(
+                """{
+                    "aid":"A0000000031010",
+                    "manualKeyEntryCap":false,
+                    "magneticStripeCap":true,
+                    "contactChipCap":false,
+                    "offlineClearPinCap":false,
+                    "onlinePinCap":false,
+                    "signatureCap":false,
+                    "offlineEncrPinCap":false,
+                    "noCVMCap":true,
+                    "sdaCap":false,
+                    "ddaCap":true,
+                    "cardCaptureCap":true,
+                    "cdaCap":false
+                }""",
+            ),
+        )
+
+        assertEquals("400860", config.terminalCapabilities)
+        assertEquals("40", config.cardDataInputCapa)
+        assertEquals("00", config.cvmCapaCvmRequired)
+        assertEquals("08", config.cvmCapaNoCvmRequired)
+        assertEquals("30004000", config.ttq)
+    }
+
+    @Test
+    fun legacyContactlessConfigurationKeepsRawTechnicalValues() {
+        val config = TMS_EmvCtlsConfig.fromJson(
+            JSONObject(
+                """{
+                    "aid":"A0000000031010",
+                    "terminalCapabilities":"A1B2C3",
+                    "terminalType":"14",
+                    "ttq":"B600C000",
+                    "kernelConfig":"7F"
+                }""",
+            ),
+        )
+
+        assertFalse(config.simplifiedCapabilityFlagsConfigured)
+        assertEquals("A1B2C3", config.terminalCapabilities)
+        assertEquals("14", config.terminalType)
+        assertEquals("B600C000", config.ttq)
+        assertEquals("7F", config.kernelConfig)
     }
 
     @Test

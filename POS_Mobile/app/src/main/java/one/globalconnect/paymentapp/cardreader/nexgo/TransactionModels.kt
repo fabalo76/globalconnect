@@ -22,7 +22,14 @@ data class EmvTransactionRequest(
     val countryCode: String = "0840",
     val currencyCode: String = "0840",
     val forceOnline: Boolean = false,
+    val purpose: EmvTransactionPurpose = EmvTransactionPurpose.PAYMENT,
 )
+
+enum class EmvTransactionPurpose {
+    PAYMENT,
+    OFFLINE_PIN_CHANGE,
+    OFFLINE_PIN_UNBLOCK,
+}
 
 data class MagstripeData(
     val track1: String?,

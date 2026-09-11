@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Base64
 import android.util.Log
 import one.globalconnect.xtmsagent.TMSFunc
+import one.globalconnect.xtmsagent.launcher.LauncherConfigManager
 import one.globalconnect.xtmsagent.net.DeviceApi
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -18,8 +19,6 @@ import java.security.PrivateKey
 import java.security.cert.CertificateFactory
 import java.security.cert.X509Certificate
 import java.security.spec.PKCS8EncodedKeySpec
-import javax.crypto.Mac
-import javax.crypto.spec.SecretKeySpec
 import javax.net.ssl.KeyManagerFactory
 import java.util.concurrent.TimeUnit
 
@@ -46,9 +45,47 @@ class AwsIotCertificateStore(private val context: Context) {
         provision(serialNumber)
     }
 
+    fun clear() {
+        val failures = listOf(privateKeyFile, certificateFile)
+            .filter { it.exists() && !it.delete() }
+        if (failures.isNotEmpty()) {
+            throw IllegalStateException(
+                "Could not clear AWS IoT credential files: ${failures.joinToString { it.name }}",
+            )
+        }
+        Log.i(TAG, "Local AWS IoT credentials cleared")
+    }
+
+    fun resetServerRegistration(serialNumber: String) {
+        val cfg = TMSFunc.tmsCfg
+        val token = DeviceApi.deviceToken(serialNumber, cfg)
+        val path = "/v1/devices/${serialNumber.urlEncode()}/iot-credentials/reset"
+        val url = DeviceApi.primaryUrl(path)
+        val client = OkHttpClient.Builder()
+            .connectTimeout(cfg.conn_timeout.toLong(), TimeUnit.SECONDS)
+            .readTimeout(cfg.resp_timeout.toLong(), TimeUnit.SECONDS)
+            .callTimeout((cfg.conn_timeout + cfg.resp_timeout).toLong(), TimeUnit.SECONDS)
+            .retryOnConnectionFailure(false)
+            .build()
+        val request = Request.Builder()
+            .url(url)
+            .header("Authorization", "Device $token")
+            .header("Connection", "close")
+            .post("{}".toRequestBody(JSON_MEDIA_TYPE))
+            .build()
+
+        client.newCall(request).execute().use { response ->
+            val responseBody = response.body?.string().orEmpty()
+            if (!response.isSuccessful) {
+                throw IllegalStateException("IoT registration reset HTTP ${response.code}: $responseBody")
+            }
+            Log.i(TAG, "AWS IoT server registration reset for $serialNumber")
+        }
+    }
+
     private fun provision(serialNumber: String) {
         val cfg = TMSFunc.tmsCfg
-        val token = deviceToken(serialNumber, cfg.download_secret)
+        val token = DeviceApi.deviceToken(serialNumber, cfg)
         val path = "/v1/devices/${serialNumber.urlEncode()}/iot-credentials"
         val url = DeviceApi.primaryUrl(path)
         provisionFromUrl(serialNumber, token, url)
@@ -83,6 +120,11 @@ class AwsIotCertificateStore(private val context: Context) {
             }
 
             buildKeyManagerFactory(certificatePem, privateKeyPem)
+            // A newly issued certificate can follow a bank transfer, so the launcher
+            // assignment cached on the terminal must not be trusted. Persist the
+            // requirement before saving the certificate to make the two operations
+            // crash-safe: if the marker cannot be stored, provisioning is retried.
+            LauncherConfigManager.markRefreshRequiredAfterIotProvisioning(context)
             certDir.mkdirs()
             writeCredentialFile(certificateFile, certificatePem)
             writeCredentialFile(privateKeyFile, privateKeyPem)
@@ -155,16 +197,6 @@ class AwsIotCertificateStore(private val context: Context) {
             value = value shr 8
         }
         return byteArrayOf((0x80 or bytes.size).toByte()) + bytes.toByteArray()
-    }
-
-    private fun deviceToken(serial: String, secret: String): String {
-        if (secret.isBlank()) {
-            throw IllegalStateException("Device download secret is missing")
-        }
-        val mac = Mac.getInstance("HmacSHA256")
-        mac.init(SecretKeySpec(secret.toByteArray(Charsets.UTF_8), "HmacSHA256"))
-        return mac.doFinal(serial.trim().uppercase().toByteArray(Charsets.UTF_8))
-            .joinToString("") { "%02x".format(it) }
     }
 
     private fun String.urlEncode(): String =

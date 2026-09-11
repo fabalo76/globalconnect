@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.graphics.Color
+import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -23,6 +24,7 @@ import android.widget.Toast
 import android.view.View
 import android.widget.ImageView
 import androidx.appcompat.app.AppCompatActivity
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.core.graphics.toColorInt
 import androidx.core.view.doOnLayout
@@ -32,8 +34,10 @@ import com.nexgo.oaf.apiv3.APIProxy
 import one.globalconnect.xtmsagent.btn_move.GridAdapter
 import one.globalconnect.xtmsagent.launcher.ACTION_LAUNCHER_CONFIG_UPDATED
 import one.globalconnect.xtmsagent.launcher.LauncherConfigManager
+import one.globalconnect.xtmsagent.install.LocalApkInstaller
 import one.globalconnect.xtmsagent.mqtt.TmsMqttManager
 import one.globalconnect.xtmsagent.mqtt.TmsMqttService
+import one.globalconnect.xtmsagent.nexgo.PhysicalKeypadInputPolicy
 import one.globalconnect.xtmsagent.policy.FactoryTmsManager
 import one.globalconnect.xtmsagent.policy.FactoryTmsState
 import one.globalconnect.xtmsagent.policy.UsbFileTransferManager
@@ -56,7 +60,8 @@ private const val TAG = "ConfigMenuActivity"
  *  5. Update                 — no password        → HouseKeeping + LauncherConfig + status report
  *  6. Change Password        — (when pwd protection on) → change admin PIN
  *  7. Change Super Password  — (when pwd protection on) → change super-user seeds
- *  8. Back                   — no password        → finish()
+ *  8. Local Install          — password-protected → choose and install an APK
+ *  9. Back                   — no password        → finish()
  */
 class ConfigMenuActivity : AppCompatActivity() {
 
@@ -66,6 +71,13 @@ class ConfigMenuActivity : AppCompatActivity() {
     // Rate-limit password attempts: lock out for 30 s after 3 consecutive failures.
     private var pwdFailCount   = 0
     private var pwdLockUntilMs = 0L
+    private var localInstallRunning = false
+
+    private val selectLocalApk = registerForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri: Uri? ->
+        uri?.let(::installLocalApk)
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -83,7 +95,7 @@ class ConfigMenuActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         applyTmsTheme()
-        resetIdleTimeout()
+        if (!localInstallRunning) resetIdleTimeout()
     }
 
     override fun onPause() {
@@ -145,7 +157,9 @@ class ConfigMenuActivity : AppCompatActivity() {
                 backgroundColor = "#2E7D32".toColorInt(),
                 iconDrawable    = ContextCompat.getDrawable(this, R.drawable.ic_tms_server),
                 onClickAction   = Runnable {
-                    requestPassword { startActivity(Intent(this, TmsConfigActivity::class.java)) }
+                    requestPassword(allowDebugBypass = false) {
+                        startActivity(Intent(this, TmsConfigActivity::class.java))
+                    }
                 }
             ),
             GridAdapter.ButtonItem(
@@ -196,6 +210,15 @@ class ConfigMenuActivity : AppCompatActivity() {
                 iconDrawable    = ContextCompat.getDrawable(this, R.drawable.ic_network),
                 onClickAction   = Runnable {
                     requestPassword { showUsbFileTransferDialog() }
+                }
+            ),
+            GridAdapter.ButtonItem(
+                text            = getString(R.string.config_local_install),
+                packageName     = "cfg_local_install",
+                backgroundColor = "#7B1FA2".toColorInt(),
+                iconDrawable    = ContextCompat.getDrawable(this, R.drawable.update),
+                onClickAction   = Runnable {
+                    requestPassword { openLocalApkPicker() }
                 }
             )
         )
@@ -287,8 +310,11 @@ class ConfigMenuActivity : AppCompatActivity() {
 
     // ── Password gate ─────────────────────────────────────────────────────────
 
-    private fun requestPassword(onSuccess: () -> Unit) {
-        if (BuildConfig.DEBUG) { onSuccess(); return }
+    private fun requestPassword(
+        allowDebugBypass: Boolean = true,
+        onSuccess: () -> Unit,
+    ) {
+        if (BuildConfig.DEBUG && allowDebugBypass) { onSuccess(); return }
 
         val now = SystemClock.elapsedRealtime()
         if (now < pwdLockUntilMs) {
@@ -303,6 +329,7 @@ class ConfigMenuActivity : AppCompatActivity() {
         view.findViewById<TextView>(R.id.title).text = getString(R.string.input_pwd)
         val edit1 = view.findViewById<EditText>(R.id.password1)
         val edit2 = view.findViewById<EditText>(R.id.password2)
+        PhysicalKeypadInputPolicy.configure(edit1, edit2)
 
         AlertDialog.Builder(this)
             .setView(view)
@@ -358,6 +385,7 @@ class ConfigMenuActivity : AppCompatActivity() {
         verifyView.findViewById<TextView>(R.id.title).text = getString(R.string.input_pwd)
         val cur1 = verifyView.findViewById<EditText>(R.id.password1)
         val cur2 = verifyView.findViewById<EditText>(R.id.password2)
+        PhysicalKeypadInputPolicy.configure(cur1, cur2)
 
         val verifyDlg = AlertDialog.Builder(this)
             .setView(verifyView)
@@ -386,6 +414,7 @@ class ConfigMenuActivity : AppCompatActivity() {
         val new2    = view.findViewById<EditText>(R.id.newpassword2)
         val renew1  = view.findViewById<EditText>(R.id.renewpassword1)
         val renew2  = view.findViewById<EditText>(R.id.renewpassword2)
+        PhysicalKeypadInputPolicy.configure(new1, new2, renew1, renew2)
 
         val dlg = AlertDialog.Builder(this)
             .setView(view)
@@ -433,6 +462,59 @@ class ConfigMenuActivity : AppCompatActivity() {
                 .setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f)
         }
         dlg.show()
+    }
+
+    private fun openLocalApkPicker() {
+        selectLocalApk.launch(
+            arrayOf(
+                "application/vnd.android.package-archive",
+                "application/octet-stream",
+            ),
+        )
+    }
+
+    private fun installLocalApk(uri: Uri) {
+        localInstallRunning = true
+        timeoutHandler.removeCallbacks(timeoutRunnable)
+        val progressDialog = AlertDialog.Builder(this)
+            .setTitle(R.string.local_install_title)
+            .setMessage(R.string.local_install_progress)
+            .setView(ProgressBar(this).apply { isIndeterminate = true })
+            .setCancelable(false)
+            .create()
+        progressDialog.show()
+
+        lifecycleScope.launch(loggingCoroutineExceptionHandler(TAG)) {
+            val result = withContext(Dispatchers.IO) {
+                LocalApkInstaller.install(this@ConfigMenuActivity, uri)
+            }
+            progressDialog.dismiss()
+            localInstallRunning = false
+            resetIdleTimeout()
+
+            val version = result.versionName.ifBlank {
+                result.versionCode.takeIf { it >= 0L }?.toString().orEmpty()
+            }
+            if (result.success) {
+                val message = getString(
+                    R.string.local_install_success,
+                    result.packageName,
+                    version,
+                )
+                Log.i(TAG, "$message: ${result.message}")
+                MainActivity.writeLog("Local install succeeded: ${result.packageName} versionCode=${result.versionCode}")
+                TmsMqttManager.queueFullStatusReport(
+                    this@ConfigMenuActivity,
+                    "Local application installed: ${result.packageName}",
+                )
+                showMsg(message)
+            } else {
+                val message = getString(R.string.local_install_failure, result.message)
+                Log.e(TAG, "Local install failed package=${result.packageName}: ${result.message}")
+                MainActivity.writeLog("Local install failed: ${result.packageName} ${result.message}")
+                showMsg(message)
+            }
+        }
     }
 
     private fun showUsbFileTransferDialog() {

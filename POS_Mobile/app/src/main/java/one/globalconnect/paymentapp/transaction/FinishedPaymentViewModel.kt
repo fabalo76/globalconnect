@@ -37,7 +37,7 @@ import java.time.format.DateTimeFormatter
 import java.util.Locale
 
 class FinishedPaymentViewModel(
-    savedStateHandle: SavedStateHandle,
+    private val savedStateHandle: SavedStateHandle,
     private val transactionRepository: TransactionRepository,
     private val profileRepository: ProfileRepository,
     private val signatureRepository: SignatureRepository
@@ -53,20 +53,28 @@ class FinishedPaymentViewModel(
 
     private val _receiptPreviewState = MutableStateFlow<ReceiptPreviewState?>(null)
     val receiptPreviewState: StateFlow<ReceiptPreviewState?> = _receiptPreviewState.asStateFlow()
+    private val automaticMerchantReceipt = AutomaticMerchantReceipt(viewModelScope)
+    private val merchantPrintState = MerchantReceiptPrintState(
+        savedStateHandle.get<Boolean>("merchantReceiptPrinted") == true,
+    )
+    val merchantReceiptPrintStatus = merchantPrintState.status
 
     val tmsAcquirer: TMS_Acquirer? get() = tmsDatabase.Acquirer.firstOrNull()
     val tmsTerminal: TMS_Terminal? get() = tmsDatabase.Terminal.firstOrNull()
 
     companion object {
         private const val TAG = "FinishedPaymentViewModel"
+        private const val PREVIEW_SMALL_FONT_LINE_WIDTH = 32
+        private const val PREVIEW_TINY_FONT_LINE_WIDTH = 38
     }
 
     init {
         viewModelScope.launch {
             withContext(Dispatchers.IO) {
                 Log.d(TAG, "Initializing")
-                val retrievedTransaction = transactionRepository
-                    .getTransactionFromId(transactionId.toIntOrNull() ?: return@withContext)
+                val retrievedTransaction = TransientTransactionResultStore.consume(transactionId)
+                    ?: transactionId.toIntOrNull()
+                        ?.let { id -> transactionRepository.getTransactionFromId(id) }
                     ?: return@withContext
                 transaction.postValue(retrievedTransaction)
                 subtotal.postValue(retrievedTransaction.subTotal)
@@ -86,18 +94,58 @@ class FinishedPaymentViewModel(
 
     fun printMerchantReceipt() {
         viewModelScope.launch {
+            submitMerchantReceipt(showPreview = true)
+        }
+    }
+
+    private suspend fun submitMerchantReceipt(showPreview: Boolean) {
+        if (!merchantPrintState.tryStart()) return
+        try {
             withContext(Dispatchers.IO) {
-                printReceipt(MERCHANT)
+                printReceipt(MERCHANT, showPreview) { success ->
+                    viewModelScope.launch {
+                        merchantPrintState.complete(success)
+                        if (success) savedStateHandle["merchantReceiptPrinted"] = true
+                    }
+                }
+            }
+        } catch (error: kotlinx.coroutines.CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            merchantPrintState.complete(false)
+            Log.e(TAG, "Unable to submit merchant receipt", error)
+        }
+    }
+
+    suspend fun submitAutomaticMerchantReceipt() {
+        if (transaction.value?.type == TransactionType.ERROR || transaction.value == null) return
+        automaticMerchantReceipt.submit(tmsTerminal?.printReceipt == true) {
+            if (savedStateHandle.get<Boolean>("automaticMerchantReceiptSubmitted") == true) return@submit
+            // Claim before submission: printer failures remain retryable through the manual button.
+            savedStateHandle["automaticMerchantReceiptSubmitted"] = true
+            try {
+                submitMerchantReceipt(showPreview = false)
+            } catch (error: kotlinx.coroutines.CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                Log.e(TAG, "Unable to submit automatic merchant receipt", error)
             }
         }
     }
 
-    private suspend fun printReceipt(recipient: String) {
+    private suspend fun printReceipt(
+        recipient: String,
+        showPreview: Boolean = true,
+        onPrintResult: ((Boolean) -> Unit)? = null,
+    ) {
         val id = transactionId.toIntOrNull()
         val retrievedTransaction = when {
             id != null -> transactionRepository.getTransactionFromId(id)
             else -> null
-        } ?: transaction.value ?: return
+        } ?: transaction.value ?: run {
+            onPrintResult?.invoke(false)
+            return
+        }
 
         val profile = profileRepository.get() ?: Profile()
         val signature = signatureRepository.getSignatureFromTransactionId(transactionId)
@@ -106,12 +154,12 @@ class FinishedPaymentViewModel(
 
         val bitmap = signature?.let { loadSignatureBitmap(it.signatureUUID) }
 
-        val previewState = buildReceiptPreviewState(
+        val previewState = if (showPreview) buildReceiptPreviewState(
             transaction = retrievedTransaction,
             recipient = recipient,
             hasSignature = bitmap != null,
             signatureBitmap = bitmap,
-        )
+        ) else null
         previewState?.let { state ->
             _receiptPreviewState.emit(state)
         }
@@ -124,9 +172,11 @@ class FinishedPaymentViewModel(
                 bitmap = bitmap,
                 recipient = recipient,
                 context = context,
+                onPrintResult = onPrintResult,
             )
         }.onFailure { error ->
             Log.e(TAG, "Unable to print $recipient receipt", error)
+            onPrintResult?.invoke(false)
         }
     }
 
@@ -157,9 +207,13 @@ class FinishedPaymentViewModel(
         val acquirer = tmsDatabase.Acquirer.firstOrNull()
         val currencySymbol = acquirer?.Currency?.takeIf { it.isNotBlank() } ?: "\$"
 
+        val cvmPresentation = resolveReceiptCvmPresentation(
+            transaction = transaction,
+            configuredSignatureRequired = SysParam.getInstance().signatureMode != SignatureMode.None,
+        )
         val signatureRequired = transaction.type != TransactionType.REFUND &&
             transaction.returnStatus != ReturnStatus.Voided &&
-            (SysParam.getInstance().signatureMode != SignatureMode.None || transaction.CVM == CVMType.Signature)
+            cvmPresentation.signatureRequired
 
         val dateTime = runCatching {
             LocalDateTime.parse(transaction.localDateTime, one.globalconnect.paymentapp.records.dateTimeFormatter)
@@ -168,37 +222,61 @@ class FinishedPaymentViewModel(
         val entryMode = resolveEntryModeLabel(transaction.cardEntryMethod)
         val batchValue = FormatterUtils.paddedInteger(1, 6)
 
-        val tax1Amount = parseAmount(transaction.tax1Amount)
+        val tax1Amount = parseAmount(
+            Tax1DiscountCalculator.originalTaxAmountFromDiscounted(
+                discountedTaxAmount = transaction.tax1Amount,
+                discountAmount = transaction.tax1DiscountAmount,
+            ),
+        )
         val tax2Amount = parseAmount(transaction.tax2Amount)
         val tipAmount = parseAmount(transaction.tipAmount)
         val totalAmount = parseAmount(transaction.totalAmount)
+        val baseAmount = parseAmount(transaction.baseAmount)
+            ?: parseAmount(transaction.subTotal)
+            ?: totalAmount
         val tax1Discount = parseAmount(transaction.tax1DiscountAmount)?.negate()
 
         val emvEntry = transaction.cardEntryMethod.equals("EMV", true) ||
             transaction.cardEntryMethod.equals("EMV_CONTACTLESS", true)
 
         val lines = buildList {
-            fun addLine(text: String?, alignment: TextAlign = TextAlign.Center) {
+            fun addLine(
+                text: String?,
+                alignment: TextAlign = TextAlign.Center,
+                fontSize: ReceiptPreviewFontSize = ReceiptPreviewFontSize.SMALL,
+            ) {
                 if (!text.isNullOrBlank()) {
-                    add(ReceiptPreviewLine(primary = text.trim(), alignment = alignment))
+                    add(
+                        ReceiptPreviewLine(
+                            primary = text.trim(),
+                            alignment = alignment,
+                            fontSize = fontSize,
+                        ),
+                    )
                 }
             }
 
-            addLine(terminal?.MerchantTitle1)
-            addLine(terminal?.MerchantTitle2)
-            addLine(terminal?.MerchantTitle3)
-            addLine(acquirer?.AcqLine1)
+            addLine(terminal?.MerchantTitle1, fontSize = ReceiptPreviewFontSize.MEDIUM)
+            addLine(terminal?.MerchantTitle2, fontSize = ReceiptPreviewFontSize.MEDIUM)
+            addLine(terminal?.MerchantTitle3, fontSize = ReceiptPreviewFontSize.MEDIUM)
+            addLine(acquirer?.AcqLine1, fontSize = ReceiptPreviewFontSize.MEDIUM)
 
             val merchantId = acquirer?.MerchID?.takeIf { it.isNotBlank() }
             val terminalId = acquirer?.AcqTermID?.takeIf { it.isNotBlank() }
             if (merchantId != null || terminalId != null) {
-                add(ReceiptPreviewLine(primary = merchantId.orEmpty(), secondary = terminalId))
+                add(
+                    ReceiptPreviewLine(
+                        primary = merchantId.orEmpty(),
+                        secondary = terminalId,
+                        fontSize = ReceiptPreviewFontSize.SMALL,
+                    ),
+                )
             }
 
             dateTime?.let {
                 add(
                     ReceiptPreviewLine(
-                        primary = it.format(one.globalconnect.paymentapp.records.dateFormatter),
+                        primary = it.format(DateTimeFormatter.ofPattern(resources.getString(R.string.receipt_date_pattern))),
                         secondary = it.format(DateTimeFormatter.ofPattern("HH:mm:ss")),
                     ),
                 )
@@ -210,6 +288,7 @@ class FinishedPaymentViewModel(
                     ReceiptPreviewLine(
                         primary = entryMode,
                         secondary = "$batchLabel#: $batchValue",
+                        fontSize = ReceiptPreviewFontSize.TINY,
                     ),
                 )
             }
@@ -219,28 +298,55 @@ class FinishedPaymentViewModel(
                     ReceiptPreviewLine(
                         primary = transaction.masked_cardNumber.ifBlank { "" },
                         secondary = transaction.cardType.ifBlank { null },
+                        fontSize = ReceiptPreviewFontSize.MEDIUM,
                     ),
                 )
             }
 
             val invoiceLabel = resources.getString(R.string.invoice_short)
-            val rrnValue = transaction.transactionId.ifBlank { transaction.retrievalReferenceNumber }
+            val rrnValue = transaction.retrievalReferenceNumber.trim()
             if (rrnValue.isNotBlank() || transaction.invoiceId.isNotBlank()) {
                 add(
                     ReceiptPreviewLine(
                         primary = "RRN: ${rrnValue.ifBlank { "----" }}",
                         secondary = "$invoiceLabel: ${transaction.invoiceId.ifBlank { "----" }}",
+                        fontSize = ReceiptPreviewFontSize.TINY,
                     ),
                 )
             }
 
-            val extRefLabel = resources.getString(R.string.ext_ref)
             val authLabel = resources.getString(R.string.auth_code_short)
-            if (transaction.externalReferenceNumber.isNotBlank() || transaction.authCode.isNotBlank()) {
+            if (transaction.authCode.isNotBlank()) {
                 add(
                     ReceiptPreviewLine(
-                        primary = "$extRefLabel: ${transaction.externalReferenceNumber.ifBlank { "----" }}",
-                        secondary = "$authLabel: ${transaction.authCode.ifBlank { "----" }}",
+                        primary = "",
+                        secondary = "$authLabel: ${transaction.authCode.trim()}",
+                        fontSize = ReceiptPreviewFontSize.TINY,
+                    ),
+                )
+            }
+
+            val receiptReferences = resolveReceiptReferenceValues(
+                folioNumber = transaction.folioNumber,
+                externalReferenceNumber = transaction.externalReferenceNumber,
+            )
+            receiptReferences.folioNumber?.let { folioNumber ->
+                add(
+                    ReceiptPreviewLine(
+                        primary = "${resources.getString(R.string.hotel_check_in_report_detail_folio_label)}: $folioNumber",
+                        emphasis = true,
+                        alignment = TextAlign.Start,
+                        fontSize = ReceiptPreviewFontSize.SMALL,
+                    ),
+                )
+            }
+            receiptReferences.externalReferenceNumber?.let { externalReferenceNumber ->
+                add(
+                    ReceiptPreviewLine(
+                        primary = "${resources.getString(R.string.ext_ref)}: $externalReferenceNumber",
+                        emphasis = true,
+                        alignment = TextAlign.Start,
+                        fontSize = ReceiptPreviewFontSize.SMALL,
                     ),
                 )
             }
@@ -251,17 +357,41 @@ class FinishedPaymentViewModel(
                 addLine(resources.getString(R.string.receipt_void_prefix), TextAlign.Start)
             }
 
+            val isLoyaltyBalance = transaction.type == TransactionType.LOYALTY_BALANCE
+            val partialApproval = transaction.partialApprovalReceipt()
+            if (partialApproval != null) {
+                add(ReceiptPreviewLine(primary = resources.getString(R.string.receipt_partial_approved), emphasis = true))
+                add(ReceiptPreviewLine(primary = resources.getString(R.string.receipt_verify_amount), emphasis = true))
+                add(ReceiptPreviewLine(primary = ""))
+            }
             if (transaction.type != TransactionType.ERROR) {
                 add(
                     ReceiptPreviewLine(
                         primary = transaction.type.toStringForUsers(),
-                        secondary = FormatterUtils.formatAmount(currencySymbol, transaction.subTotal.ifBlank { transaction.totalAmount }),
+                        secondary = if (isLoyaltyBalance) null else {
+                            FormatterUtils.formatAmount(currencySymbol, baseAmount ?: BigDecimal.ZERO)
+                        },
                         emphasis = true,
+                        fontSize = ReceiptPreviewFontSize.LARGE,
                     ),
                 )
             }
 
-            if (tax1Amount != null && tax1Amount > BigDecimal.ZERO) {
+            if (isLoyaltyBalance && transaction.loyaltyBalancePoints.isNotBlank()) {
+                add(
+                    ReceiptPreviewLine(
+                        primary = resources.getString(
+                            R.string.loyalty_points_available,
+                            LoyaltyContract.formatPoints(transaction.loyaltyBalancePoints),
+                        ),
+                        emphasis = true,
+                        alignment = TextAlign.Center,
+                        fontSize = ReceiptPreviewFontSize.LARGE,
+                    ),
+                )
+            }
+
+            if (!isLoyaltyBalance && tax1Amount != null && tax1Amount > BigDecimal.ZERO) {
                 add(
                     ReceiptPreviewLine(
                         primary = " ${resources.getString(R.string.Tax).uppercase(Locale.getDefault())}",
@@ -270,7 +400,7 @@ class FinishedPaymentViewModel(
                 )
             }
 
-            if (tax1Discount != null && tax1Discount < BigDecimal.ZERO) {
+            if (!isLoyaltyBalance && tax1Discount != null && tax1Discount < BigDecimal.ZERO) {
                 add(
                     ReceiptPreviewLine(
                         primary = "  ${resources.getString(R.string.Tax_Discount).uppercase(Locale.getDefault())}",
@@ -279,7 +409,7 @@ class FinishedPaymentViewModel(
                 )
             }
 
-            if (tax2Amount != null && tax2Amount > BigDecimal.ZERO) {
+            if (!isLoyaltyBalance && tax2Amount != null && tax2Amount > BigDecimal.ZERO) {
                 add(
                     ReceiptPreviewLine(
                         primary = " ${resources.getString(R.string.Tax2).uppercase(Locale.getDefault())}",
@@ -288,7 +418,7 @@ class FinishedPaymentViewModel(
                 )
             }
 
-            if (tipAmount != null && tipAmount > BigDecimal.ZERO) {
+            if (!isLoyaltyBalance && tipAmount != null && tipAmount > BigDecimal.ZERO) {
                 add(
                     ReceiptPreviewLine(
                         primary = " ${resources.getString(R.string.Tip).uppercase(Locale.getDefault())}",
@@ -297,34 +427,80 @@ class FinishedPaymentViewModel(
                 )
             }
 
-            add(ReceiptPreviewLine(primary = "-".repeat(24), alignment = TextAlign.End))
-
-            totalAmount?.let {
+            if (!isLoyaltyBalance) {
                 add(
                     ReceiptPreviewLine(
-                        primary = resources.getString(R.string.Total).uppercase(Locale.getDefault()),
-                        secondary = FormatterUtils.formatAmount(currencySymbol, it),
-                        emphasis = true,
+                        primary = "-".repeat(PREVIEW_SMALL_FONT_LINE_WIDTH / 3),
+                        alignment = TextAlign.End,
                     ),
                 )
-            }
 
-            if (transaction.type != TransactionType.REFUND && transaction.returnStatus != ReturnStatus.Voided) {
-                if (transaction.CVM == CVMType.PinVerified) {
+                if (partialApproval != null) {
+                    add(ReceiptPreviewLine(
+                        primary = resources.getString(R.string.receipt_original_amount),
+                        secondary = partialApproval.originalAmount?.let { FormatterUtils.formatAmount(currencySymbol, it) } ?: "----",
+                    ))
+                    add(ReceiptPreviewLine(
+                        primary = resources.getString(R.string.receipt_approved_amount),
+                        secondary = FormatterUtils.formatAmount(currencySymbol, partialApproval.approvedAmount),
+                        emphasis = true,
+                        fontSize = ReceiptPreviewFontSize.LARGE,
+                    ))
+                } else totalAmount?.let {
                     add(
                         ReceiptPreviewLine(
-                            primary = resources.getString(R.string.PinVerified),
+                            primary = resources.getString(R.string.Total).uppercase(Locale.getDefault()),
+                            secondary = FormatterUtils.formatAmount(currencySymbol, it),
                             emphasis = true,
+                            fontSize = ReceiptPreviewFontSize.LARGE,
                         ),
                     )
                 }
+            }
 
-                if (signatureRequired && !hasSignature) {
+            if (transaction.type != TransactionType.REFUND && transaction.returnStatus != ReturnStatus.Voided) {
+                when (cvmPresentation.pinVerification) {
+                    ReceiptPinVerification.ONLINE -> add(
+                        ReceiptPreviewLine(primary = resources.getString(R.string.PinVerified), emphasis = true),
+                    )
+                    ReceiptPinVerification.OFFLINE -> add(
+                        ReceiptPreviewLine(primary = resources.getString(R.string.PinVerifiedICC), emphasis = true),
+                    )
+                    ReceiptPinVerification.NONE -> Unit
+                }
+
+                if (cvmPresentation.noSignatureRequiredEmv) {
+                    add(
+                        ReceiptPreviewLine(
+                            primary = resources.getString(
+                                when {
+                                    cvmPresentation.noSignatureRequiredCdcvm ->
+                                        R.string.receipt_no_signature_required_cdcvm
+                                    cvmPresentation.noSignatureRequiredCvm ->
+                                        R.string.receipt_no_signature_required_cvm
+                                    else -> R.string.receipt_no_signature_required_emv
+                                },
+                            ),
+                            emphasis = true,
+                            fontSize = ReceiptPreviewFontSize.TINY,
+                        ),
+                    )
+                    add(
+                        ReceiptPreviewLine(
+                            primary = transaction.cardholderName.trim(),
+                        ),
+                    )
+                } else if (signatureRequired && !hasSignature) {
                     add(ReceiptPreviewLine(primary = ""))
                     add(ReceiptPreviewLine(primary = ""))
                     val signatureLabel = resources.getString(R.string.receipt_signature)
                     val underline = "_".repeat((32 - signatureLabel.length).coerceAtLeast(4))
                     add(ReceiptPreviewLine(primary = signatureLabel + underline, alignment = TextAlign.Start))
+                    add(
+                        ReceiptPreviewLine(
+                            primary = transaction.cardholderName.trim(),
+                        ),
+                    )
 
                     listOf(
                         resources.getString(R.string.receipt_agreement_1),
@@ -335,36 +511,65 @@ class FinishedPaymentViewModel(
                             add(
                                 ReceiptPreviewLine(
                                     primary = line.uppercase(Locale.getDefault()),
+                                    fontSize = ReceiptPreviewFontSize.TINY,
                                 ),
                             )
                         }
                     }
+                } else if (signatureRequired) {
+                    add(
+                        ReceiptPreviewLine(
+                            primary = transaction.cardholderName.trim(),
+                        ),
+                    )
                 }
             }
 
             if (emvEntry) {
                 val emvLabel = resources.getString(R.string.emv_information)
-                val filler = "=".repeat(((32 - emvLabel.length).coerceAtLeast(0)) / 2)
-                add(ReceiptPreviewLine(primary = "$filler$emvLabel$filler"))
+                val filler = "=".repeat(
+                    ((PREVIEW_TINY_FONT_LINE_WIDTH - emvLabel.length).coerceAtLeast(0)) / 2,
+                )
                 add(
                     ReceiptPreviewLine(
-                        primary = transaction.applicationName,
-                        secondary = transaction.AID,
+                        primary = "$filler$emvLabel$filler",
+                        fontSize = ReceiptPreviewFontSize.TINY,
+                    ),
+                )
+                add(
+                    ReceiptPreviewLine(
+                        primary = "${resources.getString(R.string.receipt_emv_app_label)} ${transaction.applicationName.trim()}",
+                        alignment = TextAlign.Start,
+                        fontSize = ReceiptPreviewFontSize.TINY,
+                    ),
+                )
+                add(
+                    ReceiptPreviewLine(
+                        primary = "${resources.getString(R.string.AID)} ${transaction.AID.trim()}",
+                        alignment = TextAlign.Start,
+                        fontSize = ReceiptPreviewFontSize.TINY,
                     ),
                 )
                 add(
                     ReceiptPreviewLine(
                         primary = "${resources.getString(R.string.TVR)} ${transaction.TVR}",
                         secondary = "${resources.getString(R.string.TSI)} ${transaction.TSI}",
+                        fontSize = ReceiptPreviewFontSize.TINY,
                     ),
                 )
                 add(
                     ReceiptPreviewLine(
-                        primary = "${resources.getString(R.string.ARC)} ${transaction.ARC}",
-                        secondary = "${resources.getString(R.string.IAD)} ${transaction.IAD}",
+                        primary = "${resources.getString(R.string.AC)} ${transaction.AC}",
+                        secondary = "${resources.getString(R.string.ARC)} ${transaction.ARC}",
+                        fontSize = ReceiptPreviewFontSize.TINY,
                     ),
                 )
-                add(ReceiptPreviewLine(primary = "=".repeat(32)))
+                add(
+                    ReceiptPreviewLine(
+                        primary = "=".repeat(PREVIEW_TINY_FONT_LINE_WIDTH),
+                        fontSize = ReceiptPreviewFontSize.TINY,
+                    ),
+                )
             }
 
             val copyLabel = if (recipient == MERCHANT) {
@@ -372,13 +577,26 @@ class FinishedPaymentViewModel(
             } else {
                 resources.getString(R.string.customer_copy)
             }
-            add(ReceiptPreviewLine(primary = copyLabel))
+            add(
+                ReceiptPreviewLine(
+                    primary = copyLabel,
+                    fontSize = ReceiptPreviewFontSize.MIN,
+                ),
+            )
 
-            addLine(resources.getString(R.string.poweredbyuic))
+            addLine(
+                resources.getString(R.string.powered_by_global_connect),
+                fontSize = ReceiptPreviewFontSize.MIN,
+            )
 
             val version = resources.getString(R.string.version)
             val appVersion = GlobalConnectPaymentApplication.instance.appVersion
-            add(ReceiptPreviewLine(primary = "$version: $appVersion"))
+            add(
+                ReceiptPreviewLine(
+                    primary = "$version: $appVersion",
+                    fontSize = ReceiptPreviewFontSize.MIN,
+                ),
+            )
         }
 
         if (lines.isEmpty()) {
@@ -389,7 +607,7 @@ class FinishedPaymentViewModel(
             lines = lines,
             recipientLabel = "",
             transactionLabel = "",
-            signature = signatureBitmap,
+            signature = signatureBitmap.takeIf { signatureRequired },
             signatureRequired = signatureRequired,
         )
     }

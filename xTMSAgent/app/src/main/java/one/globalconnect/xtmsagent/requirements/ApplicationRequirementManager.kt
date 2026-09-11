@@ -28,7 +28,7 @@ object ApplicationRequirementManager {
             .put("androidSdk", Build.VERSION.SDK_INT)
             .put("supportedAbis", JSONArray(Build.SUPPORTED_ABIS.toList()))
             .toString()
-        val token = deviceToken(serial, cfg.download_secret)
+        val token = DeviceApi.deviceToken(serial, cfg)
         val path = "/v1/devices/${urlEncode(serial)}/application-requirements"
         var lastFailure: Exception? = null
 
@@ -77,14 +77,6 @@ object ApplicationRequirementManager {
         } finally {
             connection.disconnect()
         }
-    }
-
-    private fun deviceToken(serial: String, secret: String): String {
-        require(secret.isNotBlank()) { "Device download secret is missing" }
-        val mac = Mac.getInstance("HmacSHA256")
-        mac.init(SecretKeySpec(secret.toByteArray(Charsets.UTF_8), "HmacSHA256"))
-        return mac.doFinal(serial.trim().uppercase().toByteArray(Charsets.UTF_8))
-            .joinToString("") { "%02x".format(it) }
     }
 
     private fun urlEncode(value: String): String =

@@ -43,6 +43,10 @@ enum class TransactionType {
     MOTO,
 
     SETTLEMENT,
+    OFFLINE_PIN_CHANGE,
+    REVERSAL_OFFLINE_PIN_CHANGE,
+    PIN_UNBLOCK,
+    REVERSAL_PIN_UNBLOCK,
 
     // Error case
     ERROR
@@ -65,14 +69,14 @@ enum class ReturnStatus {
 
 
 fun String?.CVMStringtoCvmType(): CVMType =
-    when (this) {
+    when (this?.trim()?.lowercase(Locale.ENGLISH)) {
         null -> CVMType.None
         "" -> CVMType.None
-        "Signature" -> CVMType.Signature
-        "PIN Verified" -> CVMType.PinVerified
-        "Pin Failed" -> CVMType.PinFailed
-        "No CVM" -> CVMType.None
-        "CVM not performed" -> CVMType.NotPerformed
+        "signature", "offline pin + signature" -> CVMType.Signature
+        "pin verified", "online pin", "offline pin" -> CVMType.PinVerified
+        "pin failed" -> CVMType.PinFailed
+        "no cvm" -> CVMType.None
+        "cvm not performed" -> CVMType.NotPerformed
         else -> CVMType.Error
     }
 
@@ -128,6 +132,10 @@ fun TransactionType.toTransactionName(): String =
         TransactionType.MOTO -> stringResource(id = R.string.trans_moto)
 
         TransactionType.SETTLEMENT -> stringResource(id = R.string.trans_settlement)
+        TransactionType.OFFLINE_PIN_CHANGE -> stringResource(id = R.string.trans_offline_pin_change)
+        TransactionType.REVERSAL_OFFLINE_PIN_CHANGE -> stringResource(id = R.string.trans_reversal)
+        TransactionType.PIN_UNBLOCK -> stringResource(id = R.string.trans_pin_unblock)
+        TransactionType.REVERSAL_PIN_UNBLOCK -> stringResource(id = R.string.trans_reversal)
             // Error case
         TransactionType.ERROR -> stringResource(id = R.string.trans_error)
 
@@ -153,6 +161,10 @@ private val transactionTypeToCode: Map<TransactionType, TransactionCode> = mapOf
     TransactionType.FORCESALE to TransactionCode.FORCE_SALE,
     TransactionType.REVERSAL to TransactionCode.REVERSAL,
     TransactionType.SETTLEMENT to TransactionCode.SETTLEMENT,
+    TransactionType.OFFLINE_PIN_CHANGE to TransactionCode.OFFLINE_PIN_CHANGE,
+    TransactionType.REVERSAL_OFFLINE_PIN_CHANGE to TransactionCode.REVERSAL_OFFLINE_PIN_CHANGE,
+    TransactionType.PIN_UNBLOCK to TransactionCode.PIN_UNBLOCK,
+    TransactionType.REVERSAL_PIN_UNBLOCK to TransactionCode.REVERSAL_PIN_UNBLOCK,
 )
 
 private val transactionCodeToType: Map<String, TransactionType> =
@@ -196,6 +208,22 @@ private fun TransactionType.label(): TransactionLabel =
         TransactionType.REVERSAL -> TransactionLabel(R.string.trans_reversal, "Reversal")
 
         TransactionType.SETTLEMENT -> TransactionLabel(R.string.trans_settlement, "Settlement")
+        TransactionType.OFFLINE_PIN_CHANGE -> TransactionLabel(
+            R.string.trans_offline_pin_change,
+            "Change Offline PIN",
+        )
+        TransactionType.REVERSAL_OFFLINE_PIN_CHANGE -> TransactionLabel(
+            R.string.trans_reversal,
+            "Offline PIN Change Reversal",
+        )
+        TransactionType.PIN_UNBLOCK -> TransactionLabel(
+            R.string.trans_pin_unblock,
+            "PIN Unblock",
+        )
+        TransactionType.REVERSAL_PIN_UNBLOCK -> TransactionLabel(
+            R.string.trans_reversal,
+            "PIN Unblock Reversal",
+        )
         else -> TransactionLabel(R.string.trans_error, "Error")
     }
 
@@ -253,6 +281,8 @@ data class Transaction(
     val applicationLabel: String = "",
     val cardExpirationDate: String = "",
     val retrievalReferenceNumber: String = "",
+    @androidx.room.ColumnInfo(defaultValue = "''")
+    val partialApprovalOriginalAmount: String = "",
     val externalReferenceNumber: String = "",
     val applicationName: String = "",
     val folioNumber: String = "",
@@ -261,6 +291,7 @@ data class Transaction(
     var returnStatus: ReturnStatus = ReturnStatus.None,
     val CVM: CVMType = CVMType.None,
     val CVMText: String = "",
+    val cardholderName: String = "",
     val tipProcessingInformation: String = "",
     val signatureRequired: Boolean = false,
     val signatureCaptured: Boolean = false,
@@ -282,6 +313,10 @@ data class Transaction(
 
     @Ignore
     var formattedVerboseDateTime: String = ""
+
+    /** Host-returned loyalty balance. Balance inquiries are transient and never enter the batch. */
+    @Ignore
+    var loyaltyBalancePoints: String = ""
 }
 
 enum class CVMType {

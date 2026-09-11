@@ -18,7 +18,10 @@ import one.globalconnect.paymentapp.GlobalConnectPaymentApplication
 import one.globalconnect.paymentapp.cardreader.CardReadResult
 import one.globalconnect.paymentapp.cardreader.EmvKernelCompletion
 import one.globalconnect.paymentapp.cardreader.EmvOnlineAuthorizationResponse
+import one.globalconnect.paymentapp.cardreader.nexgo.NexgoApi
 import one.globalconnect.paymentapp.cardreader.nexgo.OnlinePinScheme
+import one.globalconnect.paymentapp.cardreader.nexgo.PinChangeCaptureFailure
+import one.globalconnect.paymentapp.cardreader.nexgo.PinChangeCaptureResult
 import one.globalconnect.paymentapp.dao.TransactionRepository
 import one.globalconnect.paymentapp.navigation.AMOUNT_KEY
 import one.globalconnect.paymentapp.navigation.CHECK_IN_ID_KEY
@@ -55,10 +58,8 @@ import one.globalconnect.paymentapp.printer.PaymentPrinter
 import one.globalconnect.paymentapp.records.dateTimeFormatter
 import one.globalconnect.paymentapp.settlement.storage.SettlementStateRepository
 import one.globalconnect.paymentapp.transactions.TransactionReportBridge
-import one.globalconnect.paymentapp.utils.FormatterUtils
 import com.uic.pos.iso8583.IsoMessage
 import com.uic.pos.iso8583.IsoMessageFactory
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -71,7 +72,6 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.math.BigDecimal
 import java.math.BigInteger
@@ -91,6 +91,7 @@ class CardTransactionViewModel(
     private val hostMessageBuilder: HostMessageBuilder = HostMessageBuilder(),
     private val hostClient: HostTransactionClient = HostTransactionClient(),
     private val sysParam: SysParam = SysParam.getInstance(),
+    private val nexgoApi: NexgoApi = GlobalConnectPaymentApplication.instance.nexgoApi,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(CardTransactionUiState())
@@ -99,32 +100,41 @@ class CardTransactionViewModel(
     private val _events = MutableSharedFlow<CardTransactionEvent>(extraBufferCapacity = 1)
     val events: SharedFlow<CardTransactionEvent> = _events.asSharedFlow()
 
-    private val baseAmount: String = savedStateHandle[AMOUNT_KEY] ?: "0.00"
-    private val tax1Amount: String = savedStateHandle[TAX1_KEY] ?: "0.00"
-    private val tax2Amount: String = savedStateHandle[TAX2_KEY] ?: "0.00"
-    private val tipAmount: String = savedStateHandle[TIP_KEY] ?: "0.00"
+    private val initialBaseAmount: String = savedStateHandle[AMOUNT_KEY] ?: "0.00"
+    private val initialTax1Amount: String = savedStateHandle[TAX1_KEY] ?: "0.00"
+    private val initialTax2Amount: String = savedStateHandle[TAX2_KEY] ?: "0.00"
+    private val initialTipAmount: String = savedStateHandle[TIP_KEY] ?: "0.00"
     private val folioNumber: String = savedStateHandle[FOLIO_KEY] ?: ""
     private val originalTransactionId: String = savedStateHandle[ORIGINAL_TRANSACTION_ID_KEY] ?: ""
     private val checkInRowId: Int? = (savedStateHandle[CHECK_IN_ID_KEY] as String?)?.toIntOrNull()
     private val terminal: TMS_Terminal? = tmsDatabase.Terminal.firstOrNull()
-    private val tax1Discount = Tax1DiscountCalculator.calculate(
-        tax1Amount = tax1Amount,
+    private val initialTax1Discount = Tax1DiscountCalculator.calculate(
+        tax1Amount = initialTax1Amount,
         discountPercentage = terminal?.TaxDiscount ?: 0.0,
     )
 
     val transactionType: TransactionType = (savedStateHandle[TRANSACTION_TYPE_KEY]
         ?: TransactionType.ERROR.toTransactionString()).transactionStringToTransactionType()
 
-    private val totalAmount: String = listOf(baseAmount, tax1Discount.discountedTaxAmountText, tax2Amount, tipAmount)
-        .map { it.toBigDecimalOrZero() }
-        .reduce(BigDecimal::add)
-        .setScale(2, RoundingMode.HALF_UP)
-        .toPlainString()
+    private var currentAmounts = PartialApprovalAmounts.fromStrings(
+        base = initialBaseAmount,
+        tax1 = initialTax1Discount.discountedTaxAmountText,
+        tax1Discount = initialTax1Discount.discountAmountText,
+        tax2 = initialTax2Amount,
+        tip = initialTipAmount,
+    )
+
+    private val transactionInvoice = CardTransactionInvoice(InvoiceNumberProvider::nextInvoiceNumber)
+
+    fun invoiceNumberForCardRead(): String = transactionInvoice.forCardRead()
 
     private var selectionJob: Job? = null
     private var activeCardData: CardReadResult? = null
     private var currentOptions: List<CardTransactionAcquirerOption> = emptyList()
     private var pendingEmvOnlineContext: EmvOnlineFlowCoordinator? = null
+    private var partialApprovalDecision: CompletableDeferred<Boolean>? = null
+    private var remainingTransactionDecision: CompletableDeferred<Boolean>? = null
+    private var fallbackApprovedTransactionId: String? = null
     private val pendingAcquirerIds = MutableStateFlow<Set<String>>(emptySet())
     private val supportedTransactionTypes = setOf(
         TransactionType.SALE,
@@ -132,10 +142,13 @@ class CardTransactionViewModel(
         TransactionType.PAYMENT,
         TransactionType.CASH,
         TransactionType.LOYALTY_SALE,
+        TransactionType.LOYALTY_BALANCE,
         TransactionType.QUOTA_SALE,
         TransactionType.EXTRAS_SALE,
         TransactionType.CHECKIN,
         TransactionType.CHECKOUT,
+        TransactionType.OFFLINE_PIN_CHANGE,
+        TransactionType.PIN_UNBLOCK,
     )
 
     private val hostProcessingStrings = ProcessingStatusStrings(
@@ -149,6 +162,16 @@ class CardTransactionViewModel(
     private val hostProcessingStateMachine = HostProcessingStateMachine(hostProcessingStrings)
 
     private val paymentPrinter: PaymentPrinter = NexGoPaymentPrinter
+    private val pendingReversalReceiptPrinter = PendingReversalReceiptPrinter(
+        context = GlobalConnectPaymentApplication.instance.applicationContext,
+        profileRepository = profileRepository,
+        tmsDatabase = tmsDatabase,
+        paymentPrinter = paymentPrinter,
+    )
+    private val pendingReversalProcessor = PendingReversalProcessor(
+        transactionRepository = transactionRepository,
+        hostExecutor = { request -> hostClient.execute(request) },
+    )
     private var waitingForResponseTimeoutSeconds: Int = DEFAULT_READ_TIMEOUT_SEC
     private var waitingForResponseJob: Job? = null
 
@@ -174,7 +197,7 @@ class CardTransactionViewModel(
     }
 
     fun start() {
-        Log.d(TAG, "start invoked transactionType=$transactionType totalAmount=$totalAmount")
+        Log.d(TAG, "start invoked transactionType=$transactionType totalAmount=${currentAmounts.total}")
         if (!supportedTransactionTypes.contains(transactionType)) {
             _uiState.value = CardTransactionUiState(
                 step = CardTransactionStep.Error(string(R.string.trans_error))
@@ -185,11 +208,11 @@ class CardTransactionViewModel(
         val currencies = CurrencyTable.build(tmsDatabase.Acquirer)
         Log.d(TAG, "start currencies=${currencies.size}")
         val baseState = CardTransactionUiState(
-            baseAmount = baseAmount,
-            tax1Amount = tax1Amount,
-            tax2Amount = tax2Amount,
-            tipAmount = tipAmount,
-            totalAmount = totalAmount,
+            baseAmount = currentAmounts.base.moneyText(),
+            tax1Amount = currentAmounts.tax1.moneyText(),
+            tax2Amount = currentAmounts.tax2.moneyText(),
+            tipAmount = currentAmounts.tip.moneyText(),
+            totalAmount = currentAmounts.total.moneyText(),
         )
         if (currencies.size > 1) {
             _uiState.value = baseState.copy(
@@ -236,7 +259,12 @@ class CardTransactionViewModel(
         if (!supportedTransactionTypes.contains(transactionType)) return
         pendingEmvOnlineContext = onlineResponseHandler?.let(::EmvOnlineFlowCoordinator)
         activeCardData = result
-        val allOptions = resolveAcquirerOptions(result)
+        val resolvedOptions = resolveAcquirerOptions(result)
+        val allOptions = if (transactionType == TransactionType.OFFLINE_PIN_CHANGE) {
+            resolvedOptions.filter { option -> OfflinePinChangeContract.supportsAcquirer(option.acquirer) }
+        } else {
+            resolvedOptions
+        }
         Log.d(TAG, "onCardRead all options=${allOptions.joinToString(separator = ", ") { it.acquirer.AcquirerName }}")
 
         if (allOptions.isEmpty()) {
@@ -306,11 +334,69 @@ class CardTransactionViewModel(
         showError(display)
     }
 
+    fun prepareAutomaticContactlessRetry(
+        resultCode: Int?,
+        cardSlot: com.nexgo.oaf.apiv3.device.reader.CardSlotTypeEnum?,
+        onlineAuthorizationPending: Boolean,
+    ): Boolean {
+        if (_uiState.value.step !is CardTransactionStep.AwaitingCard) return false
+        if (!ContactlessReadRetryPolicy.shouldRetry(
+                resultCode,
+                cardSlot,
+                onlineAuthorizationPending || pendingEmvOnlineContext != null || activeCardData != null,
+            )) return false
+        Log.i(TAG, "Recoverable contactless read failure $resultCode; scheduling reader restart")
+        _uiState.update {
+            it.copy(
+                step = CardTransactionStep.ContactlessReadRetryPrompt,
+                statusMessage = if (resultCode == one.globalconnect.paymentapp.cardreader.nexgo.NexgoSdkResult.Emv_Candidatelist_Empty) {
+                    string(R.string.card_brand_not_supported)
+                } else string(R.string.contactless_read_error),
+                cardData = null,
+            )
+        }
+        return true
+    }
+
+    fun continueAutomaticContactlessRetry() {
+        if (_uiState.value.step is CardTransactionStep.ContactlessReadRetryPrompt) retry()
+    }
+
+    val contactlessAllowed: Boolean
+        get() = !OfflinePinChangeContract.isPinMaintenance(transactionType) &&
+            (!LoyaltyContract.isLoyalty(transactionType) || terminal?.ctlsLoyaltyEnabled == true)
+
     fun onEmvKernelCompleted(completion: EmvKernelCompletion) {
         val context = pendingEmvOnlineContext
         if (context == null) {
             Log.w(TAG, "Ignoring EMV kernel completion without a pending online authorization")
             return
+        }
+        if (LoyaltyContract.isLoyalty(transactionType) && terminal?.enableLoyalty != true) {
+            _uiState.value = CardTransactionUiState(
+                step = CardTransactionStep.Error(string(R.string.trans_error))
+            )
+            return
+        }
+        if (OfflinePinChangeContract.isPinMaintenance(transactionType)) {
+            val availability = when (transactionType) {
+                TransactionType.OFFLINE_PIN_CHANGE -> OfflinePinChangeContract.configurationAvailability(
+                    terminal = terminal,
+                    acquirers = tmsDatabase.Acquirer,
+                )
+                TransactionType.PIN_UNBLOCK -> {
+                    OfflinePinChangeContract.pinUnblockConfigurationAvailability(terminal)
+                }
+                else -> OfflinePinChangeAvailability.AVAILABLE
+            }
+            if (availability != OfflinePinChangeAvailability.AVAILABLE) {
+                val message = string(R.string.function_not_allowed)
+                _uiState.value = CardTransactionUiState(
+                    step = CardTransactionStep.Error(message),
+                    statusMessage = message,
+                )
+                return
+            }
         }
         Log.d(TAG, "onEmvKernelCompleted resultCode=${completion.resultCode}")
         context.complete(completion)
@@ -354,14 +440,89 @@ class CardTransactionViewModel(
         }
     }
 
+    /** Pauses before restarting a declined contactless operation as a new contact ICC transaction. */
+    private fun prepareContactRetry() {
+        Log.i(TAG, "Issuer requested contact ICC retry; showing contact-required prompt")
+        activeCardData = null
+        currentOptions = emptyList()
+        stopWaitingForResponseCountdown()
+        _uiState.update {
+            it.copy(
+                step = CardTransactionStep.ContactRetryPrompt,
+                statusMessage = string(R.string.contact_retry_required),
+                processingStatus = null,
+                cardData = null,
+                acquirerOptions = emptyList(),
+                contactOnly = true,
+            )
+        }
+    }
+
+    /** Handles a First GEN AC request to leave contactless and start a new contact ICC transaction. */
+    fun onKernelContactRetryRequired() {
+        val state = _uiState.value
+        if (state.step !is CardTransactionStep.AwaitingCard || state.contactOnly) return
+        Log.i(TAG, "Contactless kernel requested contact ICC at First GEN AC")
+        prepareContactRetry()
+    }
+
+    /** Starts the issuer-directed second attempt with contact ICC as the only enabled interface. */
+    fun continueContactRetry() {
+        if (_uiState.value.step !is CardTransactionStep.ContactRetryPrompt) return
+        Log.i(TAG, "Starting new contact-only attempt with fresh EMV trace, STAN, and invoice counters")
+        _uiState.update {
+            it.copy(
+                step = CardTransactionStep.AwaitingCard,
+                statusMessage = string(R.string.contact_retry_insert_chip),
+                processingStatus = null,
+                cardData = null,
+                acquirerOptions = emptyList(),
+                contactOnly = true,
+            )
+        }
+    }
+
+    fun acceptPartialApproval() {
+        partialApprovalDecision?.complete(true)
+    }
+
+    fun declinePartialApproval() {
+        partialApprovalDecision?.complete(false)
+    }
+
+    fun startRemainingTransaction() {
+        remainingTransactionDecision?.complete(true)
+    }
+
+    fun finishAfterPartialApproval() {
+        remainingTransactionDecision?.complete(false)
+    }
+
     fun cancelTransaction() {
         Log.d(TAG, "cancelTransaction invoked")
+        when (_uiState.value.step) {
+            is CardTransactionStep.PartialApproval -> {
+                declinePartialApproval()
+                return
+            }
+            is CardTransactionStep.PartialApprovalRemainder -> {
+                finishAfterPartialApproval()
+                return
+            }
+            else -> Unit
+        }
         selectionJob?.cancel()
         stopWaitingForResponseCountdown()
         abortPendingEmvOnlineAuthorization()
         viewModelScope.launch {
-            Log.d(TAG, "Emitting CardTransactionEvent.Cancelled")
-            _events.emit(CardTransactionEvent.Cancelled)
+            val approvedId = fallbackApprovedTransactionId
+            if (approvedId != null) {
+                Log.d(TAG, "Returning to previously approved partial transaction id=$approvedId")
+                _events.emit(CardTransactionEvent.NavigateToResult(approvedId))
+            } else {
+                Log.d(TAG, "Emitting CardTransactionEvent.Cancelled")
+                _events.emit(CardTransactionEvent.Cancelled)
+            }
         }
     }
 
@@ -407,6 +568,33 @@ class CardTransactionViewModel(
             TAG,
             "processTransaction option=${option.acquirer.AcqID} maskedPan=${cardData.maskedCardNumber} entry=${cardData.slotType}",
         )
+        if (OfflinePinChangeContract.isPinMaintenance(transactionType)) {
+            val isContactIcc = cardData.slotType == CardSlotTypeEnum.ICC1 ||
+                cardData.slotType == CardSlotTypeEnum.ICC2
+            val emvTags = cardData.emvTags.associate { tag -> tag.tag to tag.value }
+            val validArqc = when (transactionType) {
+                TransactionType.OFFLINE_PIN_CHANGE -> OfflinePinChangeContract.isValidArqcRequest(emvTags)
+                TransactionType.PIN_UNBLOCK -> {
+                    OfflinePinChangeContract.isValidPinUnblockArqcRequest(emvTags)
+                }
+                else -> false
+            }
+            if (!isContactIcc || currentAmounts.total.signum() != 0 || !validArqc) {
+                val message = if (transactionType == TransactionType.PIN_UNBLOCK) {
+                    R.string.pin_unblock_invalid_card_flow
+                } else {
+                    R.string.offline_pin_change_invalid_card_flow
+                }
+                showError(string(message))
+                return
+            }
+            if (transactionType == TransactionType.OFFLINE_PIN_CHANGE &&
+                !OfflinePinChangeContract.supportsAcquirer(option.acquirer)
+            ) {
+                showError(string(R.string.online_pin_error_no_selected_acquirer_pin_type))
+                return
+            }
+        }
         if (cardData.onlinePinRequested && !option.acquirer.supportsOnlinePin) {
             showError(string(R.string.online_pin_error_no_selected_acquirer_pin_type))
             return
@@ -435,6 +623,11 @@ class CardTransactionViewModel(
         val emvOnlineContext = pendingEmvOnlineContext
         viewModelScope.launch {
             Log.d(TAG, "processTransaction coroutine started")
+            val effectiveCardData = if (transactionType == TransactionType.OFFLINE_PIN_CHANGE) {
+                captureOfflinePinChangeData(option, cardData) ?: return@launch
+            } else {
+                cardData
+            }
             val isoFactory = IsoMessageFactoryProvider.factoryFor()
             var needsReversal = false
             var reversalCandidate: PendingReversal? = null
@@ -481,9 +674,9 @@ class CardTransactionViewModel(
                 }
 
                 val stan = StanProvider.nextStan()
-                val invoiceId = InvoiceNumberProvider.nextInvoiceNumber()
+                val invoiceId = transactionInvoice.forHostRequest()
                 Log.d(TAG, "processTransaction stan=$stan invoice=$invoiceId")
-                val procInfo = buildProcInfo(option, cardData, stan, invoiceId)
+                val procInfo = buildProcInfo(option, effectiveCardData, stan, invoiceId)
 
                 val transactionConfig = TransactionConfigRegistry.configFor(procInfo.TransLog.TxnType)
                 needsReversal = transactionConfig?.hasAttribute(TransactionAttribute.NEEDS_REVERSAL) == true
@@ -534,9 +727,10 @@ class CardTransactionViewModel(
                     sslSocketFactory = if (hostSettings.isTls) AcquirerSslCache.get(ipProfile.IPTabID.toString()) else null,
                     isoFactory = isoFactory,
                     onConnected = suspend {
-                        if (needsReversal && reversalCandidate != null && queuedReversal == null) {
+                        val candidate = reversalCandidate
+                        if (needsReversal && candidate != null && queuedReversal == null) {
                             try {
-                                queuedReversal = queuePendingReversal(reversalCandidate)
+                                queuedReversal = queuePendingReversal(candidate)
                                 Log.d(
                                     TAG,
                                     "Queued pending reversal id=${queuedReversal?.id} acquirer=${option.acquirer.AcqID}"
@@ -555,57 +749,195 @@ class CardTransactionViewModel(
                 val result = hostClient.execute(request)
                 val responseCode = result.isoMessage.getFieldValue(39)
                 Log.d(TAG, "processTransaction responseCode=$responseCode")
-                val hostApproved = responseCode == "00"
-                val kernelCompletion = emvOnlineContext?.let { context ->
+                val partialAllocation = if (
+                    responseCode == PartialApprovalContract.RESPONSE_CODE &&
+                    PartialApprovalContract.isSupported(transactionType)
+                ) {
+                    PartialApprovalContract.parseApprovedAmount(result.isoMessage.getFieldValue(4))
+                        ?.let { approvedAmount ->
+                            PartialApprovalContract.allocate(currentAmounts, approvedAmount)
+                        }
+                } else {
+                    null
+                }
+                partialAllocation?.let { allocation ->
+                    val approvedAmountText = allocation.approved.total.moneyText()
+                    val approvedField4 = result.isoMessage.getFieldValue(4)
+                        ?: approvedAmountText.replace(".", "").padStart(12, '0')
+                    reversalCandidate = reversalCandidate?.withReversalAmount(
+                        field4 = approvedField4,
+                        amountText = approvedAmountText,
+                    )
+                    queuedReversal = queuedReversal?.withReversalAmount(
+                        field4 = approvedField4,
+                        amountText = approvedAmountText,
+                    )
+                }
+                val hostApproved = partialAllocation != null || OfflinePinChangeContract.isHostApproved(
+                    transactionType = transactionType,
+                    responseCode = responseCode,
+                )
+                val responseField55 = result.isoMessage.getFieldValue(55)
+                val issuerResponseValid = !hostApproved || when (transactionType) {
+                    TransactionType.OFFLINE_PIN_CHANGE -> {
+                        OfflinePinChangeContract.hasRequiredIssuerResponse(responseField55)
+                    }
+                    TransactionType.PIN_UNBLOCK -> {
+                        OfflinePinChangeContract.hasRequiredPinUnblockIssuerResponse(responseField55)
+                    }
+                    else -> true
+                }
+                val kernelCompletion = if (!issuerResponseValid) {
+                    val message = if (transactionType == TransactionType.PIN_UNBLOCK) {
+                        R.string.pin_unblock_invalid_issuer_response
+                    } else {
+                        R.string.offline_pin_change_invalid_issuer_response
+                    }
+                    EmvKernelCompletion(
+                        resultCode = SdkResult.Fail,
+                        message = string(message),
+                        cardData = null,
+                    )
+                } else emvOnlineContext?.let { context ->
                     submitEmvOnlineResponseAndAwaitCompletion(
                         context = context,
                         response = EmvOnlineAuthorizationResponse(
                             hostReachable = true,
                             responseCode = responseCode ?: "96",
                             authorizationCode = result.isoMessage.getFieldValue(38),
-                            field55 = result.isoMessage.getFieldValue(55),
+                            field55 = responseField55,
                         ),
                     )
                 }
-                val kernelApproved = kernelCompletion?.resultCode == SdkResult.Success
-                val approved = hostApproved && (kernelCompletion == null || kernelApproved)
-                val responseMessage = if (hostApproved && kernelCompletion != null && !kernelApproved) {
-                    kernelCompletion.message.ifBlank { string(R.string.err_comm_error) }
-                } else {
-                    HostResponseMessageResolver.resolveOrFallback(responseCode)
+                val completionTags = kernelCompletion?.cardData?.emvTags
+                    ?.associate { tag -> tag.tag to tag.value }
+                val expectedSuccessfulAac = completionTags
+                    ?.let { tags ->
+                        OfflinePinChangeContract.isExpectedSuccessfulAacCompletion(
+                            transactionType = transactionType,
+                            responseCode = responseCode,
+                            tags = tags,
+                        )
+                    } == true
+                val kernelApproved = kernelCompletion?.resultCode == SdkResult.Success ||
+                    expectedSuccessfulAac
+                if (expectedSuccessfulAac) {
+                    Log.i(
+                        TAG,
+                        "PIN maintenance completed with expected AAC after successful issuer script processing",
+                    )
                 }
+                val approved = hostApproved && issuerResponseValid &&
+                    (kernelCompletion == null || kernelApproved)
+                val cardDeclinedAfterOnlineApproval = isCardDeclinedAfterOnlineApproval(
+                    hostApproved = hostApproved,
+                    kernelApproved = kernelApproved,
+                    kernelResultCode = kernelCompletion?.resultCode,
+                    cryptogramInformationData = completionTags?.get("9F27"),
+                )
                 val shouldPersistReversal =
                     needsReversal && (
                         responseCode == "91" || responseCode == "96" || responseCode == "92" ||
+                            (responseCode == PartialApprovalContract.RESPONSE_CODE && partialAllocation == null) ||
                             (hostApproved && kernelCompletion != null && !kernelApproved)
                         ) &&
                         reversalCandidate != null
+                val responseMessage = when {
+                    cardDeclinedAfterOnlineApproval && shouldPersistReversal -> {
+                        string(R.string.sale_error_emv_chip_declined_reversal)
+                    }
+                    cardDeclinedAfterOnlineApproval -> {
+                        string(R.string.sale_error_emv_chip_declined)
+                    }
+                    hostApproved && kernelCompletion != null && !kernelApproved -> {
+                        kernelCompletion.message.ifBlank { string(R.string.err_comm_error) }
+                    }
+                    else -> HostResponseMessageResolver.resolveOrFallback(responseCode)
+                }
                 updateProcInfoWithResponse(procInfo, result)
+
+                if (ContactRetryContract.shouldRetryUsingContact(responseCode, cardData.slotType)) {
+                    setProcessingResult(ProcessingStatusStepState.FAILED, responseMessage)
+                    if (queuedReversal != null) {
+                        try {
+                            clearPendingReversal(queuedReversal!!)
+                            Log.d(
+                                TAG,
+                                "Cleared pending reversal before issuer-directed contact retry id=${queuedReversal?.id}",
+                            )
+                        } catch (error: Throwable) {
+                            Log.e(TAG, "Unable to clear pending reversal before contact retry", error)
+                        } finally {
+                            queuedReversal = null
+                        }
+                    }
+                    prepareContactRetry()
+                    return@launch
+                }
+
+                if (approved && partialAllocation != null) {
+                    val acceptsPartial = awaitPartialApprovalDecision(partialAllocation)
+                    if (!acceptsPartial) {
+                        val declineMessage = string(R.string.host_result_partial_declined_user)
+                        setProcessingResult(ProcessingStatusStepState.FAILED, declineMessage)
+                        if (needsReversal && reversalCandidate != null) {
+                            reversalContext?.let { context ->
+                                val reversalForApprovedAmount = queuedReversal ?: reversalCandidate!!
+                                recordPendingReversal(
+                                    acquirer = context.acquirer,
+                                    ipProfile = context.ipProfile,
+                                    terminal = context.terminal,
+                                    hostSettings = context.hostSettings,
+                                    isoFactory = isoFactory,
+                                    candidate = reversalForApprovedAmount,
+                                    existing = reversalForApprovedAmount.takeIf { it.id != 0L },
+                                    reason = ReversalReason.USER_DECLINED_PARTIAL,
+                                    responseCode = responseCode,
+                                )
+                            }
+                        }
+                        Log.i(
+                            TAG,
+                            "Partial approval declined; reversal attempted for ${partialAllocation.approved.total}",
+                        )
+                        showError(declineMessage)
+                        return@launch
+                    }
+
+                    procInfo.TransLog.PartialApprovalOriginalAmount = partialAllocation.original.total.moneyText()
+                    applyAmountsToProcInfo(procInfo, partialAllocation.approved)
+                    setProcessingResult(
+                        ProcessingStatusStepState.COMPLETED,
+                        string(R.string.partial_approve_update_notif),
+                    )
+                    val writesActiveRecord = transactionConfig
+                        ?.hasAttribute(TransactionAttribute.WRITES_RECORD)
+                        ?: true
+                    val destinationId = persistApprovedTransaction(procInfo, writesActiveRecord)
+                    if (needsReversal && queuedReversal != null) {
+                        runCatching { clearPendingReversal(queuedReversal!!) }
+                            .onFailure { error -> Log.e(TAG, "Unable to clear partial approval reversal", error) }
+                        queuedReversal = null
+                    }
+                    fallbackApprovedTransactionId = destinationId
+
+                    val processRemaining = awaitRemainingTransactionDecision(partialAllocation.remaining)
+                    if (processRemaining) {
+                        prepareRemainingTransaction(partialAllocation.remaining)
+                    } else {
+                        _events.emit(CardTransactionEvent.NavigateToResult(destinationId))
+                    }
+                    return@launch
+                }
 
                 if (approved) {
                     setProcessingResult(ProcessingStatusStepState.COMPLETED, responseMessage)
-                    Log.d(TAG, "processTransaction approved inserting transaction")
-                    val transaction = procInfo.toTransaction()
-                    val rowId = transactionRepository.insert(transaction)
-                    val storedTransaction = transaction.copy(id = rowId.toInt())
-                    TransactionReportBridge.reportTransaction(
-                        context = GlobalConnectPaymentApplication.instance,
-                        transaction = storedTransaction,
-                        tmsDatabase = tmsDatabase,
-                    )
-                    if (transaction.type == TransactionType.CHECKOUT) {
-                        checkInRowId?.let { id ->
-                            runCatching {
-                                transactionRepository.getTransactionFromId(id)?.let { original ->
-                                    transactionRepository.delete(original)
-                                }
-                            }.onFailure { error ->
-                                Log.e(TAG, "Unable to remove check-in transaction id=$id", error)
-                            }
-                        }
-                    }
+                    val writesActiveRecord = transactionConfig
+                        ?.hasAttribute(TransactionAttribute.WRITES_RECORD)
+                        ?: true
+                    val destinationId = persistApprovedTransaction(procInfo, writesActiveRecord)
                     viewModelScope.launch {
-                        _events.emit(CardTransactionEvent.NavigateToResult(rowId.toString()))
+                        _events.emit(CardTransactionEvent.NavigateToResult(destinationId))
                     }
                 } else {
                     setProcessingResult(ProcessingStatusStepState.FAILED, responseMessage)
@@ -678,6 +1010,78 @@ class CardTransactionViewModel(
                 }
             }
         }
+    }
+
+    /** Captures and confirms the new PIN using the PIN method configured on [option]'s acquirer. */
+    private suspend fun captureOfflinePinChangeData(
+        option: CardTransactionAcquirerOption,
+        cardData: CardReadResult,
+    ): CardReadResult? {
+        val scheme = when (option.acquirer.pinKeyScheme) {
+            TMS_PinKeyScheme.MKSK -> OnlinePinScheme.MKSK
+            TMS_PinKeyScheme.DUKPT -> OnlinePinScheme.DUKPT
+            TMS_PinKeyScheme.NONE -> null
+        }
+        val keyIndex = option.acquirer.nexgoPinKeyIndex
+        val pan = extractPan(cardData)
+        if (scheme == null || keyIndex == null || pan.isNullOrBlank()) {
+            showError(string(R.string.online_pin_error_no_selected_acquirer_pin_type))
+            return null
+        }
+
+        _uiState.update { state ->
+            state.copy(statusMessage = string(R.string.pin_change_enter_new_pin))
+        }
+        return when (
+            val capture = nexgoApi.captureNewPinAndConfirmation(
+                pan = pan,
+                scheme = scheme,
+                keyIndex = keyIndex,
+                compatibleAcquirerIds = setOf(option.acquirer.AcqID),
+            )
+        ) {
+            is PinChangeCaptureResult.Success -> {
+                _uiState.update { state ->
+                    state.copy(statusMessage = string(R.string.sale_host_processing))
+                }
+                cardData.copy(
+                    pinBlock = capture.pinBlock,
+                    ksn = capture.ksn.takeIf { it.isNotBlank() },
+                    onlinePinScheme = capture.scheme,
+                    onlinePinKeyIndex = capture.keyIndex,
+                    onlinePinAcquirerIds = capture.compatibleAcquirerIds,
+                    pinChangePinConfirmed = true,
+                )
+            }
+            is PinChangeCaptureResult.Failure -> {
+                Log.w(
+                    TAG,
+                    "New-PIN capture failed acquirer=${option.acquirer.AcqID} reason=${capture.reason}",
+                )
+                showError(pinChangeCaptureFailureMessage(capture.reason))
+                null
+            }
+        }
+    }
+
+    /** Maps a classified secure PIN-capture failure to an operator-safe message. */
+    private fun pinChangeCaptureFailureMessage(reason: PinChangeCaptureFailure): String = when (reason) {
+        PinChangeCaptureFailure.PIN_MISMATCH -> string(R.string.offline_pin_change_pin_mismatch)
+        PinChangeCaptureFailure.FIRST_ENTRY_CANCELED,
+        PinChangeCaptureFailure.CONFIRMATION_CANCELED,
+        PinChangeCaptureFailure.FIRST_ENTRY_BYPASSED,
+        PinChangeCaptureFailure.CONFIRMATION_BYPASSED,
+        -> string(R.string.offline_pin_change_pin_entry_canceled)
+        PinChangeCaptureFailure.FIRST_ENTRY_TIMED_OUT,
+        PinChangeCaptureFailure.CONFIRMATION_TIMED_OUT,
+        -> string(R.string.offline_pin_change_pin_entry_timeout)
+        PinChangeCaptureFailure.KSN_CHANGED,
+        PinChangeCaptureFailure.KSN_INCREMENT_FAILED,
+        -> string(R.string.offline_pin_change_ksn_error)
+        PinChangeCaptureFailure.INVALID_CONFIGURATION,
+        PinChangeCaptureFailure.FIRST_ENTRY_FAILED,
+        PinChangeCaptureFailure.CONFIRMATION_FAILED,
+        -> string(R.string.offline_pin_change_new_pin_unavailable)
     }
 
     private suspend fun submitEmvOnlineResponseAndAwaitCompletion(
@@ -763,17 +1167,17 @@ class CardTransactionViewModel(
         transLog.CardRangeId = option.cardRange?.CardRangeID ?: ""
         transLog.CardRangeName = option.cardRange?.RangeName ?: ""
         transLog.CurrCode = sysParam.CurrCode
-        transLog.TxnAmt = totalAmount
-        transLog.BaseAmt = baseAmount
-        transLog.Tax1Amt = tax1Discount.discountedTaxAmountText
-        transLog.Tax1DiscountAmt = tax1Discount.discountAmountText
-        transLog.OriginalTax1Amt = if (tax1Discount.hasDiscount) {
-            tax1Discount.originalTaxAmountText
+        transLog.TxnAmt = currentAmounts.total.moneyText()
+        transLog.BaseAmt = currentAmounts.base.moneyText()
+        transLog.Tax1Amt = currentAmounts.tax1.moneyText()
+        transLog.Tax1DiscountAmt = currentAmounts.tax1Discount.moneyText()
+        transLog.OriginalTax1Amt = if (currentAmounts.tax1Discount.signum() > 0) {
+            currentAmounts.tax1.add(currentAmounts.tax1Discount).moneyText()
         } else {
             ""
         }
-        transLog.Tax2Amt = tax2Amount
-        transLog.TipAmt = tipAmount
+        transLog.Tax2Amt = currentAmounts.tax2.moneyText()
+        transLog.TipAmt = currentAmounts.tip.moneyText()
         transLog.InvoiceId = invoiceId
         transLog.TxnId = stan
         transLog.AuthNtwkName = option.acquirer.AcquirerName
@@ -816,14 +1220,152 @@ class CardTransactionViewModel(
         transLog.ATC = emvTags["9F36"]?.value ?: ""
         transLog.IAD = emvTags["9F10"]?.value ?: ""
         transLog.CryptoInfo = emvTags["9F27"]?.value ?: ""
-        val applicationLabel = emvTags["50"]?.value ?: option.issuer.IssuerName
+        val applicationLabel = resolveEmvApplicationName(
+            preferredNameHex = emvTags["9F12"]?.value,
+            applicationLabelHex = emvTags["50"]?.value,
+            issuerFallback = option.issuer.IssuerName,
+        )
         transLog.AppName = applicationLabel
         transLog.AppLabel = applicationLabel
         transLog.AppId = transLog.AID
-        transLog.CVMText = if (cardData.onlinePinRequested) "Online PIN" else "No CVM"
+        transLog.CVMResult = emvTags["9F34"]?.value.orEmpty()
+        transLog.CardhdrName = resolveEmvCardholderName(
+            cardholderNameHex = emvTags["5F20"]?.value,
+            track1 = cardData.track1,
+        )
+        transLog.CVMText = when {
+            transactionType == TransactionType.PIN_UNBLOCK -> "No CVM; PIN unblock issuer script"
+            cardData.pinChangePinConfirmed -> "Offline PIN verified; new PIN confirmed"
+            interfaceCode == "03" || interfaceCode == "04" ->
+                resolveKernelCvmText(cardData.kernelCvmResult) ?: resolveEmvCvmText(
+                    cvmResults = transLog.CVMResult,
+                    onlinePinRequested = cardData.onlinePinRequested,
+                )
+            cardData.onlinePinRequested -> CVM_TEXT_ONLINE_PIN
+            else -> CVM_TEXT_NOT_PERFORMED
+        }
         transLog.TipProcessingInfo = option.acquirer.TIPProcs.toString()
 
         return ProcInfo(TransLog = transLog)
+    }
+
+    private suspend fun awaitPartialApprovalDecision(
+        allocation: PartialApprovalAllocation,
+    ): Boolean {
+        val decision = CompletableDeferred<Boolean>()
+        partialApprovalDecision = decision
+        _uiState.update { current ->
+            current.copy(
+                step = CardTransactionStep.PartialApproval(
+                    requestedAmount = allocation.original.total.moneyText(),
+                    approvedAmount = allocation.approved.total.moneyText(),
+                    remainingAmount = allocation.remaining.total.moneyText(),
+                ),
+                statusMessage = string(R.string.partial_approval_title),
+            )
+        }
+        return try {
+            decision.await()
+        } finally {
+            if (partialApprovalDecision === decision) partialApprovalDecision = null
+        }
+    }
+
+    private suspend fun awaitRemainingTransactionDecision(
+        remaining: PartialApprovalAmounts,
+    ): Boolean {
+        val decision = CompletableDeferred<Boolean>()
+        remainingTransactionDecision = decision
+        _uiState.update { current ->
+            current.copy(
+                step = CardTransactionStep.PartialApprovalRemainder(
+                    remainingAmount = remaining.total.moneyText(),
+                ),
+                statusMessage = string(R.string.partial_approval_remaining_question),
+            )
+        }
+        return try {
+            decision.await()
+        } finally {
+            if (remainingTransactionDecision === decision) remainingTransactionDecision = null
+        }
+    }
+
+    private fun prepareRemainingTransaction(remaining: PartialApprovalAmounts) {
+        currentAmounts = remaining.normalized()
+        activeCardData = null
+        currentOptions = emptyList()
+        pendingEmvOnlineContext = null
+        stopWaitingForResponseCountdown()
+        _uiState.update { current ->
+            current.copy(
+                step = CardTransactionStep.AwaitingCard,
+                statusMessage = string(R.string.partial_approval_present_card_remaining),
+                processingStatus = null,
+                cardData = null,
+                acquirerOptions = emptyList(),
+                baseAmount = currentAmounts.base.moneyText(),
+                tax1Amount = currentAmounts.tax1.moneyText(),
+                tax2Amount = currentAmounts.tax2.moneyText(),
+                tipAmount = currentAmounts.tip.moneyText(),
+                totalAmount = currentAmounts.total.moneyText(),
+            )
+        }
+    }
+
+    private fun applyAmountsToProcInfo(procInfo: ProcInfo, amounts: PartialApprovalAmounts) {
+        procInfo.TransLog.TxnAmt = amounts.total.moneyText()
+        procInfo.TransLog.BaseAmt = amounts.base.moneyText()
+        procInfo.TransLog.Tax1Amt = amounts.tax1.moneyText()
+        procInfo.TransLog.Tax1DiscountAmt = amounts.tax1Discount.moneyText()
+        procInfo.TransLog.OriginalTax1Amt = if (amounts.tax1Discount.signum() > 0) {
+            amounts.tax1.add(amounts.tax1Discount).moneyText()
+        } else {
+            ""
+        }
+        procInfo.TransLog.Tax2Amt = amounts.tax2.moneyText()
+        procInfo.TransLog.TipAmt = amounts.tip.moneyText()
+        procInfo.TransLog.TxnResultMsg = string(R.string.msg_approved)
+        procInfo.TransLog.RspText = procInfo.TransLog.TxnResultMsg
+    }
+
+    private suspend fun persistApprovedTransaction(
+        procInfo: ProcInfo,
+        writesActiveRecord: Boolean,
+    ): String {
+        val transaction = procInfo.toTransaction()
+        val destinationId: String
+        val reportTransaction: Transaction
+        if (writesActiveRecord) {
+            Log.d(TAG, "processTransaction approved inserting active transaction")
+            val rowId = transactionRepository.insert(transaction)
+            destinationId = rowId.toString()
+            reportTransaction = transaction.copy(id = rowId.toInt())
+        } else {
+            Log.i(
+                TAG,
+                "Approved ${transaction.type} is non-batch; skipping active transaction insert",
+            )
+            destinationId = TransientTransactionResultStore.store(transaction)
+            reportTransaction = transaction
+        }
+        TransactionReportBridge.reportTransaction(
+            context = GlobalConnectPaymentApplication.instance,
+            transaction = reportTransaction,
+            tmsDatabase = tmsDatabase,
+        )
+        if (writesActiveRecord && transaction.type == TransactionType.CHECKOUT) {
+            checkInRowId?.let { id ->
+                runCatching {
+                    transactionRepository.getTransactionFromId(id)?.let { original ->
+                        transactionRepository.delete(original)
+                    }
+                }.onFailure { error ->
+                    Log.e(TAG, "Unable to remove check-in transaction id=$id", error)
+                }
+            }
+        }
+        return destinationId
     }
 
     private fun updateProcInfoWithResponse(procInfo: ProcInfo, result: HostTransactionResult) {
@@ -835,9 +1377,20 @@ class CardTransactionViewModel(
         procInfo.TransLog.AuthorizationId = procInfo.TransLog.AuthCode
         procInfo.TransLog.RefNbr = result.isoMessage.getFieldValue(37)
         procInfo.TransLog.ExternalRefNumber = result.isoMessage.getFieldValue(62)
+        if (transactionType == TransactionType.LOYALTY_BALANCE) {
+            procInfo.TransLog.LoyaltyBalancePoints =
+                LoyaltyContract.parseBalancePoints(result.isoMessage.getFieldValue(4)).orEmpty()
+        }
         procInfo.TransLog.ARC = responseCode ?: procInfo.TransLog.ARC
         procInfo.TransLog.RspDT = result.timestamp.toString()
-        procInfo.TransLog.TxnResultMsg = if (responseCode == "00") string(R.string.msg_approved) else string(R.string.msg_declined)
+        procInfo.TransLog.TxnResultMsg = if (
+            responseCode == PartialApprovalContract.RESPONSE_CODE ||
+            OfflinePinChangeContract.isHostApproved(transactionType, responseCode)
+        ) {
+            string(R.string.msg_approved)
+        } else {
+            string(R.string.msg_declined)
+        }
         procInfo.TransLog.RspText = procInfo.TransLog.TxnResultMsg
 
         val privateUseTags = PrivateUseData63.parse(result.isoMessage.getFieldValue(63))
@@ -1003,6 +1556,8 @@ class CardTransactionViewModel(
             TransactionType.SALE -> acquirer.EnableSales && (!isFallback || acquirer.AllowFallBack)
             TransactionType.PAYMENT -> acquirer.EnablePayment
             TransactionType.CASH -> acquirer.EnableCash
+            TransactionType.LOYALTY_SALE,
+            TransactionType.LOYALTY_BALANCE -> acquirer.enableLoyalty
             else -> true
         }
         Log.d(TAG, "acquirerSupportsTransaction acquirer=${acquirer.AcqID} type=$type fallback=$isFallback supported=$supported")
@@ -1102,56 +1657,14 @@ class CardTransactionViewModel(
         hostSettings: HostSettings,
         isoFactory: IsoMessageFactory,
     ): Boolean {
-        val pending = transactionRepository.getPendingReversals(acquirer.AcqID)
-        if (pending.isEmpty()) return true
-
-        val connectTimeoutMs = secondsToMillis(hostSettings.connectTimeoutSeconds, DEFAULT_CONNECT_TIMEOUT_SEC)
-        val readTimeoutMs = secondsToMillis(hostSettings.readTimeoutSeconds, DEFAULT_READ_TIMEOUT_SEC)
-
-        for (reversal in pending) {
-            val message = buildReversalIsoMessage(reversal, isoFactory)
-            val request = HostTransactionRequest(
-                acquirer = acquirer,
-                ipProfile = ipProfile,
-                terminal = terminal,
-                message = message,
-                lengthConfig = hostSettings.length,
-                primaryEndpoint = hostSettings.primary,
-                secondaryEndpoint = hostSettings.secondary,
-                connectTimeoutMs = connectTimeoutMs,
-                readTimeoutMs = readTimeoutMs,
-                attempts = hostSettings.attempts,
-                primaryRetries = hostSettings.primaryRetries,
-                secondaryRetries = hostSettings.secondaryRetries,
-                useTls = hostSettings.isTls,
-                sslSocketFactory = if (hostSettings.isTls) AcquirerSslCache.get(ipProfile.IPTabID.toString()) else null,
-                isoFactory = isoFactory,
-            )
-            val attemptTimestamp = LocalDateTime.now().format(dateTimeFormatter)
-            val updated = reversal.copy(
-                attempts = reversal.attempts + 1,
-                lastAttemptAt = attemptTimestamp,
-            )
-            try {
-                val result = hostClient.execute(request)
-                val responseCode = result.isoMessage.getFieldValue(39)
-                val responseUpdated = updated.copy(lastResponseCode = responseCode)
-                if (responseCode == "00" || responseCode == "21") {
-                    transactionRepository.deleteReversal(reversal)
-                    if (terminal.PrintReversalReceipt) {
-                        printReversalReceipt(responseUpdated, acquirer)
-                    }
-                } else {
-                    transactionRepository.updateReversal(responseUpdated)
-                    return false
-                }
-            } catch (error: Throwable) {
-                Log.e(TAG, "Reversal transmission failed", error)
-                transactionRepository.updateReversal(updated)
-                return false
-            }
-        }
-        return true
+        return pendingReversalProcessor.processForAcquirer(
+            acquirer = acquirer,
+            ipProfile = ipProfile,
+            terminal = terminal,
+            hostSettings = hostSettings,
+            isoFactory = isoFactory,
+            onApproved = pendingReversalReceiptPrinter::print,
+        ).allSent
     }
 
     private suspend fun queuePendingReversal(candidate: PendingReversal): PendingReversal {
@@ -1190,24 +1703,13 @@ class CardTransactionViewModel(
         transactionRepository.deleteReversal(reversal)
     }
 
-    private fun buildReversalIsoMessage(
-        reversal: PendingReversal,
-        isoFactory: IsoMessageFactory,
-    ): IsoMessage {
-        val message = isoFactory.newMessage()
-        reversal.header?.let { message.setHeader(it) }
-        message.setMessageType("0400")
-        message.setFieldValue(3, reversal.processingCode)
-        reversal.fieldValues.forEach { (field, value) ->
-            when (field) {
-                0, 1, 3, 35 -> Unit
-                else -> message.setFieldValue(field, value)
-            }
-        }
-        reversal.fieldValues[2]?.let { message.setFieldValue(2, it) }
-        reversal.fieldValues[14]?.let { message.setFieldValue(14, it) }
-        return message
-    }
+    private fun PendingReversal.withReversalAmount(
+        field4: String,
+        amountText: String,
+    ): PendingReversal = copy(
+        fieldValues = fieldValues + (4 to field4),
+        transactionAmount = amountText,
+    )
 
     private fun createPendingReversalCandidate(
         acquirer: TMS_Acquirer,
@@ -1245,42 +1747,6 @@ class CardTransactionViewModel(
         "91" -> ReversalReason.RESPONSE_91
         "96" -> ReversalReason.RESPONSE_96
         else -> ReversalReason.UNKNOWN
-    }
-
-    private suspend fun printReversalReceipt(
-        reversal: PendingReversal,
-        acquirer: TMS_Acquirer,
-    ) {
-        withContext(Dispatchers.IO) {
-            val profile = profileRepository.get()
-            val timestamp = runCatching { LocalDateTime.parse(reversal.createdAt, dateTimeFormatter) }
-                .getOrElse { LocalDateTime.now() }
-            val transactionLabel = reversal.transactionType
-                .transactionStringToTransactionType()
-                .toStringForUsers()
-            val amountText = FormatterUtils.formatAmount(acquirer.Currency, reversal.transactionAmount)
-            val maskedPan = if (reversal.maskedPan.isNotBlank()) {
-                reversal.maskedPan
-            } else {
-                obfuscatePAN(reversal.fieldValues[2]) ?: ""
-            }
-            val rrn = reversal.fieldValues[37]?.takeIf { it.isNotBlank() } ?: reversal.stan
-            val receiptData = ReversalReceiptData(
-                timestamp = timestamp,
-                maskedPan = maskedPan,
-                cardBrand = reversal.cardBrand,
-                rrn = rrn,
-                invoiceNumber = reversal.invoiceNumber,
-                transactionTypeLabel = transactionLabel,
-                totalAmountText = amountText,
-            )
-            paymentPrinter.printReversalReceipt(
-                context = GlobalConnectPaymentApplication.instance.applicationContext,
-                profile = profile,
-                tmsDatabase = tmsDatabase,
-                data = receiptData,
-            )
-        }
     }
 
     private fun startSelectionTimer() {
@@ -1418,9 +1884,17 @@ sealed class CardTransactionStep {
     /** Transient initial state before [CardTransactionViewModel.start] runs. No card search. */
     object Initializing : CardTransactionStep()
     object AwaitingCard : CardTransactionStep()
+    object ContactRetryPrompt : CardTransactionStep()
+    object ContactlessReadRetryPrompt : CardTransactionStep()
     data class SelectingCurrency(val currencies: List<CurrencyInfo>) : CardTransactionStep()
     data class SelectingAcquirer(val options: List<CardTransactionAcquirerOption>) : CardTransactionStep()
     object ProcessingHost : CardTransactionStep()
+    data class PartialApproval(
+        val requestedAmount: String,
+        val approvedAmount: String,
+        val remainingAmount: String,
+    ) : CardTransactionStep()
+    data class PartialApprovalRemainder(val remainingAmount: String) : CardTransactionStep()
     data class Error(val message: String) : CardTransactionStep()
 }
 
@@ -1438,6 +1912,7 @@ data class CardTransactionUiState(
     val currencySymbol: String? = null,
     val emvCountryCode: String = "0840",
     val emvCurrencyCode: String = "0840",
+    val contactOnly: Boolean = false,
 )
 
 data class CardTransactionAcquirerOption(

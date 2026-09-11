@@ -16,6 +16,7 @@ This project is an Android Studio Kotlin application. Follow these expectations 
 ## Testing & Verification
 - Run `./gradlew lint` and `./gradlew test` when feasible before submitting changes.
 - Install debug variants on development devices unless release behavior is explicitly being validated.
+- Run connected instrumentation tests only on an emulator or disposable test device, never on the user's payment terminal: test-runner cleanup can uninstall the app and erase local transactions and settings. Update the payment terminal with an in-place install that preserves app data.
 - Note any skipped checks, emulator limitations, or manual validation steps in the PR description.
 
 ## PR Expectations

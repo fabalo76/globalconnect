@@ -12,16 +12,16 @@ object FolioNumberProvider {
 
     private const val PREFERENCES = "hotel_transactions"
     private const val KEY_FOLIO = "folio_number"
-    private const val MAX_FOLIO = 999_999_999_999L
+    private const val MAX_FOLIO = 999_999L
 
     private val cachedFolio = AtomicLong(-1)
 
     /**
-     * Returns the next folio number using a 12 digit cyclic counter.
+     * Returns the next folio number using the A10-compatible six digit cyclic counter.
      */
     fun nextFolioNumber(): String {
         val value = incrementAndPersist()
-        val formatted = value.toString().padStart(12, '0')
+        val formatted = value.toString().padStart(6, '0')
         Log.d(TAG, "Generated folio number=$formatted")
         return formatted
     }

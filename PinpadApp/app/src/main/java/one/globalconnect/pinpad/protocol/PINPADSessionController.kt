@@ -6,6 +6,8 @@ import one.globalconnect.pinpad.device.FirmwareVersion
 import one.globalconnect.pinpad.device.MsrTrackData
 import one.globalconnect.pinpad.device.PinpadContactEmvController
 import one.globalconnect.pinpad.device.PinpadEmvDataObjects
+import one.globalconnect.pinpad.device.PinpadEmvConfigStore
+import one.globalconnect.pinpad.device.PinManagementPolicy
 import one.globalconnect.pinpad.logging.PinpadTraceLog
 import one.globalconnect.pinpad.model.PinpadCommandRequest
 import one.globalconnect.pinpad.model.PinpadCommandResponse
@@ -13,6 +15,8 @@ import one.globalconnect.pinpad.model.PinpadTransactionDisplay
 import one.globalconnect.pinpad.ui.PinpadDisplayController
 import one.globalconnect.pinpad.ui.TextEntryEchoMode
 import one.globalconnect.pinpad.security.KeyLoadAuthorizer
+import org.json.JSONArray
+import org.json.JSONObject
 import java.nio.charset.StandardCharsets
 import java.util.ArrayDeque
 import java.util.Base64
@@ -29,6 +33,7 @@ class PINPADSessionController(
     private val includeFrameAckInResponses: Boolean = true,
 ) {
     @Volatile private var pendingFinalEot = false
+    @Volatile private var pinManagementFlowActive = false
     @Volatile private var communicationTestAwaitingEcho = false
     @Volatile private var pendingSerialPortChange: SerialPortChange? = null
     @Volatile private var completedSerialPortChange: SerialPortChange? = null
@@ -74,6 +79,7 @@ class PINPADSessionController(
 
     fun abortPendingResponse() {
         pendingFinalEot = false
+        pinManagementFlowActive = false
         communicationTestAwaitingEcho = false
         pendingSerialPortChange = null
         clearPacketTransfer()
@@ -175,7 +181,7 @@ class PINPADSessionController(
             )
             return listOf(byteArrayOf(PINPADControl.EOT))
         }
-        if (!clearKeyInjectionModeActive && frame.commandId == CLEAR_KEY_COMMAND_ID) {
+        if (!clearKeyInjectionModeActive && frame.commandId in CLEAR_KEY_INJECTION_PROTECTED_COMMANDS) {
             PinpadTraceLog.command(
                 frame.commandId,
                 "clear-key injection mode is not authorized; dropping command and responding EOT",
@@ -311,6 +317,14 @@ class PINPADSessionController(
                 responses += responseFrame("17", random)
                 pendingFinalEot = true
             }
+            "18" -> {
+                PinpadTraceLog.command(
+                    "18",
+                    "set local time compatibility dummy payload=${request.payloadAscii}; responding success without changing device settings",
+                )
+                responses += responseFrame("18", "0")
+                pendingFinalEot = true
+            }
             "20" -> {
                 PinpadTraceLog.command("20", "load secret master key payload redacted length=${frame.payload.size}")
                 if (!isSecretMasterKeyRequestFormatValid(request.payloadAscii)) {
@@ -391,11 +405,20 @@ class PINPADSessionController(
                 )
             }
             "7G" -> {
-                PinpadTraceLog.command("7G", "start MK/SK PIN change entry")
-                startPinEntry(
+                PinpadTraceLog.command("7G", "start MK/SK new-PIN entry and confirmation")
+                startNewPinEntry(
                     commandId = "7G",
                     requestPayload = request.payloadAscii,
                     dukpt = false,
+                    responses = responses,
+                )
+            }
+            "7H" -> {
+                PinpadTraceLog.command("7H", "start DUKPT new-PIN entry and confirmation")
+                startNewPinEntry(
+                    commandId = "7H",
+                    requestPayload = request.payloadAscii,
+                    dukpt = true,
                     responses = responses,
                 )
             }
@@ -1271,6 +1294,7 @@ class PINPADSessionController(
             "T1C" -> {
                 PinpadTraceLog.command("T1C", "cancel contact transaction")
                 transactionDisplayContext = null
+                pinManagementFlowActive = false
                 commandDevice?.cancelContactTransaction()
                 pendingFinalEot = false
             }
@@ -1292,7 +1316,14 @@ class PINPADSessionController(
                 if (result?.success == true) {
                     pendingFinalEot = false
                 } else {
-                    responses += responseFrame(PINPADFrameType.Transaction, "T16", formatTransactionResult(result))
+                    val responseCommand = if (pinManagementFlowActive) "T38" else "T16"
+                    val responsePayload = if (pinManagementFlowActive) {
+                        formatPinManagementResult(result)
+                    } else {
+                        formatTransactionResult(result)
+                    }
+                    pinManagementFlowActive = false
+                    responses += responseFrame(PINPADFrameType.Transaction, responseCommand, responsePayload)
                     pendingFinalEot = true
                 }
             }
@@ -1392,10 +1423,31 @@ class PINPADSessionController(
                 }
             }
             "T37" -> {
-                PinpadTraceLog.command("T37", "contact PIN management unsupported")
-                val result = commandDevice?.contactPinManagementUnsupported()
-                responses += responseFrame(PINPADFrameType.Transaction, "T38", formatPinManagementResult(result))
-                pendingFinalEot = true
+                val operation = PinManagementPolicy.parseOperation(request.payloadAscii)
+                when (operation) {
+                    null -> {
+                        PinpadTraceLog.command("T37", "invalid PIN management command format")
+                        responses += responseFrame(PINPADFrameType.Transaction, "T38", "12")
+                        pendingFinalEot = true
+                    }
+                    else -> {
+                        PinpadTraceLog.command("T37", "start contact PIN management operation=$operation")
+                        pinManagementFlowActive = true
+                        val started = commandDevice?.startContactPinManagement(operation, ::sendPinManagementAsync) ?: false
+                        if (!started) {
+                            pinManagementFlowActive = false
+                            val failure = PinpadContactEmvController.EmvCommandResult.failure('1', "00000000")
+                            responses += responseFrame(
+                                PINPADFrameType.Transaction,
+                                "T38",
+                                formatPinManagementResult(failure),
+                            )
+                            pendingFinalEot = true
+                        } else {
+                            pendingFinalEot = false
+                        }
+                    }
+                }
             }
             "T38" -> {
                 PinpadTraceLog.command("T38", "PIN management response command received from host")
@@ -1522,6 +1574,29 @@ class PINPADSessionController(
                     "T91",
                     emvSetupPayload(result) + FS_CHAR + fileName.orEmpty(),
                 )
+                pendingFinalEot = true
+            }
+            "T92" -> {
+                val snapshot = commandDevice?.queryCurrentEmvConfiguration()
+                PinpadTraceLog.command(
+                    "T92",
+                    "query all EMV configuration present=${snapshot != null}",
+                )
+                responses += responseFrame(
+                    PINPADFrameType.Transaction,
+                    "T93",
+                    formatA10DemoConfigurationSnapshot(snapshot),
+                )
+                pendingFinalEot = true
+            }
+            "T94" -> {
+                val result = if (request.payloadAscii == "ALL") {
+                    commandDevice?.clearAllEmvConfiguration()
+                } else {
+                    PinpadContactEmvController.EmvCommandResult.failure('2')
+                }
+                PinpadTraceLog.command("T94", "clear all EMV configuration success=${result?.success == true}")
+                responses += responseFrame(PINPADFrameType.Transaction, "T95", emvBasicPayload(result))
                 pendingFinalEot = true
             }
             else -> {
@@ -1879,6 +1954,21 @@ class PINPADSessionController(
         asyncResponseSender(responseFrame(PINPADFrameType.Transaction, "T62", payload))
     }
 
+    /**
+     * Sends an asynchronous T38 result for the active T37 change-PIN lifecycle.
+     *
+     * @param result intermediate A1 or final V0/V1 PIN-management result.
+     */
+    private fun sendPinManagementAsync(result: PinpadContactEmvController.EmvCommandResult) {
+        val payload = formatPinManagementResult(result)
+        if (!result.success || result.transactionCode != PIN_MANAGEMENT_ONLINE_REQUEST) {
+            pinManagementFlowActive = false
+        }
+        PinpadTraceLog.command("T38", "send PIN management result payloadChars=${payload.length}")
+        pendingFinalEot = false
+        asyncResponseSender(responseFrame(PINPADFrameType.Transaction, "T38", payload))
+    }
+
     private fun sendPinEntryAsync(result: PinpadDeviceCommands.PinEntryResult) {
         when (result) {
             PinpadDeviceCommands.PinEntryResult.Eot -> {
@@ -1906,6 +1996,36 @@ class PINPADSessionController(
             commandDevice.startDukptPinEntry(commandId, requestPayload, ::sendPinEntryAsync)
         } else {
             commandDevice.startMasterSessionPinEntry(commandId, requestPayload, ::sendPinEntryAsync)
+        }
+        when (result) {
+            PinpadDeviceCommands.PinEntryStartResult.Started -> pendingFinalEot = false
+            is PinpadDeviceCommands.PinEntryStartResult.ImmediateResponse -> {
+                responses += responseFrame(PINPADFrameType.Transaction, "71", result.payload)
+                pendingFinalEot = true
+            }
+        }
+    }
+
+    /**
+     * Starts the two-step secure new-PIN capture for MK/SK or DUKPT protocol commands.
+     *
+     * @param commandId source request command (`7G` or `7H`).
+     * @param requestPayload raw ASCII command payload.
+     * @param dukpt selects DUKPT when true and MK/SK when false.
+     * @param responses receives an immediate framed error when capture cannot start.
+     */
+    private fun startNewPinEntry(
+        commandId: String,
+        requestPayload: String,
+        dukpt: Boolean,
+        responses: MutableList<ByteArray>,
+    ) {
+        val result = if (commandDevice == null) {
+            PinpadDeviceCommands.PinEntryStartResult.ImmediateResponse(if (dukpt) "A" else "9")
+        } else if (dukpt) {
+            commandDevice.startDukptNewPinEntry(commandId, requestPayload, ::sendPinEntryAsync)
+        } else {
+            commandDevice.startMasterSessionNewPinEntry(commandId, requestPayload, ::sendPinEntryAsync)
         }
         when (result) {
             PinpadDeviceCommands.PinEntryStartResult.Started -> pendingFinalEot = false
@@ -2298,6 +2418,23 @@ class PINPADSessionController(
             deleted.joinToString(separator = PINPADControl.FS.toInt().toChar().toString()) { if (it) "0" else "1" }
     }
 
+    private fun formatA10DemoConfigurationSnapshot(
+        snapshot: PinpadEmvConfigStore.EmvConfigurationSnapshot?,
+    ): String {
+        if (snapshot == null) return "1"
+        val json = JSONObject()
+            .put("terminalConfigurationPresent", snapshot.terminalConfigurationPresent)
+            .put("terminalConfigurationBytes", snapshot.terminalConfigurationBytes)
+            .put("dataFormatTags", JSONArray(snapshot.dataFormatTags))
+            .put("capkIds", JSONArray(snapshot.capkIds))
+            .put("contactAidIds", JSONArray(snapshot.contactAidIds))
+            .put("contactlessAidIds", JSONArray(snapshot.contactlessAidIds))
+            .put("contactlessDrlIds", JSONArray(snapshot.contactlessDrlIds))
+            .toString()
+        val encoded = Base64.getEncoder().encodeToString(json.toByteArray(StandardCharsets.UTF_8))
+        return "0$FS_CHAR$encoded"
+    }
+
     private fun formatTransactionResult(result: PinpadContactEmvController.EmvCommandResult?): String {
         return if (result?.success == true) {
             "0${result.transactionCode}${result.reversalNeed}"
@@ -2584,6 +2721,7 @@ class PINPADSessionController(
         private const val US_BYTE: Byte = 0x1F
         private const val DEFAULT_KEY_ALGORITHM = 'T'
         private const val PIN_CONTROL_CHARS = 5
+        private const val PIN_MANAGEMENT_ONLINE_REQUEST = "A1"
         private val SESSION_KEY_HEX_LENGTHS = setOf(16, 32, 48)
         private val SECRET_KEY_HEX_LENGTHS = setOf(16, 32)
         private val SECRET_KEY_ID_RANGE = 0..9
@@ -2591,7 +2729,8 @@ class PINPADSessionController(
         private val KEY_USAGE_REGEX = Regex("[A-Z][0-9A-Z]")
         private val KEY_MODE_VALUES = setOf('B', 'C', 'D', 'E', 'G', 'N', 'S', 'V', 'X')
         private val KEY_ALGORITHM_VALUES = setOf('A', 'D', 'E', 'H', 'R', 'S', 'T')
-        private val CLEAR_KEY_INJECTION_ALLOWED_COMMANDS = setOf("02", "04", "06", "08")
+        private val CLEAR_KEY_INJECTION_PROTECTED_COMMANDS = setOf("02", "90", "94")
+        private val CLEAR_KEY_INJECTION_ALLOWED_COMMANDS = setOf("02", "04", "06", "08", "90", "94", "98")
         private val ADMINISTRATION_NO_FINAL_EOT_COMMANDS = setOf("11", "14")
         private val CPU_CARD_COMMANDS = (0..15).map { "I0%X".format(it) }.toSet() +
             setOf("I11", "I12", "I14", "I15", "I16", "I17")
@@ -2637,6 +2776,7 @@ class PINPADSessionController(
             "13",
             "14",
             "17",
+            "18",
             "19",
             "1C",
             "1F",
@@ -2803,12 +2943,15 @@ class PINPADSessionController(
             "T77",
             "T81",
             "T90",
+            "T92",
+            "T94",
             "60",
             "62",
             "63",
             "70",
             "71",
             "7G",
+            "7H",
             "7A",
             "90",
             "91",

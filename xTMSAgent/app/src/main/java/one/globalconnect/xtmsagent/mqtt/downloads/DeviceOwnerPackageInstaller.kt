@@ -54,6 +54,17 @@ internal object DeviceOwnerPackageInstaller {
             )
         }
 
+        val installedVersionCode = installedVersionCode(appContext, packageName)
+        if (isApplicationDowngrade(installedVersionCode, versionCode)) {
+            return DeviceOwnerInstallResult(
+                success = false,
+                shouldFallback = true,
+                message =
+                    "Rollback requested from versionCode=$installedVersionCode " +
+                        "to versionCode=$versionCode; using NEXGO privileged installer",
+            )
+        }
+
         val packageInstaller = appContext.packageManager.packageInstaller
         val requestId = UUID.randomUUID().toString()
         val waiter = CompletableDeferred<InstallStatus>()
@@ -108,7 +119,7 @@ internal object DeviceOwnerPackageInstaller {
 
             val status = withTimeoutOrNull(INSTALL_TIMEOUT_MS) { waiter.await() }
             when {
-                status == null && isInstalled(appContext, packageName, versionCode) -> {
+                status == null && isRequestedVersionInstalled(appContext, packageName, versionCode) -> {
                     removeRecord(appContext, requestId)
                     DeviceOwnerInstallResult(
                         success = true,
@@ -126,7 +137,7 @@ internal object DeviceOwnerPackageInstaller {
                     )
                 }
                 status.status == PackageInstaller.STATUS_SUCCESS &&
-                    isInstalled(appContext, packageName, versionCode) -> {
+                    isRequestedVersionInstalled(appContext, packageName, versionCode) -> {
                     removeRecord(appContext, requestId)
                     DeviceOwnerInstallResult(
                         success = true,
@@ -174,8 +185,44 @@ internal object DeviceOwnerPackageInstaller {
         val appContext = context.applicationContext
         records(appContext)
             .filter { it.packageName == appContext.packageName }
-            .filter { isInstalled(appContext, it.packageName, it.versionCode) }
+            .filter { isRequestedVersionInstalled(appContext, it.packageName, it.versionCode) }
             .forEach { completeSelfUpdate(appContext, it, "MY_PACKAGE_REPLACED") }
+    }
+
+    fun persistFallbackSelfUpdate(
+        context: Context,
+        taskId: String,
+        packageName: String,
+        versionCode: Long,
+        installFile: File,
+        stagedFile: File,
+    ): String? {
+        val appContext = context.applicationContext
+        if (packageName != appContext.packageName) return null
+
+        val requestId = UUID.randomUUID().toString()
+        persistRecord(
+            appContext,
+            InstallRecord(
+                requestId = requestId,
+                sessionId = -1,
+                taskId = taskId,
+                packageName = packageName,
+                versionCode = versionCode,
+                installPath = installFile.absolutePath,
+                stagedPath = stagedFile.absolutePath,
+            ),
+        )
+        Log.i(
+            TAG,
+            "Persisted NEXGO fallback self-update task=$taskId " +
+                "package=$packageName versionCode=$versionCode",
+        )
+        return requestId
+    }
+
+    fun discardFallbackSelfUpdate(context: Context, requestId: String?) {
+        requestId?.let { removeRecord(context.applicationContext, it) }
     }
 
     internal fun onInstallStatus(context: Context, intent: Intent) {
@@ -204,7 +251,7 @@ internal object DeviceOwnerPackageInstaller {
         if (status.status == PackageInstaller.STATUS_SUCCESS &&
             record != null &&
             record.packageName == context.packageName &&
-            isInstalled(context, record.packageName, record.versionCode)
+            isRequestedVersionInstalled(context, record.packageName, record.versionCode)
         ) {
             completeSelfUpdate(context, record, "PackageInstaller callback")
         }
@@ -240,7 +287,7 @@ internal object DeviceOwnerPackageInstaller {
         removeRecord(context, record.requestId)
         cleanup(record)
         val message =
-            "Self-update installed by PackageInstaller: ${record.packageName} " +
+            "Self-update installed: ${record.packageName} " +
                 "versionCode=${record.versionCode} source=$source"
         Log.i(TAG, message)
         MainActivity.writeLog(message)
@@ -255,7 +302,7 @@ internal object DeviceOwnerPackageInstaller {
                 taskId = taskId,
                 success = true,
                 status = "applied",
-                statusMessage = "Application installed by Android PackageInstaller",
+                statusMessage = "Application self-update installed",
             )
         }
     }
@@ -298,16 +345,24 @@ internal object DeviceOwnerPackageInstaller {
             .onFailure { Log.w(TAG, "Unable to abandon install session $sessionId", it) }
     }
 
-    private fun isInstalled(
+    private fun isRequestedVersionInstalled(
         context: Context,
         packageName: String,
         versionCode: Long,
-    ): Boolean {
+    ): Boolean = isSameApplicationVersion(
+        installedVersionCode(context, packageName),
+        versionCode,
+    )
+
+    private fun installedVersionCode(
+        context: Context,
+        packageName: String,
+    ): Long? {
         @Suppress("DEPRECATION")
         val info = runCatching {
             context.packageManager.getPackageInfo(packageName, 0)
-        }.getOrNull() ?: return false
-        return info.versionCodeCompat() >= versionCode
+        }.getOrNull() ?: return null
+        return info.versionCodeCompat()
     }
 
     private fun PackageInfo.versionCodeCompat(): Long =

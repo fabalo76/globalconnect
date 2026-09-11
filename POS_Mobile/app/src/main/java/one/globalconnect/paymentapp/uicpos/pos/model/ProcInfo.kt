@@ -80,6 +80,7 @@ fun ProcInfo.toTransaction(): Transaction {
         transactionId = this.TransLog.TxnId ?: "Err",
         stan = this.TransLog.TxnId ?: "Err",
         totalAmount = totalAmount,
+        partialApprovalOriginalAmount = this.TransLog.PartialApprovalOriginalAmount,
         baseAmount = baseAmount,
         tipAmount = tipAmount,
         tax1Amount = tax1Amount,
@@ -101,6 +102,7 @@ fun ProcInfo.toTransaction(): Transaction {
         cardEntryMethod = cardEntryMethod,
         CVM = this.TransLog.CVMText.CVMStringtoCvmType(),
         CVMText = this.TransLog.CVMText ?: "",
+        cardholderName = this.TransLog.CardhdrName ?: "",
         AID = this.TransLog.AID ?: "Err",
         TVR = this.TransLog.TVR ?: "Err",
         TSI = this.TransLog.TSI ?: "Err",
@@ -133,5 +135,7 @@ fun ProcInfo.toTransaction(): Transaction {
         alternateHostResponse = this.TransLog.AlternateHostResponse ?: "",
         additionalHostPrintData = this.TransLog.AdditionalHostPrintData ?: "",
         paymentPlanQueryResponse = this.TransLog.PaymentPlanQueryResponse ?: ""
-    )
+    ).apply {
+        loyaltyBalancePoints = this@toTransaction.TransLog.LoyaltyBalancePoints.orEmpty()
+    }
 }

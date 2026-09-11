@@ -108,6 +108,12 @@ object DeviceModelConfig {
 
     fun supportsRs232Serial(modelName: String?): Boolean = getDeviceSpec(modelName).rs232SerialSupported
 
+    /** CT20 and CT20P terminals have a built-in physical keypad. */
+    fun hasPhysicalKeypad(modelName: String?): Boolean {
+        val normalized = modelName.normalizedModelName()
+        return normalized.startsWith("CT20") || getDeviceSpec(modelName).hasPhysicalKeypad
+    }
+
     fun getAllModels(): List<DeviceModelSpec> = deviceModels.values.toList()
 
     private fun String?.normalizedModelName(): String {

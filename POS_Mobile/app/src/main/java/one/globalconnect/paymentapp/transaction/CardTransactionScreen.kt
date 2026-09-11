@@ -24,6 +24,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -43,6 +44,7 @@ import one.globalconnect.paymentapp.R
 import one.globalconnect.paymentapp.cardreader.CardReaderStatus
 import one.globalconnect.paymentapp.cardreader.CardReaderViewModel
 import one.globalconnect.paymentapp.cardreader.EmvApplicationSelection
+import one.globalconnect.paymentapp.cardreader.nexgo.EmvTransactionPurpose
 import one.globalconnect.paymentapp.navigation.TopBar
 import one.globalconnect.paymentapp.records.BackButton
 import one.globalconnect.paymentapp.ui.components.AcquirerSelectionOption
@@ -52,16 +54,23 @@ import one.globalconnect.paymentapp.ui.theme.color_black
 import one.globalconnect.paymentapp.ui.theme.color_secondaryFive
 import one.globalconnect.paymentapp.ui.theme.color_secondaryThree
 import one.globalconnect.paymentapp.ui.theme.color_white
+import one.globalconnect.paymentapp.utils.SoundEffect
+import one.globalconnect.paymentapp.utils.SoundManager
 import one.globalconnect.paymentapp.transaction.ProcessingStatusList
 import one.globalconnect.paymentapp.transaction.ProcessingStatusUi
 import one.globalconnect.paymentapp.transaction.TransactionType
 import one.globalconnect.paymentapp.transaction.isResultFinal
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 private const val TAG = "CardTransactionScreen"
+private const val EXPIRED_APPLICATION_WARNING_MS = 2_000L
+private const val MOBILE_CVM_PROMPT_MS = 5_000L
+private const val CONTACT_RETRY_PROMPT_MS = 5_000L
 
 @Composable
 fun CardTransactionScreen(
-    onNavigateToResult: (String, Boolean) -> Unit,
+    onNavigateToResult: (String, TransactionType) -> Unit,
     onCancel: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -73,10 +82,24 @@ fun CardTransactionScreen(
 
     val uiState by cardTransactionViewModel.uiState.collectAsState()
     val cardReaderState by cardReaderViewModel.uiState.collectAsState()
+    val coroutineScope = rememberCoroutineScope()
     var pendingNavigation by remember { mutableStateOf<CardTransactionEvent.NavigateToResult?>(null) }
+    var expiredApplicationWarningVisible by remember { mutableStateOf(false) }
     Log.d(TAG, "CardTransactionScreen state step=${uiState.step} cardStatus=${cardReaderState.status}")
 
-    val cancellationLocked = uiState.step is CardTransactionStep.ProcessingHost
+    val startMobileCvmSecondTap: () -> Unit = {
+        Log.i(TAG, "Continuing original mobile CVM transaction with contactless reader only")
+        cardReaderViewModel.continueMobileCvmCardSearch()
+    }
+    val startContactRetry: () -> Unit = {
+        Log.i(TAG, "Continuing issuer-directed retry with contact ICC only")
+        cardTransactionViewModel.continueContactRetry()
+    }
+
+    val cancellationLocked = uiState.step is CardTransactionStep.ProcessingHost ||
+        cardReaderState.cardRemovalRequired || expiredApplicationWarningVisible
+    val decisionPending = uiState.step is CardTransactionStep.PartialApproval ||
+        uiState.step is CardTransactionStep.PartialApprovalRemainder
 
     BackHandler {
         if (cancellationLocked) {
@@ -97,12 +120,23 @@ fun CardTransactionScreen(
         Log.d(TAG, "LaunchedEffect step changed to ${uiState.step}")
         when (uiState.step) {
             is CardTransactionStep.AwaitingCard -> {
+                val transactionType = cardTransactionViewModel.transactionType
+                val isPinMaintenance = OfflinePinChangeContract.isPinMaintenance(transactionType)
                 Log.d(TAG, "Requesting card search amount=${uiState.totalAmount} country=${uiState.emvCountryCode} currency=${uiState.emvCurrencyCode}")
                 cardReaderViewModel.startCardSearch(
                     amount = uiState.totalAmount,
+                    invoiceNumber = cardTransactionViewModel.invoiceNumberForCardRead(),
                     cashbackAmount = "0.00",
                     countryCode = uiState.emvCountryCode,
                     currencyCode = uiState.emvCurrencyCode,
+                    allowSwipe = !isPinMaintenance && !uiState.contactOnly,
+                    allowContact = true,
+                    allowContactless = cardTransactionViewModel.contactlessAllowed && !uiState.contactOnly,
+                    purpose = when (transactionType) {
+                        TransactionType.OFFLINE_PIN_CHANGE -> EmvTransactionPurpose.OFFLINE_PIN_CHANGE
+                        TransactionType.PIN_UNBLOCK -> EmvTransactionPurpose.OFFLINE_PIN_UNBLOCK
+                        else -> EmvTransactionPurpose.PAYMENT
+                    },
                 )
             }
             else -> {
@@ -130,6 +164,16 @@ fun CardTransactionScreen(
             } else {
                 null
             }
+            val tvr = cardData.emvTags
+                .firstOrNull { it.tag.equals("95", ignoreCase = true) }
+                ?.value
+            if (onlineResponseHandler != null && hasExpiredApplicationTvr(tvr)) {
+                Log.i(TAG, "Expired application TVR detected; showing warning before online processing")
+                expiredApplicationWarningVisible = true
+                SoundManager.play(SoundEffect.KEY_INVALID)
+                delay(EXPIRED_APPLICATION_WARNING_MS)
+                expiredApplicationWarningVisible = false
+            }
             Log.d(
                 TAG,
                 "Forwarding card data to CardTransactionViewModel " +
@@ -149,8 +193,7 @@ fun CardTransactionScreen(
     val isResultFinal = uiState.processingStatus?.isResultFinal() == true
     val acknowledgeResult: () -> Unit = {
         pendingNavigation?.let { event ->
-            val isRefund = cardTransactionViewModel.transactionType == TransactionType.REFUND
-            onNavigateToResult(event.transactionId, isRefund)
+            onNavigateToResult(event.transactionId, cardTransactionViewModel.transactionType)
             pendingNavigation = null
         }
     }
@@ -168,7 +211,24 @@ fun CardTransactionScreen(
         )
         if (uiState.step !is CardTransactionStep.AwaitingCard) return@LaunchedEffect
         when (val status = cardReaderState.status) {
-            is CardReaderStatus.Error -> cardTransactionViewModel.onCardReadError(status.reason)
+            is CardReaderStatus.Error -> {
+                if (
+                    ContactRetryContract.shouldRetryKernelResultUsingContact(
+                        resultCode = status.resultCode,
+                        cardSlot = status.cardSlot,
+                    ) && !uiState.contactOnly
+                ) {
+                    cardTransactionViewModel.onKernelContactRetryRequired()
+                } else if (cardTransactionViewModel.prepareAutomaticContactlessRetry(
+                        status.resultCode,
+                        status.cardSlot,
+                        cardReaderState.onlineAuthorizationPending,
+                    )) {
+                    // The prompt step cancels any remaining search and restarts after its delay.
+                } else {
+                    cardTransactionViewModel.onCardReadError(status.reason)
+                }
+            }
             CardReaderStatus.MultipleCards -> cardTransactionViewModel.onCardReadError(
                 context.getString(R.string.card_reader_multiple_cards)
             )
@@ -176,6 +236,31 @@ fun CardTransactionScreen(
                 context.getString(R.string.card_reader_swipe_incorrect)
             )
             else -> Unit
+        }
+    }
+
+    LaunchedEffect(uiState.step) {
+        if (uiState.step is CardTransactionStep.ContactlessReadRetryPrompt) {
+            delay(3_000L)
+            cardTransactionViewModel.continueAutomaticContactlessRetry()
+        }
+        if (uiState.step is CardTransactionStep.ContactRetryPrompt) {
+            Log.i(TAG, "Contact ICC prompt displayed; auto-continuing in ${CONTACT_RETRY_PROMPT_MS}ms")
+            cardReaderViewModel.beepContactCardRequired()
+            delay(CONTACT_RETRY_PROMPT_MS)
+            startContactRetry()
+        }
+    }
+
+    LaunchedEffect(cardReaderState.status, uiState.step) {
+        if (
+            uiState.step is CardTransactionStep.AwaitingCard &&
+            cardReaderState.status == CardReaderStatus.MobileCvmRequired
+        ) {
+            Log.i(TAG, "Mobile CVM prompt displayed; auto-continuing in ${MOBILE_CVM_PROMPT_MS}ms")
+            cardReaderViewModel.beepMobileCvmInstruction()
+            delay(MOBILE_CVM_PROMPT_MS)
+            startMobileCvmSecondTap()
         }
     }
 
@@ -233,14 +318,16 @@ fun CardTransactionScreen(
             )
         },
         bottomBar = {
-            CardTransactionBottomBar(
-                enabled = !cancellationLocked,
-                onCancel = {
-                    Log.d(TAG, "Cancel triggered from bottom bar scaffold")
-                    cardReaderViewModel.cancelCardSearch()
-                    cardTransactionViewModel.cancelTransaction()
-                }
-            )
+            if (!decisionPending) {
+                CardTransactionBottomBar(
+                    enabled = !cancellationLocked,
+                    onCancel = {
+                        Log.d(TAG, "Cancel triggered from bottom bar scaffold")
+                        cardReaderViewModel.cancelCardSearch()
+                        cardTransactionViewModel.cancelTransaction()
+                    }
+                )
+            }
         }
     ) { padding ->
         CardTransactionBody(
@@ -248,7 +335,14 @@ fun CardTransactionScreen(
             contentPadding = padding,
             uiState = uiState,
             cardReaderStatus = cardReaderState.status,
+            cardRemovalRequired = cardReaderState.cardRemovalRequired,
+            mobileCvmSecondTap = cardReaderState.mobileCvmSecondTap,
+            expiredApplicationWarningVisible = expiredApplicationWarningVisible,
+            pinMaintenanceType = cardTransactionViewModel.transactionType
+                .takeIf(OfflinePinChangeContract::isPinMaintenance),
             applicationSelection = cardReaderState.applicationSelection,
+            onContinueMobileCvm = startMobileCvmSecondTap,
+            onContinueContactRetry = startContactRetry,
             onRetry = {
                 Log.d(TAG, "Retry requested from CardTransactionBody")
                 cardReaderViewModel.cancelCardSearch()
@@ -279,7 +373,24 @@ fun CardTransactionScreen(
                 Log.d(TAG, "EMV application selection cancelled")
                 cardReaderViewModel.cancelCardSearch()
                 cardTransactionViewModel.cancelTransaction()
-            }
+            },
+            onAcceptPartialApproval = {
+                coroutineScope.launch {
+                    cardReaderViewModel.awaitContactCardRemoval()
+                    cardTransactionViewModel.acceptPartialApproval()
+                }
+            },
+            onDeclinePartialApproval = {
+                cardTransactionViewModel.declinePartialApproval()
+                coroutineScope.launch { cardReaderViewModel.awaitContactCardRemoval() }
+            },
+            onStartRemainingTransaction = {
+                coroutineScope.launch {
+                    cardReaderViewModel.awaitContactCardRemoval()
+                    cardTransactionViewModel.startRemainingTransaction()
+                }
+            },
+            onFinishAfterPartialApproval = cardTransactionViewModel::finishAfterPartialApproval,
         )
     }
 }
@@ -290,7 +401,13 @@ private fun CardTransactionBody(
     contentPadding: PaddingValues,
     uiState: CardTransactionUiState,
     cardReaderStatus: CardReaderStatus,
+    cardRemovalRequired: Boolean,
+    mobileCvmSecondTap: Boolean,
+    expiredApplicationWarningVisible: Boolean,
+    pinMaintenanceType: TransactionType?,
     applicationSelection: EmvApplicationSelection?,
+    onContinueMobileCvm: () -> Unit,
+    onContinueContactRetry: () -> Unit,
     onRetry: () -> Unit,
     onSelectCurrency: (String) -> Unit,
     onCancelCurrencySelection: () -> Unit,
@@ -298,10 +415,47 @@ private fun CardTransactionBody(
     onCancelAcquirerSelection: () -> Unit,
     onSelectApplication: (Int) -> Unit,
     onCancelApplicationSelection: () -> Unit,
+    onAcceptPartialApproval: () -> Unit,
+    onDeclinePartialApproval: () -> Unit,
+    onStartRemainingTransaction: () -> Unit,
+    onFinishAfterPartialApproval: () -> Unit,
 ) {
     Log.d(TAG, "CardTransactionBody step=${uiState.step} status=$cardReaderStatus")
+    if (cardRemovalRequired) {
+        TransactionStatusContainer(
+            modifier = modifier,
+            contentPadding = contentPadding,
+            amountText = null,
+        ) {
+            RemoveCardContent()
+        }
+        return
+    }
     val amountText = uiState.totalAmount.takeIf { it.isNotBlank() }?.let { amt ->
         uiState.currencySymbol?.let { sym -> "$sym$amt" } ?: amt
+    }
+    if (expiredApplicationWarningVisible) {
+        TransactionStatusContainer(
+            modifier = modifier,
+            contentPadding = contentPadding,
+            amountText = amountText,
+        ) {
+            Text(
+                text = stringResource(R.string.card_warning_expired),
+                color = color_alert,
+                fontWeight = FontWeight.Bold,
+                fontSize = 24.sp,
+                textAlign = TextAlign.Center,
+            )
+            Text(
+                text = stringResource(R.string.card_warning_continuing_online),
+                color = color_secondaryFive,
+                fontSize = 18.sp,
+                textAlign = TextAlign.Center,
+            )
+            CircularProgressIndicator(color = color_secondaryFive)
+        }
+        return
     }
 
     when (val step = uiState.step) {
@@ -339,11 +493,51 @@ private fun CardTransactionBody(
                     contentPadding = contentPadding,
                     amountText = amountText,
                 ) {
-                    AwaitingCardContent(
-                        statusMessage = uiState.statusMessage,
-                        cardReaderStatus = cardReaderStatus,
-                    )
+                    if (cardReaderStatus == CardReaderStatus.MobileCvmRequired) {
+                        MobileCvmRequiredContent(onContinue = onContinueMobileCvm)
+                    } else {
+                        AwaitingCardContent(
+                            statusMessage = uiState.statusMessage,
+                            cardReaderStatus = cardReaderStatus,
+                            pinMaintenanceType = pinMaintenanceType,
+                            mobileCvmSecondTap = mobileCvmSecondTap,
+                            contactOnly = uiState.contactOnly,
+                        )
+                    }
                 }
+            }
+        }
+
+        CardTransactionStep.ContactRetryPrompt -> TransactionStatusContainer(
+            modifier = modifier,
+            contentPadding = contentPadding,
+            amountText = amountText,
+        ) {
+            ContactRetryRequiredContent(onContinue = onContinueContactRetry)
+        }
+
+        CardTransactionStep.ContactlessReadRetryPrompt -> TransactionStatusContainer(
+            modifier = modifier,
+            contentPadding = contentPadding,
+            amountText = amountText,
+        ) {
+            Column(
+                Modifier.fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+            ) {
+                Text(
+                    uiState.statusMessage ?: stringResource(R.string.contactless_read_error),
+                    color = color_secondaryFive,
+                    fontSize = 24.sp,
+                    textAlign = TextAlign.Center,
+                )
+                Text(
+                    stringResource(R.string.contactless_read_retry),
+                    color = color_secondaryFive,
+                    fontSize = 18.sp,
+                    textAlign = TextAlign.Center,
+                )
             }
         }
 
@@ -372,6 +566,30 @@ private fun CardTransactionBody(
             )
         }
 
+        is CardTransactionStep.PartialApproval -> TransactionStatusContainer(
+            modifier = modifier,
+            contentPadding = contentPadding,
+            amountText = null,
+        ) {
+            PartialApprovalContent(
+                step = step,
+                onAccept = onAcceptPartialApproval,
+                onDecline = onDeclinePartialApproval,
+            )
+        }
+
+        is CardTransactionStep.PartialApprovalRemainder -> TransactionStatusContainer(
+            modifier = modifier,
+            contentPadding = contentPadding,
+            amountText = null,
+        ) {
+            PartialApprovalRemainderContent(
+                step = step,
+                onStartRemaining = onStartRemainingTransaction,
+                onFinish = onFinishAfterPartialApproval,
+            )
+        }
+
         is CardTransactionStep.Error -> TransactionStatusContainer(
             modifier = modifier,
             contentPadding = contentPadding,
@@ -388,10 +606,167 @@ private fun CardTransactionBody(
 }
 
 @Composable
-private fun AwaitingCardContent(statusMessage: String?, cardReaderStatus: CardReaderStatus) {
+private fun PartialApprovalContent(
+    step: CardTransactionStep.PartialApproval,
+    onAccept: () -> Unit,
+    onDecline: () -> Unit,
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        Text(
+            text = stringResource(R.string.partial_approval_title),
+            color = color_secondaryFive,
+            fontWeight = FontWeight.SemiBold,
+            fontSize = 22.sp,
+            textAlign = TextAlign.Center,
+        )
+        Text(
+            text = stringResource(
+                R.string.partial_approve_amounts,
+                step.requestedAmount,
+                step.approvedAmount,
+                step.remainingAmount,
+            ),
+            color = color_secondaryFive,
+            fontSize = 18.sp,
+            textAlign = TextAlign.Center,
+        )
+        Text(
+            text = stringResource(R.string.partial_approval_accept_question),
+            color = color_secondaryFive,
+            fontSize = 18.sp,
+            textAlign = TextAlign.Center,
+        )
+        DecisionButtons(
+            positiveText = stringResource(R.string.partial_approval_accept),
+            negativeText = stringResource(R.string.partial_approval_decline),
+            onPositive = onAccept,
+            onNegative = onDecline,
+        )
+    }
+}
+
+@Composable
+private fun PartialApprovalRemainderContent(
+    step: CardTransactionStep.PartialApprovalRemainder,
+    onStartRemaining: () -> Unit,
+    onFinish: () -> Unit,
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        Text(
+            text = stringResource(R.string.partial_approval_accepted),
+            color = color_secondaryFive,
+            fontWeight = FontWeight.SemiBold,
+            fontSize = 22.sp,
+            textAlign = TextAlign.Center,
+        )
+        Text(
+            text = stringResource(R.string.partial_approval_remaining_amount, step.remainingAmount),
+            color = color_secondaryFive,
+            fontSize = 20.sp,
+            textAlign = TextAlign.Center,
+        )
+        Text(
+            text = stringResource(R.string.partial_approval_remaining_question),
+            color = color_secondaryFive,
+            fontSize = 18.sp,
+            textAlign = TextAlign.Center,
+        )
+        DecisionButtons(
+            positiveText = stringResource(R.string.yes),
+            negativeText = stringResource(R.string.no),
+            onPositive = onStartRemaining,
+            onNegative = onFinish,
+        )
+    }
+}
+
+@Composable
+private fun DecisionButtons(
+    positiveText: String,
+    negativeText: String,
+    onPositive: () -> Unit,
+    onNegative: () -> Unit,
+) {
+    Button(
+        modifier = Modifier.fillMaxWidth(0.78f),
+        onClick = onPositive,
+        colors = ButtonDefaults.buttonColors(
+            containerColor = color_secondaryFive,
+            contentColor = color_white,
+        ),
+    ) {
+        Text(
+            text = positiveText,
+            textAlign = TextAlign.Center,
+        )
+    }
+    Button(
+        modifier = Modifier.fillMaxWidth(0.78f),
+        onClick = onNegative,
+        colors = ButtonDefaults.buttonColors(
+            containerColor = color_black,
+            contentColor = color_white,
+        ),
+    ) {
+        Text(
+            text = negativeText,
+            textAlign = TextAlign.Center,
+        )
+    }
+}
+
+@Composable
+internal fun RemoveCardContent() {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        CardEntryAnimation(animationRes = R.drawable.card_anim_c)
+        Text(
+            text = stringResource(R.string.card_reader_remove_card),
+            color = color_secondaryFive,
+            fontWeight = FontWeight.SemiBold,
+            fontSize = 24.sp,
+            textAlign = TextAlign.Center,
+        )
+        Text(
+            text = stringResource(R.string.card_reader_remove_card_detail),
+            color = color_secondaryFive.copy(alpha = 0.85f),
+            fontSize = 17.sp,
+            textAlign = TextAlign.Center,
+        )
+        CircularProgressIndicator(color = color_secondaryFive)
+    }
+}
+
+@Composable
+private fun AwaitingCardContent(
+    statusMessage: String?,
+    cardReaderStatus: CardReaderStatus,
+    pinMaintenanceType: TransactionType?,
+    mobileCvmSecondTap: Boolean,
+    contactOnly: Boolean,
+) {
     Log.d(TAG, "AwaitingCardContent statusMessage=$statusMessage status=$cardReaderStatus")
-    val contextMessage = statusMessage ?: stringResource(R.string.sale_present_card)
-    val animationRes = cardEntryAnimationRes(cardReaderStatus)
+    val contextMessage = when {
+        mobileCvmSecondTap -> stringResource(R.string.mobile_cvm_tap_again)
+        pinMaintenanceType == TransactionType.OFFLINE_PIN_CHANGE -> stringResource(R.string.offline_pin_change_insert_card)
+        pinMaintenanceType == TransactionType.PIN_UNBLOCK -> stringResource(R.string.pin_unblock_insert_card)
+        else -> statusMessage ?: stringResource(R.string.sale_present_card)
+    }
+    val animationRes = cardEntryAnimationRes(
+        status = cardReaderStatus,
+        contactOnly = contactOnly || pinMaintenanceType != null || mobileCvmSecondTap,
+    )
     Column(
         modifier = Modifier.fillMaxWidth(),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -413,6 +788,64 @@ private fun AwaitingCardContent(statusMessage: String?, cardReaderStatus: CardRe
             )
         }
         CircularProgressIndicator(color = color_secondaryFive)
+    }
+}
+
+@Composable
+private fun MobileCvmRequiredContent(onContinue: () -> Unit) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        Text(
+            text = stringResource(R.string.mobile_cvm_follow_phone),
+            color = color_secondaryFive,
+            fontWeight = FontWeight.Bold,
+            fontSize = 22.sp,
+            textAlign = TextAlign.Center,
+        )
+        Text(
+            text = stringResource(R.string.mobile_cvm_auto_continue),
+            color = color_secondaryFive.copy(alpha = 0.85f),
+            fontSize = 16.sp,
+            textAlign = TextAlign.Center,
+        )
+        Button(onClick = onContinue) {
+            Text(text = stringResource(R.string.action_continue))
+        }
+    }
+}
+
+@Composable
+private fun ContactRetryRequiredContent(onContinue: () -> Unit) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        Text(
+            text = stringResource(R.string.contact_retry_required),
+            color = color_secondaryFive,
+            fontWeight = FontWeight.Bold,
+            fontSize = 22.sp,
+            textAlign = TextAlign.Center,
+        )
+        Text(
+            text = stringResource(R.string.contact_retry_insert_chip),
+            color = color_secondaryFive,
+            fontSize = 18.sp,
+            textAlign = TextAlign.Center,
+        )
+        Text(
+            text = stringResource(R.string.contact_retry_auto_continue),
+            color = color_secondaryFive.copy(alpha = 0.85f),
+            fontSize = 16.sp,
+            textAlign = TextAlign.Center,
+        )
+        Button(onClick = onContinue) {
+            Text(text = stringResource(R.string.action_continue))
+        }
     }
 }
 
@@ -564,7 +997,7 @@ private fun ErrorContent(
 }
 
 @Composable
-private fun CardEntryAnimation(@DrawableRes animationRes: Int) {
+internal fun CardEntryAnimation(@DrawableRes animationRes: Int) {
     val context = LocalContext.current
     AsyncImage(
         model = ImageRequest.Builder(context)
@@ -580,8 +1013,9 @@ private fun CardEntryAnimation(@DrawableRes animationRes: Int) {
 }
 
 @DrawableRes
-private fun cardEntryAnimationRes(status: CardReaderStatus): Int? {
-    Log.d(TAG, "cardEntryAnimationRes status=$status")
+private fun cardEntryAnimationRes(status: CardReaderStatus, contactOnly: Boolean): Int? {
+    Log.d(TAG, "cardEntryAnimationRes status=$status contactOnly=$contactOnly")
+    if (contactOnly) return R.drawable.card_anim_c
     return when (status) {
         CardReaderStatus.Waiting -> R.drawable.card_anim_mcl
         CardReaderStatus.ProcessingEmv -> R.drawable.card_anim_c

@@ -9,13 +9,17 @@ import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 
 object DeviceApi {
-    fun deviceToken(serial: String, secret: String): String {
+    fun deviceToken(serial: String, secret: String, credentialId: String = ""): String {
         if (secret.isBlank()) throw IllegalStateException("Device download secret is missing")
         val mac = Mac.getInstance("HmacSHA256")
         mac.init(SecretKeySpec(secret.toByteArray(Charsets.UTF_8), "HmacSHA256"))
-        return mac.doFinal(serial.trim().uppercase().toByteArray(Charsets.UTF_8))
+        val digest = mac.doFinal(serial.trim().uppercase().toByteArray(Charsets.UTF_8))
             .joinToString("") { "%02x".format(it) }
+        return if (credentialId.isBlank()) digest else "${credentialId.trim()}:$digest"
     }
+
+    fun deviceToken(serial: String, config: TMSFunc.tms): String =
+        deviceToken(serial, config.download_secret, config.download_credential_id)
 
     fun primaryUrl(pathOrUrl: String): String {
         if (pathOrUrl.startsWith("http://") || pathOrUrl.startsWith("https://")) {

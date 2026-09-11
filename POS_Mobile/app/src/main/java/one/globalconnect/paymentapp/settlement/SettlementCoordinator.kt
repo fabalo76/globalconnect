@@ -74,6 +74,7 @@ class SettlementCoordinator(
         request: SettlementRequest,
         onTargetStart: (SettlementTarget) -> Unit = {},
         onHostEvent: (HostProcessingEvent) -> Unit = {},
+        onBatchUploadProgress: (current: Int, total: Int) -> Unit = { _, _ -> },
         onTargetResult: (message: String, success: Boolean) -> Unit = { _, _ -> },
         onTargetError: (message: String) -> Unit = {},
     ): List<SettlementResult> = mutex.withLock {
@@ -249,6 +250,7 @@ class SettlementCoordinator(
                                 connectTimeoutMs = connectTimeoutMs,
                                 readTimeoutMs = readTimeoutMs,
                                 onHostEvent = onHostEvent,
+                                onProgress = onBatchUploadProgress,
                                 session = session,
                             )
 
@@ -516,6 +518,7 @@ class SettlementCoordinator(
         connectTimeoutMs: Int,
         readTimeoutMs: Int,
         onHostEvent: (HostProcessingEvent) -> Unit,
+        onProgress: (current: Int, total: Int) -> Unit,
         session: HostTransactionSession? = null,
     ): BatchUploadResult {
         if (transactions.isEmpty()) {
@@ -590,6 +593,7 @@ class SettlementCoordinator(
                 "Transmitting batch upload ${index + 1}/${transactions.size} for acquirer=${acquirer.AcqID} " +
                     "stan=$uploadStan processingCode=$processingCode"
             )
+            onProgress(index + 1, transactions.size)
 
             val result = try {
                 hostClient.execute(uploadRequest, session)
@@ -648,7 +652,7 @@ class SettlementCoordinator(
         transLog.InvoiceId = transaction.invoiceId
         transLog.AuthNtwkName = transaction.authNtwkName.ifBlank { acquirer.AcquirerName }
         transLog.CardType = transaction.cardType
-        transLog.CardhdrName = transaction.cardType
+        transLog.CardhdrName = transaction.cardholderName
         transLog.FolioNumber = transaction.folioNumber
         transLog.OriginalTransactionId = transaction.originalTransactionId
         transLog.OriginalStan = sequenceOf(transaction.stan, transaction.transactionId)

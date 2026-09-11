@@ -1,9 +1,9 @@
 package one.globalconnect.paymentapp.transaction
 
-import androidx.compose.animation.core.Easing
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.foundation.ScrollState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -16,11 +16,10 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.border
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -29,14 +28,15 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.snapshotFlow
-import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -58,8 +58,6 @@ import one.globalconnect.paymentapp.ui.theme.color_black
 import one.globalconnect.paymentapp.ui.theme.color_secondaryFive
 import one.globalconnect.paymentapp.ui.theme.color_white
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.filter
-import kotlinx.coroutines.flow.firstOrNull
 import kotlin.math.roundToInt
 import kotlin.math.min
 
@@ -68,26 +66,61 @@ fun ReceiptPrintPreview(
     state: ReceiptPreviewState,
     onDismissed: () -> Unit,
 ) {
-    var userDismissed by remember(state.triggerTimestamp) { mutableStateOf(false) }
-    val overlayAlpha by animateFloatAsState(
-        targetValue = if (userDismissed) 0f else 1f,
-        label = "receiptPreviewOverlayAlpha",
-    )
+    val density = LocalDensity.current
+    val receiptOffset = remember(state.triggerTimestamp) { Animatable(0f) }
+    var ticketHeightPx by remember(state.triggerTimestamp) { mutableStateOf(0) }
+    var manualExitRequested by remember(state.triggerTimestamp) { mutableStateOf(false) }
+    var dismissalDelivered by remember(state.triggerTimestamp) { mutableStateOf(false) }
+    val exitDistancePx = ticketHeightPx + with(density) { 96.dp.toPx() }
+    val exitProgress = if (exitDistancePx > 0f) {
+        (-receiptOffset.value / exitDistancePx).coerceIn(0f, 1f)
+    } else {
+        0f
+    }
+    val backdropFade = ((exitProgress - 0.75f) / 0.25f).coerceIn(0f, 1f)
 
-    if (overlayAlpha == 0f && userDismissed) {
-        LaunchedEffect(Unit) { onDismissed() }
-        return
+    LaunchedEffect(state.triggerTimestamp, ticketHeightPx) {
+        if (ticketHeightPx <= 0) return@LaunchedEffect
+        delay(RECEIPT_START_DELAY_MILLIS)
+        if (manualExitRequested) return@LaunchedEffect
+
+        val duration = (exitDistancePx / RECEIPT_SCROLL_PIXELS_PER_MILLISECOND)
+            .roundToInt()
+            .coerceIn(MIN_RECEIPT_SCROLL_DURATION_MILLIS, MAX_RECEIPT_SCROLL_DURATION_MILLIS)
+        receiptOffset.animateTo(
+            targetValue = -exitDistancePx,
+            animationSpec = tween(durationMillis = duration, easing = LinearEasing),
+        )
+        if (!dismissalDelivered) {
+            dismissalDelivered = true
+            onDismissed()
+        }
+    }
+
+    LaunchedEffect(manualExitRequested, ticketHeightPx) {
+        if (!manualExitRequested || ticketHeightPx <= 0) return@LaunchedEffect
+        receiptOffset.animateTo(
+            targetValue = -exitDistancePx,
+            animationSpec = tween(
+                durationMillis = MANUAL_RECEIPT_EXIT_DURATION_MILLIS,
+                easing = FastOutSlowInEasing,
+            ),
+        )
+        if (!dismissalDelivered) {
+            dismissalDelivered = true
+            onDismissed()
+        }
     }
 
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.45f * overlayAlpha))
+            .background(Color.Black.copy(alpha = 0.45f * (1f - backdropFade)))
             .clickable(
                 indication = null,
                 interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
             ) {
-                userDismissed = true
+                manualExitRequested = true
             },
         contentAlignment = Alignment.TopCenter,
     ) {
@@ -98,21 +131,23 @@ fun ReceiptPrintPreview(
         )
         ReceiptTicket(
             modifier = Modifier
-                .padding(top = 64.dp)
-                .width(280.dp)
+                .graphicsLayer { translationY = receiptOffset.value }
+                .padding(top = 64.dp, start = 12.dp, end = 12.dp)
+                .widthIn(max = 360.dp)
+                .fillMaxWidth()
                 .shadow(12.dp, ticketShape, clip = false)
                 .clip(ticketShape)
-                .background(color_white.copy(alpha = overlayAlpha))
+                .background(color_white)
                 .border(
                     width = 1.dp,
-                    color = color_secondaryFive.copy(alpha = 0.1f * overlayAlpha),
+                    color = color_secondaryFive.copy(alpha = 0.1f),
                     shape = ticketShape,
                 )
-                .padding(horizontal = 18.dp, vertical = 22.dp),
+                .padding(horizontal = 14.dp, vertical = 22.dp),
             state = state,
-            onAnimationFinished = {
-                if (!userDismissed) {
-                    userDismissed = true
+            onHeightChanged = { measuredHeight ->
+                if (measuredHeight > 0 && measuredHeight != ticketHeightPx) {
+                    ticketHeightPx = measuredHeight
                 }
             },
         )
@@ -123,40 +158,13 @@ fun ReceiptPrintPreview(
 private fun ReceiptTicket(
     modifier: Modifier = Modifier,
     state: ReceiptPreviewState,
-    onAnimationFinished: () -> Unit,
+    onHeightChanged: (Int) -> Unit,
 ) {
-    val scrollState = rememberScrollState()
-
-    LaunchedEffect(state.triggerTimestamp) {
-        scrollState.scrollTo(0)
-        val maxScroll = when (val value = scrollState.maxValue) {
-            0 -> snapshotFlow { scrollState.maxValue }
-                .filter { it > 0 }
-                .firstOrNull()
-            else -> value
-        }
-
-        if (maxScroll != null && maxScroll > 0) {
-            val pixelsPerMillisecond = 0.45f
-            val computedDuration = (maxScroll / pixelsPerMillisecond).roundToInt()
-            val duration = computedDuration.coerceIn(900, 12000)
-
-            scrollState.animateLinearScrollTo(
-                targetValue = maxScroll,
-                durationMillis = duration,
-                easing = LinearEasing,
-            )
-        } else {
-            delay(1200)
-        }
-        delay(600)
-        onAnimationFinished()
-    }
-
     Column(
-        modifier = modifier
-            .heightIn(max = 420.dp)
-            .verticalScroll(scrollState),
+        modifier = Modifier
+            .wrapContentHeight(unbounded = true, align = Alignment.Top)
+            .then(modifier)
+            .onSizeChanged { onHeightChanged(it.height) },
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         Spacer(modifier = Modifier.height(6.dp))
@@ -164,23 +172,16 @@ private fun ReceiptTicket(
             if (line.primary.isBlank() && line.secondary.isNullOrBlank()) {
                 Spacer(modifier = Modifier.height(8.dp))
             } else if (line.secondary == null) {
-                val uppercasePrimary = line.primary == line.primary.uppercase()
-                val fontSize = when {
-                    line.emphasis && uppercasePrimary -> 17.sp
-                    line.emphasis -> 15.sp
-                    else -> 13.sp
-                }
                 Text(
                     text = line.primary,
                     modifier = Modifier.fillMaxWidth(),
-                    fontSize = fontSize,
+                    fontSize = line.fontSize.previewFontSize,
                     fontFamily = FontFamily.Monospace,
                     fontWeight = if (line.emphasis) FontWeight.SemiBold else FontWeight.Normal,
                     color = color_black,
                     textAlign = line.alignment,
                 )
             } else {
-                val fontSize = if (line.emphasis) 15.sp else 13.sp
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -188,14 +189,14 @@ private fun ReceiptTicket(
                 ) {
                     Text(
                         text = line.primary,
-                        fontSize = fontSize,
+                        fontSize = line.fontSize.previewFontSize,
                         fontFamily = FontFamily.Monospace,
                         fontWeight = if (line.emphasis) FontWeight.SemiBold else FontWeight.Normal,
                         color = color_black,
                     )
                     Text(
                         text = line.secondary,
-                        fontSize = fontSize,
+                        fontSize = line.fontSize.previewFontSize,
                         fontFamily = FontFamily.Monospace,
                         fontWeight = if (line.emphasis) FontWeight.SemiBold else FontWeight.Normal,
                         color = color_black,
@@ -221,42 +222,21 @@ private fun ReceiptTicket(
     }
 }
 
-private suspend fun ScrollState.animateLinearScrollTo(
-    targetValue: Int,
-    durationMillis: Int,
-    easing: Easing = LinearEasing,
-) {
-    val clampedDuration = durationMillis.coerceAtLeast(0)
-    if (clampedDuration == 0) {
-        scrollTo(targetValue)
-        return
+private val ReceiptPreviewFontSize.previewFontSize
+    get() = when (this) {
+        ReceiptPreviewFontSize.MIN -> 11.sp
+        ReceiptPreviewFontSize.TINY -> 12.sp
+        ReceiptPreviewFontSize.SMALL -> 13.sp
+        ReceiptPreviewFontSize.MEDIUM -> 14.sp
+        ReceiptPreviewFontSize.LARGE -> 15.sp
+        ReceiptPreviewFontSize.MASSIVE -> 17.sp
     }
 
-    val start = value
-    val delta = targetValue - start
-    if (delta == 0) {
-        return
-    }
-
-    val durationNanos = clampedDuration * 1_000_000L
-    val startTime = withFrameNanos { it }
-
-    var finished = false
-    while (!finished) {
-        val frameTime = withFrameNanos { it }
-        val elapsed = frameTime - startTime
-        val fraction = (elapsed / durationNanos.toFloat()).coerceIn(0f, 1f)
-        val easedFraction = easing.transform(fraction)
-        val currentValue = start + delta * easedFraction
-
-        scrollTo(currentValue.roundToInt())
-        finished = fraction >= 1f
-    }
-
-    if (value != targetValue) {
-        scrollTo(targetValue)
-    }
-}
+private const val RECEIPT_START_DELAY_MILLIS = 200L
+private const val RECEIPT_SCROLL_PIXELS_PER_MILLISECOND = 0.75f
+private const val MIN_RECEIPT_SCROLL_DURATION_MILLIS = 1400
+private const val MAX_RECEIPT_SCROLL_DURATION_MILLIS = 8000
+private const val MANUAL_RECEIPT_EXIT_DURATION_MILLIS = 900
 
 private class TicketStubShape(
     private val cornerRadius: Dp,

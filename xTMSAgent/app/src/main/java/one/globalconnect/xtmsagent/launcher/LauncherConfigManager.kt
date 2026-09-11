@@ -59,6 +59,8 @@ const val ACTION_LAUNCHER_CONFIG_UPDATED = "one.globalconnect.xtmsagent.ACTION_L
 object LauncherConfigManager {
 
     private const val CFG_ID_FILE = "tms_launcher_config_id.txt"
+    private const val PREFS_NAME = "tms_launcher"
+    private const val IOT_PROVISIONING_REFRESH_REQUIRED = "iotProvisioningRefreshRequired"
 
     /**
      * Guards against concurrent [checkAndDownloadIfMissing] calls (e.g. two MQTT reconnects
@@ -73,16 +75,34 @@ object LauncherConfigManager {
      * Used to gate HouseKeeping: HK must not run before the config is ready on fresh install.
      */
     fun isConfigApplied(context: Context): Boolean {
-        val prefs = context.getSharedPreferences("tms_launcher", Context.MODE_PRIVATE)
-        return readStoredConfigId(prefs).isNotBlank()
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        return readStoredConfigId(prefs).isNotBlank() &&
+            !prefs.getBoolean(IOT_PROVISIONING_REFRESH_REQUIRED, false)
+    }
+
+    /**
+     * Records the invariant that a newly provisioned IoT identity must fetch its
+     * launcher assignment before housekeeping or normal version processing resumes.
+     */
+    fun markRefreshRequiredAfterIotProvisioning(context: Context) {
+        val stored = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(IOT_PROVISIONING_REFRESH_REQUIRED, true)
+            .commit()
+        check(stored) { "Could not persist required launcher config refresh" }
+        Log.i(TAG, "LauncherConfig refresh required after IoT certificate provisioning")
     }
 
     /**
      * Downloads the terminal's assigned LauncherConfig if none has been applied yet.
      *
-     * Returns true if a download was attempted (first provisioning), false if a config
-     * was already present. The caller uses this to decide whether to trigger verreq —
-     * version checking is only needed when the assigned app set may have changed.
+     * A download is also forced when IoT certificate provisioning marked the existing
+     * config as stale. The requirement remains persisted until a config is successfully
+     * applied, so reconnects retry transient failures.
+     *
+     * Returns true only after a config was successfully downloaded and applied. The
+     * caller uses this to decide whether to trigger verreq — version checking is only
+     * needed when the assigned app set may have changed.
      *
      * Does NOT send a cfgack on success — the server did not set a pending flag for
      * the initial load; cfgack is only needed when responding to a server notification.
@@ -95,8 +115,10 @@ object LauncherConfigManager {
         }
         // Always restore persisted theme overrides, even when config file already exists
         restoreThemeFromPrefs(context)
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val refreshRequired = prefs.getBoolean(IOT_PROVISIONING_REFRESH_REQUIRED, false)
         val idFile = File(internalPath, CFG_ID_FILE)
-        if (idFile.exists()) {
+        if (idFile.exists() && !refreshRequired) {
             Log.d(TAG, "LauncherConfig already applied (configId=${idFile.readText().trim()}) — skipping")
             // Theme was restored from prefs above — trigger UI refresh so bar colors reach the window.
             context.sendBroadcast(
@@ -113,9 +135,12 @@ object LauncherConfigManager {
         }
 
         try {
-            Log.i(TAG, "No LauncherConfig applied — triggering initial download")
-            downloadAndApply(context, urgent = true, sendAck = false)
-            return true
+            if (refreshRequired) {
+                Log.i(TAG, "IoT certificate was provisioned — forcing required LauncherConfig download")
+            } else {
+                Log.i(TAG, "No LauncherConfig applied — triggering initial download")
+            }
+            return downloadAndApplyAws(context, null)
         } finally {
             downloadInProgress.set(false)
         }
@@ -195,7 +220,7 @@ object LauncherConfigManager {
                     "apps=${json.optJSONArray("apps")?.length() ?: 0}")
 
                 val newGeneratedAt = json.optString("generatedAt", "")
-                val prefs = context.getSharedPreferences("tms_launcher", Context.MODE_PRIVATE)
+                val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
                 val storedId          = readStoredConfigId(prefs)
                 val storedGeneratedAt = prefs.getString("generatedAt", "") ?: ""
                 if (newConfigId != -1 && newConfigId.toString() == storedId &&
@@ -265,7 +290,7 @@ object LauncherConfigManager {
         return try {
             conn.requestMethod = "POST"
             conn.setRequestProperty("Content-Type", "application/json; charset=UTF-8")
-            conn.setRequestProperty("Authorization", "Device ${computeDeviceToken(serial, cfg.download_secret)}")
+            conn.setRequestProperty("Authorization", "Device ${DeviceApi.deviceToken(serial, cfg)}")
             conn.doOutput = true
             conn.doInput = true
             conn.connectTimeout = CONNECT_TIMEOUT_MS
@@ -283,6 +308,12 @@ object LauncherConfigManager {
             }
 
             val response = JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
+            response.optJSONArrayAny("downloadCredentials", "DownloadCredentials")?.optJSONObject(0)?.let { credential ->
+                TMSFunc.updateDownloadCredential(
+                    credential.optStringAny("id", "Id"),
+                    credential.optStringAny("secret", "Secret")
+                )
+            }
             val config = response.optJSONObject("configuration")
                 ?: response.optJSONObject("Configuration")
                 ?: response
@@ -302,6 +333,11 @@ object LauncherConfigManager {
         val configId         = readConfigId(json)
         val generatedAt      = json.optStringAny("generatedAt", "GeneratedAt")
         val blockUnknown     = json.optBooleanAny(default = false, "blockUnknownApps", "BlockUnknownApps")
+        val backgroundColor  = normalizeThemeColor(json.optStringAny("backgroundColor", "BackgroundColor"), MainActivity.stTheme.background_color)
+        val foregroundColor  = normalizeThemeColor(json.optStringAny("foregroundColor", "ForegroundColor"), MainActivity.stTheme.foreground_color)
+        val fontColor        = normalizeThemeColor(json.optStringAny("fontColor", "FontColor"), MainActivity.stTheme.font_color)
+        val fontSize         = json.optIntAny(default = MainActivity.stTheme.font_size, "fontSize", "FontSize").coerceIn(8, 72)
+        val passwordProtect  = json.optBooleanAny(default = true, "systemPasswordProtection", "SystemPasswordProtection")
         val enableNavBar     = json.optBooleanAny(default = true, "enableNavigationBar", "EnableNavigationBar")
         val enableControlBar = json.optBooleanAny(default = true, "enableControlBar", "EnableControlBar")
         val enableStore      = json.optBooleanAny(default = false, "enableGlobalConnectStore", "EnableGlobalConnectStore")
@@ -331,9 +367,15 @@ object LauncherConfigManager {
         val newAppList = ArrayList(tempList.map { it.second })
 
         // Persist config state to SharedPreferences
-        context.getSharedPreferences("tms_launcher", Context.MODE_PRIVATE)
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        prefs
             .edit()
             .putBoolean("blockUnknownApps", blockUnknown)
+            .putString("backgroundColor", backgroundColor)
+            .putString("foregroundColor", foregroundColor)
+            .putString("fontColor", fontColor)
+            .putInt("fontSize", fontSize)
+            .putBoolean("systemPasswordProtection", passwordProtect)
             .putString("configId", configId)
             .putString("generatedAt", generatedAt)
             .putBoolean("enableNavigationBar", enableNavBar)
@@ -346,6 +388,11 @@ object LauncherConfigManager {
         // Apply theme overrides from TMS config
         MainActivity.stTheme.enable_navigation_bar = enableNavBar
         MainActivity.stTheme.enable_control_bar    = enableControlBar
+        MainActivity.stTheme.background_color = backgroundColor
+        MainActivity.stTheme.foreground_color = foregroundColor
+        MainActivity.stTheme.font_color = fontColor
+        MainActivity.stTheme.font_size = fontSize
+        MainActivity.stTheme.system_pwd_protection = passwordProtect
         MainActivity.stTheme.status_bar_color = statusBarColor
         MainActivity.stTheme.navigation_bar_color = navBarColor
 
@@ -375,6 +422,20 @@ object LauncherConfigManager {
         // and every subsequent reconnect saw "already applied" and skipped the download.
         saveConfigIdMarker(configId)
 
+        // A successful apply is the only event that satisfies the post-provisioning
+        // requirement. Use a synchronous write so housekeeping cannot observe a stale
+        // marker value immediately after this method returns.
+        if (prefs.getBoolean(IOT_PROVISIONING_REFRESH_REQUIRED, false)) {
+            val stored = prefs.edit()
+                .putBoolean(IOT_PROVISIONING_REFRESH_REQUIRED, false)
+                .commit()
+            if (!stored) {
+                Log.w(TAG, "Could not clear required LauncherConfig refresh marker — download will retry")
+                return false
+            }
+            Log.i(TAG, "Required post-provisioning LauncherConfig refresh completed")
+        }
+
         Log.i(TAG, "LauncherConfig applied: ${newAppList.size} app(s), " +
             "blockUnknownApps=$blockUnknown, enableNavBar=$enableNavBar, " +
             "enableControlBar=$enableControlBar, enableStore=$enableStore, generatedAt=$generatedAt")
@@ -390,10 +451,15 @@ object LauncherConfigManager {
     }
 
     private fun restoreThemeFromPrefs(context: Context) {
-        val prefs = context.getSharedPreferences("tms_launcher", Context.MODE_PRIVATE)
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         if (!prefs.contains("enableNavigationBar")) return  // no TMS theme saved yet
         MainActivity.stTheme.enable_navigation_bar = prefs.getBoolean("enableNavigationBar", true)
         MainActivity.stTheme.enable_control_bar    = prefs.getBoolean("enableControlBar", true)
+        MainActivity.stTheme.background_color = prefs.getString("backgroundColor", MainActivity.stTheme.background_color) ?: MainActivity.stTheme.background_color
+        MainActivity.stTheme.foreground_color = prefs.getString("foregroundColor", MainActivity.stTheme.foreground_color) ?: MainActivity.stTheme.foreground_color
+        MainActivity.stTheme.font_color = prefs.getString("fontColor", MainActivity.stTheme.font_color) ?: MainActivity.stTheme.font_color
+        MainActivity.stTheme.font_size = prefs.getInt("fontSize", MainActivity.stTheme.font_size).coerceIn(8, 72)
+        MainActivity.stTheme.system_pwd_protection = prefs.getBoolean("systemPasswordProtection", true)
         val storedStatusBarColor = prefs.getString("statusBarColor", null)
         val storedNavBarColor = prefs.getString("navigationBarColor", null)
         val statusBarColor = normalizeSystemBarColor(storedStatusBarColor)
@@ -443,6 +509,12 @@ object LauncherConfigManager {
             return DEFAULT_SYSTEM_BAR_COLOR
         }
 
+        return if (candidate.startsWith("#")) candidate.uppercase() else "#${candidate.uppercase()}"
+    }
+
+    private fun normalizeThemeColor(value: String?, fallback: String): String {
+        val candidate = value?.trim().orEmpty()
+        if (!ARGB_COLOR_PATTERN.matches(candidate)) return fallback
         return if (candidate.startsWith("#")) candidate.uppercase() else "#${candidate.uppercase()}"
     }
 

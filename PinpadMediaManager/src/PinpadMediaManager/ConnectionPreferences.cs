@@ -23,7 +23,7 @@ internal static class ConnectionPreferencesStore
     private static string SettingsPath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "Global Connect ONE",
-        "Pinpad Media Manager",
+        "Pinpad Demo",
         "connection-settings.json");
 
     public static ConnectionPreferences Load()

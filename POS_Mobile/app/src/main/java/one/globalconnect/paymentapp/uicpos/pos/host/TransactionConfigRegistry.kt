@@ -35,6 +35,16 @@ object TransactionConfigRegistry {
         AUTH_CAPTURE(code = "AuthCapture", legacyTransaction = LegacyTransaction.SALE_COMP),
         FORCE_SALE(code = "ForceSale", legacyTransaction = LegacyTransaction.OFF_SALE),
         REVERSAL(code = "Reversal", legacyTransaction = LegacyTransaction.REVERSAL),
+        OFFLINE_PIN_CHANGE(code = "OfflinePinChange", legacyTransaction = LegacyTransaction.OFFLINE_PIN_CHANGE),
+        REVERSAL_OFFLINE_PIN_CHANGE(
+            code = "ReversalOfflinePinChange",
+            legacyTransaction = LegacyTransaction.REVERSAL_OFFLINE_PIN_CHANGE,
+        ),
+        PIN_UNBLOCK(code = "PinUnblock", legacyTransaction = LegacyTransaction.PIN_UNBLOCK),
+        REVERSAL_PIN_UNBLOCK(
+            code = "ReversalPinUnblock",
+            legacyTransaction = LegacyTransaction.REVERSAL_PIN_UNBLOCK,
+        ),
         SETTLEMENT(code = "Settlement", legacyTransaction = LegacyTransaction.SETTLEMENT),
     }
 
@@ -104,7 +114,11 @@ object TransactionConfigRegistry {
         CASHBACK,
         TRAN_INCREMENTALAUTH,
         TRAN_FOLIOQUERY,
-        TRAN_SESSIONTOKENREQUEST
+        TRAN_SESSIONTOKENREQUEST,
+        OFFLINE_PIN_CHANGE,
+        REVERSAL_OFFLINE_PIN_CHANGE,
+        PIN_UNBLOCK,
+        REVERSAL_PIN_UNBLOCK,
     }
 
     data class TransactionConfig(
@@ -271,6 +285,62 @@ object TransactionConfigRegistry {
             needTax2Amount = false,
             needTipAmount = false,
             attributes = emptySet()
+        ),
+        LegacyTransaction.OFFLINE_PIN_CHANGE to config(
+            shortLabel = "CP",
+            displayLabelRes = R.string.transaction_display_offline_pin_change,
+            receiptLabelRes = R.string.transaction_receipt_offline_pin_change,
+            messageType = "0200",
+            processingCode = "920000",
+            needAmount = false,
+            needTax1Amount = false,
+            needTax2Amount = false,
+            needTipAmount = false,
+            attributes = setOf(
+                TransactionAttribute.INCREMENTS_TRACE,
+                TransactionAttribute.NEEDS_REVERSAL,
+                TransactionAttribute.NEEDS_EMV_ADVICE,
+            ),
+        ),
+        LegacyTransaction.REVERSAL_OFFLINE_PIN_CHANGE to config(
+            shortLabel = "RCP",
+            displayLabelRes = R.string.transaction_display_reversal_offline_pin_change,
+            receiptLabelRes = R.string.transaction_receipt_reversal_offline_pin_change,
+            messageType = "0400",
+            processingCode = "920000",
+            needAmount = false,
+            needTax1Amount = false,
+            needTax2Amount = false,
+            needTipAmount = false,
+            attributes = emptySet(),
+        ),
+        LegacyTransaction.PIN_UNBLOCK to config(
+            shortLabel = "PU",
+            displayLabelRes = R.string.transaction_display_pin_unblock,
+            receiptLabelRes = R.string.transaction_receipt_pin_unblock,
+            messageType = "0200",
+            processingCode = "910000",
+            needAmount = false,
+            needTax1Amount = false,
+            needTax2Amount = false,
+            needTipAmount = false,
+            attributes = setOf(
+                TransactionAttribute.INCREMENTS_TRACE,
+                TransactionAttribute.NEEDS_REVERSAL,
+                TransactionAttribute.NEEDS_EMV_ADVICE,
+            ),
+        ),
+        LegacyTransaction.REVERSAL_PIN_UNBLOCK to config(
+            shortLabel = "RPU",
+            displayLabelRes = R.string.transaction_display_reversal_pin_unblock,
+            receiptLabelRes = R.string.transaction_receipt_reversal_pin_unblock,
+            messageType = "0400",
+            processingCode = "910000",
+            needAmount = false,
+            needTax1Amount = false,
+            needTax2Amount = false,
+            needTipAmount = false,
+            attributes = emptySet(),
         ),
         LegacyTransaction.SETTLEMENT to config(
             shortLabel = "ST",
@@ -552,7 +622,7 @@ object TransactionConfigRegistry {
             shortLabel = "CO",
             displayLabelRes = R.string.transaction_display_check_out,
             receiptLabelRes = R.string.transaction_receipt_check_out,
-            messageType = "0220",
+            messageType = "0200",
             processingCode = "000000",
             needAmount = true,
             needTax1Amount = true,

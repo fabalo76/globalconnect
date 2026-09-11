@@ -2,6 +2,8 @@ package one.globalconnect.paymentapp.transaction
 
 import android.content.Context
 import android.util.Log
+import android.os.Handler
+import android.os.Looper
 import androidx.core.content.ContextCompat
 import com.mastercard.sonic.controller.SonicController
 import com.mastercard.sonic.controller.SonicEnvironment
@@ -22,7 +24,7 @@ import com.visa.SensoryBrandingView
  *
  * MC:    SonicController.prepare() is async and loads audio/animation assets — pre-prepare
  *        after TMS params arrive so play() can be called immediately on approval. After
- *        each play completes, re-prepare for the next transaction.
+ *        each successful play, reuse the prepared assets for the next transaction.
  *
  * Call [prewarm] once after TMS params are ready (and again after each param update).
  */
@@ -34,6 +36,8 @@ internal object BrandingAnimationCache {
     @Volatile private var sonicController: SonicController? = null
     @Volatile private var sonicReady = false
     @Volatile private var lastMerchant: SonicMerchant? = null
+    private var sonicPreparing = false
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     // ── Public API ────────────────────────────────────────────────────────────
 
@@ -72,6 +76,7 @@ internal object BrandingAnimationCache {
      * Returns the pre-prepared [SonicController] and marks it consumed (not ready).
      * Returns null if prepare hasn't completed yet (caller must fall back to prepare+play).
      */
+    @Synchronized
     fun takeSonicController(): SonicController? {
         if (!sonicReady) {
             Log.d(TAG, "SonicController cache miss — prepare not complete yet")
@@ -82,9 +87,26 @@ internal object BrandingAnimationCache {
         return sonicController
     }
 
-    /** Call after MC play completes so the next transaction finds a prepared controller. */
-    fun onSonicPlayComplete(context: Context) {
-        lastMerchant?.let { prewarmSonic(context.applicationContext, it) }
+    /** The SDK resets its playing flags after invoking its completion callback. */
+    fun onSonicPlayComplete(context: Context, controller: SonicController, statusCode: Int) {
+        mainHandler.post {
+            synchronized(this) {
+                if (sonicController == null && isSonicSuccess(statusCode)) {
+                    sonicController = controller
+                }
+                if (sonicController !== controller) return@synchronized
+                if (isSonicSuccess(statusCode)) {
+                    // Preparing a new controller allocates a new SoundPool with no public
+                    // release API. The SDK supports replaying its already loaded assets.
+                    sonicReady = true
+                    Log.d(TAG, "SonicController retained for next playback")
+                } else {
+                    sonicController = null
+                    sonicReady = false
+                    lastMerchant?.let { prewarmSonic(context.applicationContext, it) }
+                }
+            }
+        }
     }
 
     // ── Private ───────────────────────────────────────────────────────────────
@@ -99,9 +121,11 @@ internal object BrandingAnimationCache {
         Log.d(TAG, "Pre-loaded Visa SDK assets langCode=$langCode")
     }
 
+    @Synchronized
     internal fun prewarmSonic(context: Context, merchant: SonicMerchant) {
         lastMerchant = merchant
-        if (sonicReady) return
+        if (sonicController != null || sonicPreparing) return
+        sonicPreparing = true
         val controller = SonicController()
         sonicController = controller
         controller.prepare(
@@ -113,10 +137,17 @@ internal object BrandingAnimationCache {
             context = context,
             onPrepareListener = object : OnPrepareListener {
                 override fun onPrepared(statusCode: Int) {
-                    sonicReady = true
+                    synchronized(this@BrandingAnimationCache) {
+                        if (sonicController !== controller) return
+                        sonicPreparing = false
+                        sonicReady = isSonicSuccess(statusCode)
+                        if (!sonicReady) sonicController = null
+                    }
                     Log.d(TAG, "SonicController pre-prepared statusCode=$statusCode")
                 }
             },
         )
     }
 }
+
+internal fun isSonicSuccess(statusCode: Int): Boolean = statusCode == 800 || statusCode == 801

@@ -5,7 +5,9 @@ import com.nexgo.oaf.apiv3.emv.AidEntity
 import com.nexgo.oaf.apiv3.emv.AidEntryModeEnum
 import one.globalconnect.tms.paymentapp.TMS_EmvContactConfig
 import one.globalconnect.tms.paymentapp.TMS_EmvCtlsConfig
+import one.globalconnect.tms.paymentapp.TMS_ContactlessCapabilityFlags
 import one.globalconnect.tms.paymentapp.TMS_Terminal
+import java.util.Locale
 
 internal object EmvConfigBuilder {
     private const val TAG = "EmvConfigBuilder"
@@ -52,6 +54,7 @@ internal object EmvConfigBuilder {
     ): AidEntity = AidEntity().apply {
         aid                   = pcd.AID.lowercase()
         asi                   = 0  // no PartSel field in PCDApps — default to partial match
+        configuredContactlessApplicationVersion(pcd)?.let { appVerNum = it }
         tacDefault            = pcd.TACDefault
         tacDenial             = pcd.TACDenial
         tacOnline             = pcd.TACOnline
@@ -61,6 +64,31 @@ internal object EmvConfigBuilder {
         contactlessCvmLimit   = pcd.CVMReqLimit
         onlinePinCap          = effectiveOnlinePinCap(terminalOnlinePinCap, pcd.onlinePinCap)
         aidEntryModeEnum      = AidEntryModeEnum.AID_ENTRY_CONTACTLESS
+    }
+
+    /**
+     * Nexgo uses [AidEntity.appVerNum] for tag 9F09 on both contact and contactless AIDs.
+     * The current lane schema carries contactless kernel-specific values in extra-tag slots,
+     * so retain that schema while exposing 9F09 to the SDK's AID configuration.
+     */
+    internal fun configuredContactlessApplicationVersion(pcd: TMS_EmvCtlsConfig): String? {
+        val configuredValue = sequenceOf(
+            pcd.extraTag01Name to pcd.extraTag01Value,
+            pcd.extraTag02Name to pcd.extraTag02Value,
+            pcd.extraTag03Name to pcd.extraTag03Value,
+            pcd.extraTag04Name to pcd.extraTag04Value,
+            pcd.extraTag05Name to pcd.extraTag05Value,
+        ).firstOrNull { (name, _) ->
+            name.filterNot(Char::isWhitespace).equals(APPLICATION_VERSION_TAG, ignoreCase = true)
+        }?.second ?: return null
+
+        return configuredValue
+            .filterNot(Char::isWhitespace)
+            .uppercase(Locale.US)
+            .takeIf { value ->
+                value.length == APPLICATION_VERSION_HEX_LENGTH &&
+                    value.all { character -> character.digitToIntOrNull(16) != null }
+            }
     }
 
     internal fun effectiveOnlinePinCap(terminalOnlinePinCap: Boolean, aidOnlinePinCap: Int): Int {
@@ -122,20 +150,51 @@ internal object EmvConfigBuilder {
         terminal: TMS_Terminal,
     ): EmvTerminalCapabilityProfile {
         val base = EmvTerminalCapabilities.parse9F33(aid.terminalCapabilities)
-        // Contactless does not support offline PIN. Controlling all standard CVM bits here
-        // guarantees that raw values such as E0F8C8 cannot advertise either offline PIN method.
+        // Control every non-RFU CVM bit so the effective 9F33 exactly reflects the
+        // terminal-wide and per-AID capability switches downloaded from the TMS.
         val controlled = EmvTerminalCapabilities.STANDARD_CVM_MASK
         var enabled = 0
 
-        if (terminal.onlinePinCap && aid.onlinePinCap == 1) {
+        val clearOfflinePinEnabled = terminal.offlineClearPinCap && aid.offlineClearPinCap
+        val onlinePinEnabled = terminal.onlinePinCap && aid.onlinePinCap == 1
+        val signatureEnabled = terminal.signatureCap && aid.signatureCap
+        val encipheredOfflinePinEnabled = terminal.offlineEncrPinCap && aid.offlineEncrPinCap
+        val noCvmEnabled = terminal.noCVMCap && aid.noCVMCap
+
+        if (clearOfflinePinEnabled) {
+            enabled = enabled or EmvTerminalCapabilities.PLAINTEXT_OFFLINE_PIN
+        }
+        if (onlinePinEnabled) {
             enabled = enabled or EmvTerminalCapabilities.ONLINE_PIN
         }
-        if (terminal.signatureCap && aid.signatureCap) {
+        if (signatureEnabled) {
             enabled = enabled or EmvTerminalCapabilities.SIGNATURE
         }
-        if (terminal.noCVMCap && aid.noCVMCap) {
+        if (encipheredOfflinePinEnabled) {
+            enabled = enabled or EmvTerminalCapabilities.ENCIPHERED_OFFLINE_PIN
+        }
+        if (noCvmEnabled) {
             enabled = enabled or EmvTerminalCapabilities.NO_CVM
         }
+
+        val capabilityFlags = TMS_ContactlessCapabilityFlags(
+            manualKeyEntry = aid.manualKeyEntryCap,
+            magneticStripe = aid.magneticStripeCap,
+            contactChip = aid.contactChipCap,
+            clearOfflinePin = clearOfflinePinEnabled,
+            onlinePin = onlinePinEnabled,
+            signature = signatureEnabled,
+            encipheredOfflinePin = encipheredOfflinePinEnabled,
+            noCvm = noCvmEnabled,
+            sda = aid.sdaCap,
+            dda = aid.ddaCap,
+            cardCapture = aid.cardCaptureCap,
+            cda = aid.cdaCap,
+        )
+        val technicalValues = capabilityFlags
+            .takeIf { aid.simplifiedCapabilityFlagsConfigured }
+            ?.deriveTechnicalValues(aid.AID)
+        val ttq = capabilityFlags.terminalTransactionQualifiers(aid.AID).hexToBytes()
 
         return EmvTerminalCapabilityProfile(
             aid = aid.AID,
@@ -143,7 +202,19 @@ internal object EmvConfigBuilder {
             base9F33 = base,
             controlledCvmMask = controlled,
             enabledCvmMask = enabled,
+            ttq = ttq,
+            contactlessTechnicalValues = technicalValues,
         )
+    }
+
+    private fun String.hexToBytes(): ByteArray? {
+        val normalized = trim().replace(" ", "").uppercase(Locale.US)
+        if (normalized.isEmpty() || normalized.length % 2 != 0) return null
+        return runCatching {
+            ByteArray(normalized.length / 2) { index ->
+                normalized.substring(index * 2, index * 2 + 2).toInt(16).toByte()
+            }
+        }.getOrNull()
     }
 
     private fun ByteArray.toHex(): String = joinToString("") { "%02X".format(it.toInt() and 0xFF) }
@@ -160,7 +231,7 @@ internal object EmvConfigBuilder {
             )
             AidEntryModeEnum.AID_ENTRY_CONTACTLESS -> Log.d(
                 TAG,
-                "[CONTACTLESS]  aid=${e.aid} asi=${e.asi}" +
+                "[CONTACTLESS]  aid=${e.aid} appVerNum=${e.appVerNum} asi=${e.asi}" +
                     " tacDefault=${e.tacDefault} tacDenial=${e.tacDenial} tacOnline=${e.tacOnline}" +
                     " floorLimit=${e.floorLimit} ctlsFloorLimit=${e.contactlessFloorLimit}" +
                     " ctlsTransLimit=${e.contactlessTransLimit} ctlsCvmLimit=${e.contactlessCvmLimit}" +
@@ -178,4 +249,7 @@ internal object EmvConfigBuilder {
         val byteCount = lenHex.trim().toIntOrNull(16) ?: return value
         return value.take(byteCount * 2)
     }
+
+    private const val APPLICATION_VERSION_TAG = "9F09"
+    private const val APPLICATION_VERSION_HEX_LENGTH = 4
 }

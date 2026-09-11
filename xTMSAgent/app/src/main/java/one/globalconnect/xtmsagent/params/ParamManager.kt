@@ -72,6 +72,8 @@ object ParamManager {
     private var timeoutRunnable: Runnable? = null
     private val applicationResultTimeouts = ConcurrentHashMap<String, Runnable>()
     private val finalizedTaskIds = ConcurrentHashMap.newKeySet<String>()
+    @Volatile
+    private var pendingTaskDelivery: PendingTaskDelivery? = null
     private val configChunkLock = Any()
     private val configChunks = mutableMapOf<String, ConfigChunkAccumulator>()
 
@@ -107,6 +109,20 @@ object ParamManager {
                 error = "Invalid parameter client package",
             )
             return false
+        }
+
+        // A portal ParametersDownload task may have completed its download before the
+        // payment application displayed (or retried) its no-parameters screen. Re-deliver
+        // that task, including its task ID, before starting an unrelated pull request.
+        if (
+            validatedClientPackage != null &&
+            redeliverPendingTask(
+                context = context.applicationContext,
+                applicationId = applicationId,
+                clientPackage = validatedClientPackage,
+            )
+        ) {
+            return true
         }
 
         if (!downloadInProgress.compareAndSet(false, true)) {
@@ -191,6 +207,9 @@ object ParamManager {
         error: String?,
     ) {
         cancelApplicationResultTimeout(taskId)
+        if (pendingTaskDelivery?.taskId == taskId) {
+            pendingTaskDelivery = null
+        }
         when (parameterApplicationResult(status)) {
             ParameterApplicationResult.COMPLETED -> publishTerminalTaskResult(context, taskId, success = true)
             ParameterApplicationResult.DEFERRED -> TmsMqttManager.publishExternalTaskAck(
@@ -406,9 +425,10 @@ object ParamManager {
         context: Context,
         paramsFile: File,
         applicationId: String? = requestedApplicationId,
+        taskId: String? = requestedTaskId,
+        clientPackage: String? = requestedClientPackage,
     ) {
-        val taskId = requestedTaskId
-        val paymentPkg = findParameterClientPackage(context, applicationId, requestedClientPackage)
+        val paymentPkg = findParameterClientPackage(context, applicationId, clientPackage)
         if (paymentPkg == null) {
             Log.w(TAG, "No payment app found (PAY_APP intent filter) — params saved locally but not forwarded")
             publishTerminalTaskResult(context, taskId, success = false, error = "No matching payment application found")
@@ -426,7 +446,14 @@ object ParamManager {
         // Grant read permission before sending the broadcast so the payment app can
         // open the URI immediately in its onReceive() call.
         context.grantUriPermission(paymentPkg, uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        taskId?.let { scheduleApplicationResultTimeout(context, it) }
+        taskId?.let {
+            pendingTaskDelivery = PendingTaskDelivery(
+                taskId = it,
+                applicationId = applicationId,
+                paramsFile = paramsFile,
+            )
+            scheduleApplicationResultTimeout(context, it)
+        }
 
         context.sendBroadcast(
             Intent(ParamConstants.ACTION_PARAMS_READY).apply {
@@ -439,6 +466,39 @@ object ParamManager {
         )
 
         Log.i(TAG, "ACTION_PARAMS_READY → $paymentPkg, uri=$uri")
+    }
+
+    private fun redeliverPendingTask(
+        context: Context,
+        applicationId: String?,
+        clientPackage: String,
+    ): Boolean {
+        val pending = pendingTaskDelivery ?: return false
+        if (
+            !applicationId.isNullOrBlank() &&
+            !pending.applicationId.isNullOrBlank() &&
+            !applicationId.equals(pending.applicationId, ignoreCase = true)
+        ) {
+            return false
+        }
+        if (!pending.paramsFile.isFile) {
+            Log.w(TAG, "Pending parameter task ${pending.taskId} no longer has a parameter file")
+            pendingTaskDelivery = null
+            return false
+        }
+
+        Log.i(
+            TAG,
+            "Retry found pushed parameter task ${pending.taskId}; re-delivering it to $clientPackage",
+        )
+        notifyParameterClientReady(
+            context = context,
+            paramsFile = pending.paramsFile,
+            applicationId = pending.applicationId,
+            taskId = pending.taskId,
+            clientPackage = clientPackage,
+        )
+        return true
     }
 
     private fun notifyPaymentAppFailed(context: Context, error: String) {
@@ -493,6 +553,9 @@ object ParamManager {
         error: String? = null,
     ) {
         if (taskId.isNullOrBlank() || !finalizedTaskIds.add(taskId)) return
+        if (pendingTaskDelivery?.taskId == taskId) {
+            pendingTaskDelivery = null
+        }
         cancelApplicationResultTimeout(taskId)
         TmsMqttManager.publishExternalTaskAck(
             context = context,
@@ -600,6 +663,12 @@ object ParamManager {
     private const val PINPAD_APPLICATION_ID = "PINPAD_APP"
     private const val PAYMENT_APPLICATION_ID = "PAYMENT_APP"
     private const val PINPAD_PACKAGE = "one.globalconnect.pinpad"
+
+    private data class PendingTaskDelivery(
+        val taskId: String,
+        val applicationId: String?,
+        val paramsFile: File,
+    )
 
     // ── Crypto / helpers ──────────────────────────────────────────────────────
 

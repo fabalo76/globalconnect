@@ -174,7 +174,6 @@ fun SaleScreen(
             val tipAmount = tipAmountState.transactionValue
             val supplementaryValue = collectSupplementaryValue()
             saleInProgress = true
-            resetAmountEntries()
             onChargeClick(
                 transactionType.toTransactionString(),
                 baseAmount,
@@ -343,8 +342,10 @@ fun SaleScreen(
                         val tipAmount = tipAmountState.transactionValue
                         val supplementaryValue = collectSupplementaryValue()
                         saleInProgress = true
+                        // Keep the confirmed amount rendered while the transaction destination
+                        // enters. Resetting this outgoing screen exposes the zero-amount keypad
+                        // during the navigation transition, especially on a cold start.
                         Log.d("SaleScreen", "Transaction Started: $transactionType, Amount: ${confirmationSummary.totalAmountText}")
-                        resetAmountEntries()
                         onChargeClick(
                             transactionType.toTransactionString(),
                             baseAmount,

@@ -40,7 +40,12 @@
     <string name="config_network">Mobile / SIM</string>
     <string name="config_factory_tms">Factory Nexgo TMS</string>
     <string name="config_usb">USB Config</string>
+    <string name="config_local_install">Local Install</string>
     <string name="config_back">Back</string>
+    <string name="local_install_title">Local Install</string>
+    <string name="local_install_progress">Validating and installing the selected application…</string>
+    <string name="local_install_success">Installed %1$s version %2$s</string>
+    <string name="local_install_failure">Installation failed: %1$s</string>
     <string name="usb_config_title">USB file transfer</string>
     <string name="usb_config_status_enabled">Enabled. A connected computer can select File transfer (MTP/PTP).</string>
     <string name="usb_config_status_disabled">Disabled by xTMSAgent. Charging and other configured USB functions remain available.</string>
@@ -87,9 +92,12 @@
     <string name="diagnostics_title">Device Diagnostics</string>
     <string name="diagnostics_refresh">Refresh</string>
     <string name="diagnostics_share">Share</string>
+    <string name="diagnostics_export">Export to Downloads</string>
     <string name="diagnostics_loading">Collecting diagnostics…</string>
     <string name="diagnostics_share_title">Share diagnostic report</string>
     <string name="diagnostics_no_share_target">No application is available to share the report. The report remains visible on this screen.</string>
+    <string name="diagnostics_exported">Diagnostics exported to %1$s</string>
+    <string name="diagnostics_export_failed">Could not export diagnostics: %1$s</string>
     <!-- TmsConfigActivity -->
     <string name="tms_section_server">Server Settings (read-only)</string>
     <string name="tms_section_timeouts">Timeout / Interval Settings</string>
@@ -106,6 +114,12 @@
     <string name="tms_save_error">Failed to save settings</string>
     <string name="tms_invalid_value">All values must be positive numbers</string>
     <string name="tms_config_file_not_found">Config file not found</string>
+    <string name="tms_reset_registration">Reset TMS Registration</string>
+    <string name="tms_reset_registration_title">Reset TMS registration?</string>
+    <string name="tms_reset_registration_warning">This removes the current IoT registration and certificate. xTMSAgent will disconnect and register again. Continue?</string>
+    <string name="tms_reset_registration_confirm">Reset registration</string>
+    <string name="tms_reset_registration_started">TMS registration reset. Reconnecting…</string>
+    <string name="tms_reset_registration_failed">TMS registration could not be reset.</string>
     <!-- AppUpdateManager -->
     <string name="app_update_downloading">Downloading app update: %1$s v%2$s…</string>
     <string name="app_update_installing">Installing app update: %1$s…</string>

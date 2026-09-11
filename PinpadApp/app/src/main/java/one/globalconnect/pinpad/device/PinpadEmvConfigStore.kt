@@ -144,6 +144,35 @@ class PinpadEmvConfigStore(context: Context) {
         return aidTlvs().values.toList() + pcdAidTlvs().values.toList()
     }
 
+    fun snapshot(): EmvConfigurationSnapshot {
+        val terminalConfig = terminalConfigTlv()
+        return EmvConfigurationSnapshot(
+            terminalConfigurationPresent = terminalConfig.isNotBlank(),
+            terminalConfigurationBytes = terminalConfig.length / 2,
+            dataFormatTags = dataFormatDefinitions().keys.sorted(),
+            capkIds = capkTlvs().keys.sorted(),
+            contactAidIds = aidTlvs().keys.sorted(),
+            contactlessAidIds = pcdAidTlvs().keys.sorted(),
+            contactlessDrlIds = pcdDrlTlvs().keys.sorted(),
+        )
+    }
+
+    fun clearAllConfiguration() {
+        writeTextFile(TERMINAL_CONFIG_FILE, "")
+        writeMapFile(TERMINAL_PRIVATE_TAGS_FILE, emptyMap())
+        writeDataFormatDefinitionsFile(DATA_FORMATS_FILE, emptyMap())
+        writeMapFile(CONTACT_AIDS_FILE, emptyMap())
+        writeMapFile(CONTACTLESS_AIDS_FILE, emptyMap())
+        writeMapFile(CAPKS_FILE, emptyMap())
+        writeMapFile(CONTACTLESS_DRL_FILE, emptyMap())
+        prefs.edit()
+            .remove(KEY_TERMINAL_CONFIG_TLV)
+            .remove(KEY_DATA_FORMATS)
+            .remove(KEY_AID_TLVS)
+            .remove(KEY_CAPK_TLVS)
+            .apply()
+    }
+
     private fun terminalPrivateTags(): Map<String, String> {
         return readMapFile(TERMINAL_PRIVATE_TAGS_FILE).orEmpty()
     }
@@ -263,4 +292,14 @@ class PinpadEmvConfigStore(context: Context) {
         private const val MAP_SEPARATOR = '|'
         private val TERMINAL_PRIVATE_TAG_PREFIXES = listOf("500000", "FFFF81")
     }
+
+    data class EmvConfigurationSnapshot(
+        val terminalConfigurationPresent: Boolean,
+        val terminalConfigurationBytes: Int,
+        val dataFormatTags: List<String>,
+        val capkIds: List<String>,
+        val contactAidIds: List<String>,
+        val contactlessAidIds: List<String>,
+        val contactlessDrlIds: List<String>,
+    )
 }

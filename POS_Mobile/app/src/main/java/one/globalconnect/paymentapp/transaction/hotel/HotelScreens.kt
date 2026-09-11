@@ -4,7 +4,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -19,6 +18,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ReceiptLong
@@ -45,9 +46,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -58,19 +63,21 @@ import one.globalconnect.paymentapp.navigation.TopBar
 import one.globalconnect.paymentapp.records.BackButton
 import one.globalconnect.paymentapp.records.SearchView
 import one.globalconnect.paymentapp.transaction.AmountPromptConfig
+import one.globalconnect.paymentapp.transaction.AmountKeypad
 import one.globalconnect.paymentapp.transaction.PaymentDetails
 import one.globalconnect.paymentapp.transaction.ReturnUiState
 import one.globalconnect.paymentapp.transaction.SaleScreen
 import one.globalconnect.paymentapp.transaction.TransactionType
 import one.globalconnect.paymentapp.transaction.toTransactionString
+import one.globalconnect.paymentapp.transaction.toStringForUsers
 import one.globalconnect.paymentapp.uicpos.pos.host.TransactionConfigRegistry
 import one.globalconnect.paymentapp.GlobalConnectPaymentApplication
 import one.globalconnect.paymentapp.transaction.Transaction
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.text.style.TextOverflow
-import one.globalconnect.paymentapp.records.applyFormattedTimes
 import one.globalconnect.paymentapp.records.defaultFormattedTime
 import one.globalconnect.paymentapp.ui.theme.color_black
+import one.globalconnect.paymentapp.ui.theme.color_error
 import one.globalconnect.paymentapp.ui.theme.color_grey95
 import one.globalconnect.paymentapp.ui.theme.color_secondaryThree
 import one.globalconnect.paymentapp.ui.theme.color_white
@@ -78,6 +85,7 @@ import one.globalconnect.paymentapp.ui.theme.color_white
 @Composable
 fun HotelCheckInScreen(
     onSubmit: (String, String, String, String, String) -> Unit,
+    onCancel: () -> Unit,
 ) {
     val context = LocalContext.current
     val viewModelFactory = remember { AppViewModelProvider.provideFactory(context) }
@@ -86,53 +94,199 @@ fun HotelCheckInScreen(
 
     val promptConfig = rememberPromptConfig(TransactionType.CHECKIN)
 
-    SaleScreen(
-        onChargeClick = { _, base, tax1, tax2, tip, folio ->
-            onSubmit(base, tax1, tax2, tip, folio)
-        },
-        transactionType = TransactionType.CHECKIN,
-        promptConfig = promptConfig,
-        topContent = {
-            if (!state.autoFolio) {
-                OutlinedTextField(
-                    value = state.folioNumber,
-                    onValueChange = viewModel::updateManualFolio,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 16.dp, start = 24.dp, end = 24.dp),
-                    label = { Text(stringResource(id = R.string.hotel_folio_label)) },
-                    placeholder = { Text(stringResource(id = R.string.hotel_folio_hint)) },
-                    singleLine = true,
-                    supportingText = state.errorMessage?.let { message ->
-                        { Text(message, color = MaterialTheme.colorScheme.error) }
-                    }
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-            } else {
-                Spacer(modifier = Modifier.height(16.dp))
+    when (state.step) {
+        CheckInStep.Loading -> {
+            Column(
+                modifier = Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.Center,
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                CircularProgressIndicator()
             }
-            state.errorMessage?.let { message ->
-                Text(
-                    text = message,
-                    color = MaterialTheme.colorScheme.error,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 24.dp, vertical = 8.dp)
-                )
-            }
-        },
-        onBeforeCharge = {
-            viewModel.validateFolio()
-        },
-        collectSupplementaryValue = {
-            viewModel.folioForSubmission()
         }
-    )
+
+        CheckInStep.Folio -> {
+            FolioEntryStep(
+                transactionType = TransactionType.CHECKIN,
+                folio = state.folioNumber,
+                inputMode = state.folioInputMode,
+                errorMessage = state.errorMessage,
+                isWorking = state.isCheckingFolio,
+                onFolioChanged = viewModel::updateManualFolio,
+                onBackspace = viewModel::removeLastFolioCharacter,
+                onContinue = viewModel::continueFromFolio,
+                onCancel = onCancel,
+            )
+        }
+
+        CheckInStep.Amount -> {
+            SaleScreen(
+                onChargeClick = { _, base, tax1, tax2, tip, folio ->
+                    onSubmit(base, tax1, tax2, tip, folio)
+                },
+                transactionType = TransactionType.CHECKIN,
+                promptConfig = promptConfig,
+                topContent = {
+                    if (state.autoFolio) {
+                        Text(
+                            text = stringResource(id = R.string.hotel_check_in_auto_folio, state.folioNumber),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 12.dp, start = 24.dp, end = 24.dp),
+                            textAlign = TextAlign.Center,
+                            style = MaterialTheme.typography.bodyLarge,
+                        )
+                    }
+                },
+                collectSupplementaryValue = viewModel::folioForSubmission,
+            )
+        }
+    }
+}
+
+@Composable
+private fun FolioEntryStep(
+    transactionType: TransactionType,
+    folio: String,
+    inputMode: FolioInputMode,
+    errorMessage: String?,
+    isWorking: Boolean,
+    onFolioChanged: (String) -> Unit,
+    onBackspace: () -> Unit,
+    onContinue: () -> Unit,
+    onCancel: () -> Unit,
+) {
+    val alphanumeric = inputMode == FolioInputMode.Alphanumeric
+    val focusRequester = remember { FocusRequester() }
+
+    LaunchedEffect(alphanumeric) {
+        if (alphanumeric) focusRequester.requestFocus()
+    }
+
+    Scaffold(
+        bottomBar = {
+            Spacer(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(15.dp)
+                    .background(color_secondaryThree),
+            )
+        },
+    ) { contentPadding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(contentPadding),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text(
+                text = transactionType.toStringForUsers(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 12.dp),
+                textAlign = TextAlign.Center,
+                fontSize = 24.sp,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.primary,
+            )
+            Text(
+                text = stringResource(id = R.string.hotel_folio_step_prompt),
+                modifier = Modifier.padding(top = 28.dp),
+                textAlign = TextAlign.Center,
+                fontSize = 30.sp,
+            )
+            OutlinedTextField(
+                value = folio,
+                onValueChange = onFolioChanged,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 24.dp, start = 24.dp, end = 24.dp)
+                    .then(if (alphanumeric) Modifier.focusRequester(focusRequester) else Modifier),
+                label = { Text(stringResource(id = R.string.hotel_folio_label)) },
+                placeholder = { Text(stringResource(id = R.string.hotel_folio_hint)) },
+                singleLine = true,
+                readOnly = !alphanumeric,
+                enabled = !isWorking,
+                isError = errorMessage != null,
+                supportingText = errorMessage?.let { message ->
+                    { Text(message, color = MaterialTheme.colorScheme.error) }
+                },
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = if (alphanumeric) KeyboardType.Ascii else KeyboardType.Number,
+                    imeAction = ImeAction.Next,
+                    autoCorrectEnabled = false,
+                ),
+                keyboardActions = KeyboardActions(onNext = { onContinue() }),
+            )
+
+            Spacer(modifier = Modifier.weight(1f))
+
+            if (alphanumeric) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 24.dp, vertical = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Button(
+                        onClick = onCancel,
+                        enabled = !isWorking,
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(64.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = color_error,
+                            contentColor = color_white,
+                        ),
+                    ) {
+                        Text(
+                            text = stringResource(id = R.string.cancel),
+                            fontSize = 20.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
+                    Button(
+                        onClick = onContinue,
+                        enabled = !isWorking,
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(64.dp),
+                    ) {
+                        if (isWorking) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(28.dp),
+                                color = MaterialTheme.colorScheme.onPrimary,
+                            )
+                        } else {
+                            Text(
+                                text = stringResource(id = R.string.ok),
+                                fontSize = 24.sp,
+                                fontWeight = FontWeight.Bold,
+                            )
+                        }
+                    }
+                }
+            } else {
+                AmountKeypad(
+                    onDigit = { digit -> onFolioChanged(folio + digit) },
+                    onDoubleZero = { onFolioChanged(folio + "00") },
+                    onDecimalPoint = {},
+                    onBackspace = onBackspace,
+                    onReset = onCancel,
+                    onEnterPressed = onContinue,
+                    onCancelPressed = onCancel,
+                    showDecimalKey = false,
+                )
+            }
+        }
+    }
 }
 
 @Composable
 fun HotelCheckOutScreen(
+    selectedCheckInId: Int? = null,
     onSubmit: (String, String, String, String, String, Int, String) -> Unit,
+    onCancel: () -> Unit,
 ) {
     val context = LocalContext.current
     val viewModelFactory = remember { AppViewModelProvider.provideFactory(context) }
@@ -140,93 +294,82 @@ fun HotelCheckOutScreen(
     val state by viewModel.uiState.collectAsState()
     val promptConfig = rememberPromptConfig(TransactionType.CHECKOUT)
 
-    SaleScreen(
-        onChargeClick = { _, base, tax1, tax2, tip, _ ->
-            val checkIn = state.matchedCheckIn ?: return@SaleScreen
-            onSubmit(base, tax1, tax2, tip, checkIn.folioNumber, checkIn.id, checkIn.transactionId)
-        },
-        transactionType = TransactionType.CHECKOUT,
-        promptConfig = promptConfig,
-        topContent = {
-            Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 8.dp)) {
-                Text(
-                    text = stringResource(id = R.string.hotel_check_out_heading),
-                    fontSize = 20.sp,
-                    fontWeight = FontWeight.Medium,
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-                OutlinedTextField(
-                    value = state.folioInput,
-                    onValueChange = viewModel::updateFolioInput,
-                    label = { Text(stringResource(id = R.string.hotel_folio_label)) },
-                    placeholder = { Text(stringResource(id = R.string.hotel_folio_hint)) },
-                    singleLine = true,
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                Button(
-                    onClick = { viewModel.searchForCheckIn() },
-                    enabled = !state.isSearching,
-                    modifier = Modifier.align(Alignment.End),
-                    colors = ButtonDefaults.buttonColors(),
-                    contentPadding = PaddingValues(horizontal = 24.dp, vertical = 8.dp)
-                ) {
-                    Text(text = stringResource(id = R.string.hotel_check_out_search))
-                }
-                state.errorMessage?.let { message ->
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = message,
-                        color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                }
-                state.matchedCheckIn?.let { checkIn ->
-                    Spacer(modifier = Modifier.height(16.dp))
-                    CheckInSummary(checkIn)
-                }
-            }
-        },
-        onBeforeCharge = {
-            val ready = state.matchedCheckIn != null
-            if (!ready) {
-                viewModel.searchForCheckIn()
-            }
-            ready
-        },
-        collectSupplementaryValue = {
-            state.matchedCheckIn?.folioNumber ?: ""
-        }
-    )
-}
-
-@Composable
-private fun CheckInSummary(checkIn: Transaction) {
-    val date = remember(checkIn.localDateTime) {
-        checkIn.applyFormattedTimes()
-        checkIn.formattedVerboseDateTime.ifEmpty { checkIn.localDateTime }
+    LaunchedEffect(selectedCheckInId) {
+        viewModel.initializeSelectedCheckIn(selectedCheckInId)
     }
-    Column(Modifier.fillMaxWidth()) {
-        Text(
-            text = stringResource(id = R.string.hotel_check_out_summary_folio, checkIn.folioNumber),
-            style = MaterialTheme.typography.bodyLarge,
-        )
-        Spacer(modifier = Modifier.height(4.dp))
-        Text(
-            text = stringResource(id = R.string.hotel_check_out_summary_amount, checkIn.totalAmount),
-            style = MaterialTheme.typography.bodyMedium,
-        )
-        Spacer(modifier = Modifier.height(4.dp))
-        Text(
-            text = stringResource(id = R.string.hotel_check_out_summary_card, checkIn.masked_cardNumber),
-            style = MaterialTheme.typography.bodyMedium,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-        Spacer(modifier = Modifier.height(4.dp))
-        Text(
-            text = stringResource(id = R.string.hotel_check_out_summary_date, date),
-            style = MaterialTheme.typography.bodyMedium,
-        )
+
+    when (state.step) {
+        CheckOutStep.Loading -> {
+            Column(
+                modifier = Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.Center,
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                CircularProgressIndicator()
+            }
+        }
+
+        CheckOutStep.Folio -> {
+            FolioEntryStep(
+                transactionType = TransactionType.CHECKOUT,
+                folio = state.folioInput,
+                inputMode = state.folioInputMode,
+                errorMessage = state.errorMessage,
+                isWorking = state.isSearching,
+                onFolioChanged = viewModel::updateFolioInput,
+                onBackspace = viewModel::removeLastFolioCharacter,
+                onContinue = viewModel::searchForCheckIn,
+                onCancel = onCancel,
+            )
+        }
+
+        CheckOutStep.Amount -> {
+            SaleScreen(
+                onChargeClick = { _, base, tax1, tax2, tip, _ ->
+                    val checkIn = state.matchedCheckIn ?: return@SaleScreen
+                    onSubmit(
+                        base,
+                        tax1,
+                        tax2,
+                        tip,
+                        checkIn.folioNumber,
+                        checkIn.id,
+                        checkIn.transactionId,
+                    )
+                },
+                transactionType = TransactionType.CHECKOUT,
+                promptConfig = promptConfig,
+                topContent = {
+                    val checkIn = state.matchedCheckIn ?: return@SaleScreen
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 24.dp, vertical = 8.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        Text(
+                            text = stringResource(
+                                id = R.string.hotel_check_out_summary_folio,
+                                checkIn.folioNumber,
+                            ),
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = stringResource(
+                                id = R.string.hotel_check_out_summary_amount,
+                                checkIn.totalAmount,
+                            ),
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    }
+                },
+                collectSupplementaryValue = {
+                    state.matchedCheckIn?.folioNumber ?: ""
+                },
+            )
+        }
     }
 }
 
@@ -234,6 +377,7 @@ private fun CheckInSummary(checkIn: Transaction) {
 fun HotelCheckInReportScreen(
     onBack: () -> Unit,
     onCheckOut: (Transaction) -> Unit = {},
+    title: String? = null,
 ) {
     val context = LocalContext.current
     val viewModelFactory = remember { AppViewModelProvider.provideFactory(context) }
@@ -243,6 +387,7 @@ fun HotelCheckInReportScreen(
     var showSearchBar by rememberSaveable { mutableStateOf(false) }
     var selectedTransaction by remember { mutableStateOf<Transaction?>(null) }
     var showPaymentDetails by rememberSaveable { mutableStateOf(false) }
+    val screenTitle = title ?: stringResource(id = R.string.hotel_check_in_report_title)
 
     LaunchedEffect(Unit) {
         viewModel.events.collect { event ->
@@ -277,7 +422,7 @@ fun HotelCheckInReportScreen(
                                         onValueChange = viewModel::updateSearchTerm,
                                     )
                                 } else {
-                                    Text(text = stringResource(id = R.string.hotel_check_in_report_title))
+                                    Text(text = screenTitle)
                                 }
                             },
                             navigationIcon = {

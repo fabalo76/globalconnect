@@ -32,6 +32,10 @@ object Constants {
     const val HOST_TRANS_MANUAL_FORCE_SALE = "ForceSale"
     const val HOST_TRANS_MOTO              = "Sale"
     const val HOST_TRANS_SETTLEMENT        = "Settlement"
+    const val HOST_TRANS_OFFLINE_PIN_CHANGE = "OfflinePinChange"
+    const val HOST_TRANS_REVERSAL_OFFLINE_PIN_CHANGE = "ReversalOfflinePinChange"
+    const val HOST_TRANS_PIN_UNBLOCK = "PinUnblock"
+    const val HOST_TRANS_REVERSAL_PIN_UNBLOCK = "ReversalPinUnblock"
 
     const val HOST_TRANS_CASH           = "Cash"
     const val HOST_TRANS_PAYMENT        = "Payment"

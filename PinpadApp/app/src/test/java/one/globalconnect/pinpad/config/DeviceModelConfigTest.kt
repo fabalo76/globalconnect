@@ -2,9 +2,18 @@ package one.globalconnect.pinpad.config
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class DeviceModelConfigTest {
+    @Test
+    fun `CT20 family uses the physical keypad`() {
+        assertTrue(DeviceModelConfig.hasPhysicalKeypad("CT20"))
+        assertTrue(DeviceModelConfig.hasPhysicalKeypad("CT20P"))
+        assertTrue(DeviceModelConfig.hasPhysicalKeypad("ct20-p_rev2"))
+        assertFalse(DeviceModelConfig.hasPhysicalKeypad("N82"))
+    }
+
     @Test
     fun ct20pUsesDedicatedUsbCdcSerialPort() {
         assertEquals(1, DeviceModelConfig.getSerialPort("CT20P"))

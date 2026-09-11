@@ -16,6 +16,7 @@ import one.globalconnect.xtmsagent.MainActivity
 import one.globalconnect.xtmsagent.R
 import one.globalconnect.xtmsagent.TmsDeviceAdminReceiver
 import one.globalconnect.xtmsagent.diagnostics.NexgoDiagnosticsManager
+import one.globalconnect.xtmsagent.launcher.PaymentAppAutoLauncher
 import one.globalconnect.xtmsagent.mqtt.downloads.DeviceOwnerPackageInstaller
 import one.globalconnect.xtmsagent.mqtt.housekeeping.TmsHkScheduler
 import one.globalconnect.xtmsagent.mqtt.persistence.TmsCredentialStore
@@ -32,6 +33,8 @@ private const val TAG              = "TmsMqttService"
 private const val NOTIFICATION_ID  = 1001
 private const val CHANNEL_ID       = "tms_mqtt_channel"
 private const val CHANNEL_NAME     = "TMS Connection"
+private const val ACTION_AUTO_START_AFTER_BOOT =
+    "one.globalconnect.paymentapp.ACTION_AUTO_START_AFTER_BOOT"
 
 /**
  * Foreground service that owns the TMS MQTT connection for the lifetime of
@@ -187,16 +190,24 @@ class TmsMqttService : Service() {
 // ── BootReceiver ──────────────────────────────────────────────────────────────
 
 /**
- * Receives BOOT_COMPLETED and MY_PACKAGE_REPLACED to restart the MQTT service
- * after a device reboot or application self-update.
+ * Receives BOOT_COMPLETED and MY_PACKAGE_REPLACED to restart the MQTT service,
+ * plus the payment application's post-boot auto-start request.
  *
  * Declared in AndroidManifest.xml with exported=true and both intent-filter actions.
  */
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
+        if (intent.action == ACTION_AUTO_START_AFTER_BOOT) {
+            queuePaymentApplicationLaunch(context)
+            return
+        }
+
         if (intent.action == Intent.ACTION_BOOT_COMPLETED ||
             intent.action == Intent.ACTION_MY_PACKAGE_REPLACED) {
             val wasUpdated = intent.action == Intent.ACTION_MY_PACKAGE_REPLACED
+            if (!wasUpdated) {
+                queuePaymentApplicationLaunch(context)
+            }
             Log.i(
                 "BootReceiver",
                 "${if (wasUpdated) "Package replaced" else "Boot completed"} — " +
@@ -220,6 +231,15 @@ class BootReceiver : BroadcastReceiver() {
             if (wasUpdated) {
                 relaunchHomeAfterSelfUpdate(context)
             }
+        }
+    }
+
+    private fun queuePaymentApplicationLaunch(context: Context) {
+        PaymentAppAutoLauncher.markPendingAfterBoot(context)
+        // HOME may resume before or after BOOT_COMPLETED. If it is already visible,
+        // consume the pending launch now; otherwise MainActivity.onResume does it.
+        MainActivity.instance?.runOnUiThread {
+            MainActivity.instance?.launchPaymentAppAfterBootIfPending()
         }
     }
 

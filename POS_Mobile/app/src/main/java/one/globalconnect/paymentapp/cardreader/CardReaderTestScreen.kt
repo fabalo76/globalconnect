@@ -81,7 +81,7 @@ fun CardReaderTestScreen(
         ) {
             Button(
                 modifier = Modifier.weight(1f),
-                onClick = { viewModel.startCardSearch(amount = "0.00") },
+                onClick = { viewModel.startCardSearch(amount = "0.00", invoiceNumber = "000001") },
                 enabled = !uiState.isSearching,
                 colors = ButtonDefaults.buttonColors(
                     containerColor = color_white,
@@ -246,6 +246,7 @@ private fun statusDisplay(status: CardReaderStatus): Pair<String, Color> {
         is CardReaderStatus.Error -> color_error
         CardReaderStatus.SwipeIncorrect -> color_alert
         CardReaderStatus.MultipleCards -> color_alert
+        CardReaderStatus.MobileCvmRequired -> color_alert
         else -> color_white
     }
 
@@ -254,6 +255,7 @@ private fun statusDisplay(status: CardReaderStatus): Pair<String, Color> {
         CardReaderStatus.Waiting -> stringResource(R.string.card_reader_waiting)
         CardReaderStatus.SwipeIncorrect -> stringResource(R.string.card_reader_swipe_incorrect)
         CardReaderStatus.MultipleCards -> stringResource(R.string.card_reader_multiple_cards)
+        CardReaderStatus.MobileCvmRequired -> stringResource(R.string.mobile_cvm_follow_phone)
         CardReaderStatus.ProcessingEmv -> stringResource(R.string.card_reader_processing)
         CardReaderStatus.Success -> stringResource(R.string.card_reader_success)
         is CardReaderStatus.Error -> stringResource(R.string.card_reader_error, status.reason)

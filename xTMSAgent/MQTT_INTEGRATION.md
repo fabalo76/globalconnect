@@ -116,6 +116,23 @@ Use the Basic Ingest prefix only for transaction publishes. Do not subscribe to 
 
 ---
 
+## Bank Transfer Deregistration
+
+Before the portal revokes an issued device certificate during a bank transfer, it publishes this QoS 1 command to `tms/device/{serial}/cmd`:
+
+```json
+{
+  "cmd": "deregister",
+  "reason": "bank_transfer",
+  "sourceBankId": "source-bank-uuid",
+  "targetBankId": "target-bank-uuid"
+}
+```
+
+xTMSAgent deletes its local AWS IoT certificate and private key as soon as it receives the command. It then reconnects; credential provisioning retries with the normal connection backoff until the server-side transfer is complete, at which point the device receives a certificate in the destination-bank context.
+
+---
+
 ## Heartbeat
 
 Publish to `tms/device/{serial}/heartbeat` every 60 seconds or on the deployment-specific interval.

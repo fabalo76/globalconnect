@@ -90,11 +90,25 @@
     <string name="trans_payment">Payment</string>
     <string name="trans_loyalty_sale">Points Sale</string>
     <string name="trans_loyalty_balance">Points Balance</string>
+    <string name="loyalty_points_available">AVAILABLE: %1$s</string>
     <string name="trans_extras_sale">Extras Sale</string>
     <string name="trans_extras_balance">Extras Balance</string>
     <string name="trans_quota_sale">Quota Sale</string>
 
     <string name="trans_error">Error</string>
+    <string name="trans_offline_pin_change">Change Offline PIN</string>
+    <string name="trans_pin_unblock">PIN Unblock</string>
+    <string name="offline_pin_change_invalid_issuer_response">The host response did not contain the required issuer authentication data and PIN-change script.</string>
+    <string name="offline_pin_change_invalid_card_flow">The card did not complete a successful offline PIN verification and ARQC. The host was not contacted.</string>
+    <string name="pin_unblock_invalid_card_flow">The card did not complete the required No CVM PIN-unblock ARQC. The host was not contacted.</string>
+    <string name="pin_unblock_invalid_issuer_response">The host response did not contain the required PIN-unblock authentication data and issuer script.</string>
+    <string name="offline_pin_change_new_pin_unavailable">A confirmed encrypted new-PIN block is not available. The host was not contacted.</string>
+    <string name="pin_change_enter_new_pin">Enter New PIN</string>
+    <string name="pin_change_confirm_new_pin">Confirm New PIN</string>
+    <string name="offline_pin_change_pin_mismatch">The new PIN and confirmation do not match. Start the PIN change again.</string>
+    <string name="offline_pin_change_pin_entry_canceled">New PIN entry was canceled. The host was not contacted.</string>
+    <string name="offline_pin_change_pin_entry_timeout">New PIN entry timed out. The host was not contacted.</string>
+    <string name="offline_pin_change_ksn_error">The DUKPT KSN could not be safely consumed. The host was not contacted.</string>
 
     <!-- category: restaurant -->
     <string name="restaurant_mode">Restaurant</string>
@@ -157,6 +171,7 @@
     <string name="processing_status_tap_to_continue">Tap anywhere to continue</string>
     <string name="settlement_processing_title">Processing settlement</string>
     <string name="settlement_processing_acquirer">Acquirer: %1$s</string>
+    <string name="settlement_batch_upload_progress">Uploading transactions: %1$d/%2$d</string>
     <string name="settlement_results_title">Settlement summary</string>
     <string name="settlement_results_transactions">Transactions: %1$d</string>
     <string name="settlement_results_total">Total: %1$s</string>
@@ -206,6 +221,8 @@
     <string name="host_result_no_checking_account">No checking account.</string>
     <string name="host_result_no_savings_account">No savings account.</string>
     <string name="host_result_expired_card">Expired card.</string>
+    <string name="card_warning_expired">Card expired</string>
+    <string name="card_warning_continuing_online">Continuing online…</string>
     <string name="host_result_wrong_pin">Incorrect PIN.</string>
     <string name="host_result_no_card_record">Card record not found.</string>
     <string name="host_result_not_allowed_terminal">Transaction not allowed for this terminal.</string>
@@ -638,10 +655,21 @@
     <string name="select_application_label">Select Application</string>
     <string name="selecting_application_message">Selecting Application</string>
     <string name="partial_approval_title">Partial approval</string>
+    <string name="receipt_partial_approved">APPROVED - PARTIAL</string>
+    <string name="receipt_verify_amount">VERIFY AMOUNT</string>
+    <string name="receipt_original_amount">ORIGINAL</string>
+    <string name="receipt_approved_amount">APPROVED</string>
+    <string name="partial_approval_accept_question">Only the approved amount will be charged. Does the customer accept this partial approval?</string>
+    <string name="partial_approval_accept">Accept partial approval</string>
+    <string name="partial_approval_decline">Decline and reverse</string>
+    <string name="partial_approval_accepted">Partial approval accepted</string>
+    <string name="partial_approval_remaining_amount">Remaining amount: $%1$s</string>
+    <string name="partial_approval_remaining_question">Process another transaction for the remaining amount?</string>
+    <string name="partial_approval_present_card_remaining">Present a card for the remaining amount</string>
     <string name="check_mark_description">Check mark</string>
     <string name="capture_error_title">Error on capture:</string>
     <string name="capture_unknown_state_title">Unknown capture state:</string>
-    <string name="capture_unknown_state_message">Please check UIC Cloud and recapture if necessary</string>
+    <string name="capture_unknown_state_message">Please check the Global Connect ONE portal and recapture if necessary</string>
     <string name="check_status_open">Open</string>
     <string name="check_status_need_tip">Need Tip</string>
     <string name="check_status_closed">Closed</string>
@@ -665,6 +693,7 @@
     <string name="CVM">CVM:</string>
     <string name="CVMText">CVMText:</string>
     <string name="AID">AID:</string>
+    <string name="receipt_emv_app_label" translatable="false">APP:</string>
     <string name="TVR">TVR:</string>
     <string name="IAD">IAD:</string>
     <string name="TSI">TSI:</string>
@@ -677,13 +706,17 @@
     <string name="VOIDED">VOIDED:</string>
     <string name="receipt_voided_total">Voided total:</string>
     <string name="receipt_signature">Signature:</string>
+    <string name="receipt_no_signature_required_emv">** No Signature Required (EMV) **</string>
+    <string name="receipt_no_signature_required_cvm">** No Signature Required (CVM) **</string>
+    <string name="receipt_no_signature_required_cdcvm">** No Signature Required (CDCVM) **</string>
+    <string name="PinVerifiedICC">PIN Verified (ICC)</string>
     <string name="receipt_agreement_1">I agree to pay the above</string>
     <string name="receipt_agreement_2">amount according to the</string>
     <string name="receipt_agreement_3">card issuer agreement</string>
     <string name="merchant_copy">MERCHANT COPY</string>
     <string name="customer_copy">CUSTOMER COPY</string>
     <string name="thank_you">Thank You</string>
-    <string name="poweredbyuic">Powered by Global Connect ONE</string>
+    <string name="powered_by_global_connect">Powered by Global Connect ONE</string>
     <string name="condensed_report">Condensed Report</string>
     <string name="summary_report_title">Summary Report</string>
     <string name="audit_report_title">Audit Report</string>
@@ -764,6 +797,11 @@
     // Finish Screen
     <string name="refund_complete">Refund Complete</string>
     <string name="payment_complete">Payment Complete</string>
+    <string name="offline_pin_change_complete">PIN changed successfully</string>
+    <string name="offline_pin_change_complete_detail">The new offline PIN was saved on the card.</string>
+    <string name="offline_pin_change_finish">Finish</string>
+    <string name="pin_unblock_complete">PIN unblocked successfully</string>
+    <string name="pin_unblock_complete_detail">The issuer unblock script was successfully processed by the card.</string>
     <string name="thank_you_payment">Thank you!</string>
     <string name="no_receipt">No receipt</string>
     <string name="return_sale_screen">Return to sale</string>
@@ -792,7 +830,7 @@
     <string name="extra_purchase">Extras Sale</string>
     <string name="installment_purchase">Installment Sale</string>
     <string name="extra_balance">Extras Balance</string>
-    <string name="hotel">Hotel</string>
+    <string name="hotel">Reservations</string>
     <string name="return_sale">Refund</string>
     <string name="sale">Sale</string>
     <string name="function_not_allowed">Function Not Allowed</string>
@@ -804,6 +842,8 @@
     <string name="hotel_folio_label">Folio Number</string>
     <string name="hotel_folio_hint">Enter folio number</string>
     <string name="hotel_folio_required">Folio number is required.</string>
+    <string name="hotel_folio_exists">That folio already has an open Check-In.</string>
+    <string name="hotel_folio_step_prompt">Folio Number</string>
     <string name="hotel_check_out_heading">Hotel Check-Out</string>
     <string name="hotel_check_out_search">Search</string>
     <string name="hotel_check_out_not_found">No open check-in found for that folio.</string>
@@ -812,6 +852,8 @@
     <string name="hotel_check_out_summary_card">Card: %1$s</string>
     <string name="hotel_check_out_summary_date">Check-In Date: %1$s</string>
     <string name="hotel_check_in_report_title">Open Check-Ins</string>
+    <string name="hotel_home_incremental_check_in">Incremental Check-In</string>
+    <string name="hotel_home_delay_charge">Delay Charge</string>
     <string name="hotel_check_in_report_detail_title">Check-In Details</string>
     <string name="hotel_check_in_report_empty">There are no open check-in transactions.</string>
     <string name="hotel_check_in_report_folio">Folio: %1$s</string>
@@ -894,8 +936,25 @@
     <string name="print_pinpadkeys">Print Keys</string>
     <string name="gprs_information">GPRS Info</string>
     <string name="send_reversals">Send Reversals</string>
+    <string name="send_reversals_in_progress">Sending pending reversals…</string>
+    <string name="send_reversals_none">There are no pending reversals.</string>
+    <string name="send_reversals_result">Found %1$d pending reversal(s). Sent %2$d. Remaining %3$d.</string>
+    <string name="send_reversals_failed">Pending reversals could not be processed. Please try again.</string>
     <string name="initializing_app_data">Initializing application data…</string>
     <string name="terminal_counters">Terminal Counters</string>
+    <string name="technical_menu">Technical Menu</string>
+    <string name="erase_reversals">Erase Reversals</string>
+    <string name="erase_batch">Erase Batch</string>
+    <string name="erase">Erase</string>
+    <string name="confirm_technical_maintenance">Confirm Maintenance Operation</string>
+    <string name="erase_reversals_confirmation">Erase every pending reversal? This operation cannot be undone.</string>
+    <string name="erase_batch_confirmation">Erase every transaction in the active batch? The Clear password is required and this operation cannot be undone.</string>
+    <string name="erase_reversals_success">%1$d pending reversal(s) erased.</string>
+    <string name="erase_batch_success">%1$d active batch transaction(s) erased.</string>
+    <string name="pending_parameter_update_applied">The pending parameter update was applied after the batch became empty.</string>
+    <string name="pending_parameter_update_failed">The pending parameter update could not be applied. Check the application log.</string>
+    <string name="pending_application_update_released">The pending application update was released to xTMSAgent.</string>
+    <string name="technical_maintenance_failed">The maintenance operation failed. No deferred operation was released unless the live batch was confirmed empty. Check the application log.</string>
     <string name="stan_label">STAN</string>
     <string name="invoice_label">Invoice</string>
     <string name="batch_numbers_section">Batch Numbers</string>
@@ -970,6 +1029,8 @@
     <string name="card_reader_return_code">Return code</string>
     <string name="card_reader_entry_method">Entry method</string>
     <string name="card_reader_icc_flag">ICC card</string>
+    <string name="card_reader_remove_card">Remove card</string>
+    <string name="card_reader_remove_card_detail">Please remove the card from the chip reader to continue.</string>
     <string name="card_reader_rf_type">RF card type</string>
     <string name="card_reader_csn">Card serial number</string>
     <string name="card_reader_masked_number">Masked card number</string>
@@ -983,6 +1044,14 @@
 
     <!-- Sale transaction flow -->
     <string name="sale_present_card">Please present or insert a card.</string>
+    <string name="mobile_cvm_follow_phone">Follow the instructions on your phone.</string>
+    <string name="mobile_cvm_auto_continue">Continuing automatically in 5 seconds.</string>
+    <string name="contact_retry_required">Contact chip transaction required</string>
+    <string name="contact_retry_insert_chip">Insert the card into the ICC chip reader to continue.</string>
+    <string name="contact_retry_auto_continue">Continuing automatically in 5 seconds.</string>
+    <string name="mobile_cvm_tap_again">Tap your phone again.</string>
+    <string name="offline_pin_change_insert_card">Insert the chip card.</string>
+    <string name="pin_unblock_insert_card">Insert the blocked chip card.</string>
     <string name="sale_select_acquirer_title">Select acquirer</string>
     <string name="currency_select_title">Select Currency</string>
     <string name="currency_170">Pesos Colombianos</string>
@@ -999,6 +1068,8 @@
     <string name="sale_error_settlement_pending">Settlement in progress for %1$s. Complete settlement before processing new transactions.</string>
     <string name="sale_error_selection_timeout">Selection timed out. Please try again.</string>
     <string name="sale_error_host_declined">Transaction declined (code %1$s).</string>
+    <string name="sale_error_emv_chip_declined">Transaction Declined by Card EMV CHIP.</string>
+    <string name="sale_error_emv_chip_declined_reversal">Transaction Declined by Card EMV CHIP.\nThe transaction will be reversed.</string>
     <string name="sale_error_reversal_pending">Unable to clear pending reversal. Please try again.</string>
     <string name="sale_error_host_generic">Transaction failed: %1$s</string>
     <string name="sale_error_host_connection_safe">Failed to connect to server %1$s after %2$d tries.</string>
@@ -1006,6 +1077,7 @@
     <string name="sale_card_display">Card %1$s</string>
     <string name="action_retry">Retry</string>
     <string name="action_cancel">Cancel</string>
+    <string name="action_continue">Continue</string>
 
     <!-- Echo test transaction -->
     <string name="echo_test_transaction">Echo test</string>
@@ -1052,6 +1124,14 @@
     <string name="transaction_receipt_tran_nothing">NOTHING</string>
     <string name="transaction_display_sale">SALE</string>
     <string name="transaction_receipt_sale">SALE</string>
+    <string name="transaction_display_offline_pin_change">OFFLINE PIN CHANGE</string>
+    <string name="transaction_receipt_offline_pin_change">OFFLINE PIN CHANGE</string>
+    <string name="transaction_display_reversal_offline_pin_change">OFFLINE PIN CHANGE REVERSAL</string>
+    <string name="transaction_receipt_reversal_offline_pin_change">OFFLINE PIN CHANGE REVERSAL</string>
+    <string name="transaction_display_pin_unblock">PIN UNBLOCK</string>
+    <string name="transaction_receipt_pin_unblock">PIN UNBLOCK</string>
+    <string name="transaction_display_reversal_pin_unblock">PIN UNBLOCK REVERSAL</string>
+    <string name="transaction_receipt_reversal_pin_unblock">PIN UNBLOCK REVERSAL</string>
     <string name="transaction_display_ipp_sale">IPP SALE</string>
     <string name="transaction_receipt_ipp_sale">IPP SALE</string>
     <string name="transaction_display_cash">CASH</string>
@@ -1202,5 +1282,14 @@
     <string name="admin_ticket_created_at">Created</string>
     <string name="admin_ticket_message">Message</string>
     <string name="admin_ticket_footer">Keep this receipt for follow-up.</string>
+    <string name="audio_test">Audio test</string>
+    <string name="audio_test_description">Play each sound separately. These tests do not charge a card.</string>
+    <string name="audio_test_keypad">Keypad</string>
+    <string name="audio_test_reader">Card reader beep</string>
+    <string name="audio_test_mastercard">Mastercard</string>
+    <string name="audio_test_mastercard_reload">Mastercard — reload</string>
+    <string name="contactless_read_error">Card Read Error</string>
+    <string name="contactless_read_retry">Please present the card again.</string>
+    <string name="card_brand_not_supported">Card brand not supported</string>
 </resources>
 

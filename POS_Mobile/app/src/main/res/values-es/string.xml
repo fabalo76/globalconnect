@@ -91,11 +91,25 @@
     <string name="trans_payment">Pago</string>
     <string name="trans_loyalty_sale">Venta Puntos</string>
     <string name="trans_loyalty_balance">Consulta Puntos</string>
+    <string name="loyalty_points_available">DISP.: %1$s</string>
     <string name="trans_extras_sale">Venta Extras</string>
     <string name="trans_extras_balance">Consulta Extras</string>
     <string name="trans_quota_sale">Venta Cuotas</string>
 
     <string name="trans_error">Error</string>
+    <string name="trans_offline_pin_change">Cambiar PIN fuera de línea</string>
+    <string name="trans_pin_unblock">Desbloquear PIN</string>
+    <string name="offline_pin_change_invalid_issuer_response">La respuesta del host no contiene los datos de autenticación y el script requeridos para cambiar el PIN.</string>
+    <string name="offline_pin_change_invalid_card_flow">La tarjeta no completó correctamente la verificación del PIN fuera de línea y el ARQC. No se contactó al host.</string>
+    <string name="pin_unblock_invalid_card_flow">La tarjeta no completó el ARQC requerido para desbloquear el PIN sin verificación del titular. No se contactó al host.</string>
+    <string name="pin_unblock_invalid_issuer_response">La respuesta del host no contiene los datos de autenticación y el script requeridos para desbloquear el PIN.</string>
+    <string name="offline_pin_change_new_pin_unavailable">No está disponible un bloque cifrado y confirmado del PIN nuevo. No se contactó al host.</string>
+    <string name="pin_change_enter_new_pin">Ingrese el PIN nuevo</string>
+    <string name="pin_change_confirm_new_pin">Confirme el PIN nuevo</string>
+    <string name="offline_pin_change_pin_mismatch">El PIN nuevo y su confirmación no coinciden. Inicie nuevamente el cambio de PIN.</string>
+    <string name="offline_pin_change_pin_entry_canceled">Se canceló el ingreso del PIN nuevo. No se contactó al host.</string>
+    <string name="offline_pin_change_pin_entry_timeout">Se agotó el tiempo para ingresar el PIN nuevo. No se contactó al host.</string>
+    <string name="offline_pin_change_ksn_error">No se pudo consumir el KSN DUKPT de forma segura. No se contactó al host.</string>
 
     <!-- categoría: restaurante -->
     <string name="restaurant_mode">Restaurante</string>
@@ -158,6 +172,7 @@
     <string name="processing_status_tap_to_continue">Toca en cualquier lugar para continuar</string>
     <string name="settlement_processing_title">Procesando cierre</string>
     <string name="settlement_processing_acquirer">Adquirente: %1$s</string>
+    <string name="settlement_batch_upload_progress">Enviando transacciones: %1$d/%2$d</string>
     <string name="settlement_results_title">Resumen de liquidación</string>
     <string name="settlement_results_transactions">Transacciones: %1$d</string>
     <string name="settlement_results_total">Total: %1$s</string>
@@ -207,6 +222,8 @@
     <string name="host_result_no_checking_account">Sin cuenta corriente.</string>
     <string name="host_result_no_savings_account">Sin cuenta de ahorros.</string>
     <string name="host_result_expired_card">Tarjeta expirada.</string>
+    <string name="card_warning_expired">Tarjeta expirada</string>
+    <string name="card_warning_continuing_online">Continuando en línea…</string>
     <string name="host_result_wrong_pin">PIN incorrecto.</string>
     <string name="host_result_no_card_record">Registro de tarjeta no encontrado.</string>
     <string name="host_result_not_allowed_terminal">Transacción no permitida en este terminal.</string>
@@ -267,6 +284,8 @@
     <string name="hotel_folio_label">Número de folio</string>
     <string name="hotel_folio_hint">Ingrese el número de folio</string>
     <string name="hotel_folio_required">Se requiere el número de folio.</string>
+    <string name="hotel_folio_exists">Ese folio ya tiene un Check-In abierto.</string>
+    <string name="hotel_folio_step_prompt">Número de folio</string>
     <string name="hotel_check_out_heading">Check-out de hotel</string>
     <string name="hotel_check_out_search">Buscar</string>
     <string name="hotel_check_out_not_found">No se encontró un check-in abierto para ese folio.</string>
@@ -275,6 +294,8 @@
     <string name="hotel_check_out_summary_card">Tarjeta: %1$s</string>
     <string name="hotel_check_out_summary_date">Fecha de check-in: %1$s</string>
     <string name="hotel_check_in_report_title">Check-ins abiertos</string>
+    <string name="hotel_home_incremental_check_in">Check-In incremental</string>
+    <string name="hotel_home_delay_charge">Cargo diferido</string>
     <string name="hotel_check_in_report_detail_title">Detalles del Check-In</string>
     <string name="hotel_check_in_report_empty">No hay transacciones de check-in abiertas.</string>
     <string name="hotel_check_in_report_folio">Folio: %1$s</string>
@@ -674,10 +695,21 @@
     <string name="select_application_label">Seleccionar aplicación</string>
     <string name="selecting_application_message">Seleccionando aplicación</string>
     <string name="partial_approval_title">Aprobación parcial</string>
+    <string name="receipt_partial_approved">APROBADA - PARCIAL</string>
+    <string name="receipt_verify_amount">VERIFIQUE MONTO</string>
+    <string name="receipt_original_amount">ORIGINAL</string>
+    <string name="receipt_approved_amount">APROBADO</string>
+    <string name="partial_approval_accept_question">Solo se cobrará el monto aprobado. ¿El cliente acepta esta aprobación parcial?</string>
+    <string name="partial_approval_accept">Aceptar aprobación parcial</string>
+    <string name="partial_approval_decline">Rechazar y reversar</string>
+    <string name="partial_approval_accepted">Aprobación parcial aceptada</string>
+    <string name="partial_approval_remaining_amount">Monto restante: $%1$s</string>
+    <string name="partial_approval_remaining_question">¿Procesar otra transacción por el monto restante?</string>
+    <string name="partial_approval_present_card_remaining">Presente una tarjeta para el monto restante</string>
     <string name="check_mark_description">Marca de verificación</string>
     <string name="capture_error_title">Error en la captura:</string>
     <string name="capture_unknown_state_title">Estado de captura desconocido:</string>
-    <string name="capture_unknown_state_message">Por favor, verifique UIC Cloud y vuelva a capturar si es necesario</string>
+    <string name="capture_unknown_state_message">Verifique el portal Global Connect ONE y vuelva a capturar si es necesario</string>
     <string name="check_status_open">Abierto</string>
     <string name="check_status_need_tip">Necesita propina</string>
     <string name="check_status_closed">Cerrado</string>
@@ -714,13 +746,17 @@
     <string name="VOIDED">ANULADO:</string>
     <string name="receipt_voided_total">Total anulado:</string>
     <string name="receipt_signature">Firma:</string>
+    <string name="receipt_no_signature_required_emv">** Firma no requerida (EMV) **</string>
+    <string name="receipt_no_signature_required_cvm">** Firma no requerida (CVM) **</string>
+    <string name="receipt_no_signature_required_cdcvm">** Firma no requerida (CDCVM) **</string>
+    <string name="PinVerifiedICC">PIN Verificado (ICC)</string>
     <string name="receipt_agreement_1">Acepto pagar la cantidad mencionada</string>
     <string name="receipt_agreement_2">de acuerdo con el contrato</string>
     <string name="receipt_agreement_3">del emisor de la tarjeta </string>
     <string name="merchant_copy">COPIA COMERCIO</string>
     <string name="customer_copy">COPIA CLIENTE</string>
     <string name="thank_you">Gracias</string>
-    <string name="poweredbyuic">Powered by Global Connect ONE</string>
+    <string name="powered_by_global_connect">Powered by Global Connect ONE</string>
     <string name="condensed_report">Reporte Condensado</string>
     <string name="summary_report_title">Reporte Resumen</string>
     <string name="audit_report_title">Reporte de Auditoría</string>
@@ -802,6 +838,11 @@
     // Finish Screen
     <string name="refund_complete">Devolucion completada</string>
     <string name="payment_complete">Pago completado</string>
+    <string name="offline_pin_change_complete">PIN cambiado correctamente</string>
+    <string name="offline_pin_change_complete_detail">El nuevo PIN fuera de línea se guardó en la tarjeta.</string>
+    <string name="offline_pin_change_finish">Finalizar</string>
+    <string name="pin_unblock_complete">PIN desbloqueado correctamente</string>
+    <string name="pin_unblock_complete_detail">La tarjeta procesó correctamente el script de desbloqueo del emisor.</string>
     <string name="thank_you_payment">¡Gracias!</string>
     <string name="no_receipt">Sin recibo</string>
     <string name="return_sale_screen">Regresar a la venta</string>
@@ -829,7 +870,7 @@
     <string name="extra_purchase">Compra Extras</string>
     <string name="installment_purchase">Compra Cuotas</string>
     <string name="extra_balance">Saldo Extras</string>
-    <string name="hotel">Hotel</string>
+    <string name="hotel">Reservas</string>
     <string name="return_sale">Devolución</string>
     <string name="sale">Venta</string>
     <string name="function_not_allowed">Función No Permitida</string>
@@ -894,7 +935,24 @@
     <string name="print_pinpadkeys">Imprimir Llaves</string>
     <string name="gprs_information">Info. GPRS </string>
     <string name="send_reversals">Enviar Reversos</string>
+    <string name="send_reversals_in_progress">Enviando reversos pendientes…</string>
+    <string name="send_reversals_none">No hay reversos pendientes.</string>
+    <string name="send_reversals_result">Se encontraron %1$d reverso(s) pendiente(s). Enviados: %2$d. Restantes: %3$d.</string>
+    <string name="send_reversals_failed">No se pudieron procesar los reversos pendientes. Intente nuevamente.</string>
     <string name="terminal_counters">Contadores de Terminal</string>
+    <string name="technical_menu">Menú Técnico</string>
+    <string name="erase_reversals">Borrar Reversos</string>
+    <string name="erase_batch">Borrar Lote</string>
+    <string name="erase">Borrar</string>
+    <string name="confirm_technical_maintenance">Confirmar Operación de Mantenimiento</string>
+    <string name="erase_reversals_confirmation">¿Borrar todos los reversos pendientes? Esta operación no se puede deshacer.</string>
+    <string name="erase_batch_confirmation">¿Borrar todas las transacciones del lote activo? Se requiere la contraseña de limpieza y esta operación no se puede deshacer.</string>
+    <string name="erase_reversals_success">Se borraron %1$d reverso(s) pendiente(s).</string>
+    <string name="erase_batch_success">Se borraron %1$d transacción(es) del lote activo.</string>
+    <string name="pending_parameter_update_applied">La actualización de parámetros pendiente se aplicó después de vaciar el lote.</string>
+    <string name="pending_parameter_update_failed">No se pudo aplicar la actualización de parámetros pendiente. Revise el registro de la aplicación.</string>
+    <string name="pending_application_update_released">La actualización de aplicación pendiente fue liberada a xTMSAgent.</string>
+    <string name="technical_maintenance_failed">La operación de mantenimiento falló. No se liberó ninguna operación diferida a menos que se confirmara que el lote estaba vacío. Revise el registro de la aplicación.</string>
     <string name="print_test">Prueba de Impresión</string>
     <string name="entrymode_short">MOD.ENT: %1$s</string>
     <string name="entrymode_MSR">BANDA</string>
@@ -965,6 +1023,8 @@
     <string name="card_reader_return_code">Código de retorno</string>
     <string name="card_reader_entry_method">Método de entrada</string>
     <string name="card_reader_icc_flag">Tarjeta ICC</string>
+    <string name="card_reader_remove_card">Retire la tarjeta</string>
+    <string name="card_reader_remove_card_detail">Retire la tarjeta del lector de chip para continuar.</string>
     <string name="card_reader_rf_type">Tipo de tarjeta RF</string>
     <string name="card_reader_csn">Número de serie de la tarjeta</string>
     <string name="card_reader_masked_number">Número de tarjeta enmascarado</string>
@@ -978,12 +1038,22 @@
 
     <!-- Flujo de venta -->
     <string name="sale_present_card">Presente o inserte una tarjeta.</string>
+    <string name="mobile_cvm_follow_phone">Siga las instrucciones en su teléfono.</string>
+    <string name="mobile_cvm_auto_continue">Continuando automáticamente en 5 segundos.</string>
+    <string name="contact_retry_required">Se requiere una transacción con chip de contacto</string>
+    <string name="contact_retry_insert_chip">Inserte la tarjeta en el lector de chip ICC para continuar.</string>
+    <string name="contact_retry_auto_continue">Continuando automáticamente en 5 segundos.</string>
+    <string name="mobile_cvm_tap_again">Acerque su teléfono de nuevo.</string>
+    <string name="offline_pin_change_insert_card">Inserte la tarjeta con chip.</string>
+    <string name="pin_unblock_insert_card">Inserte la tarjeta con chip bloqueada.</string>
     <string name="sale_select_acquirer_title">Seleccione adquirente</string>
     <string name="sale_host_processing">Procesando transacción…</string>
     <string name="sale_error_no_acquirer">No hay un adquirente disponible para esta tarjeta.</string>
     <string name="sale_error_settlement_pending">Existe un cierre pendiente para %1$s. Complete el cierre antes de procesar nuevas transacciones.</string>
     <string name="sale_error_selection_timeout">La selección expiró. Intente nuevamente.</string>
     <string name="sale_error_host_declined">Transacción rechazada (código %1$s).</string>
+    <string name="sale_error_emv_chip_declined">Transacción rechazada por la tarjeta EMV CHIP.</string>
+    <string name="sale_error_emv_chip_declined_reversal">Transacción rechazada por la tarjeta EMV CHIP.\nLa transacción será reversada.</string>
     <string name="sale_error_reversal_pending">No se pudo borrar el reverso pendiente. Intente nuevamente.</string>
     <string name="sale_error_host_generic">La transacción falló: %1$s</string>
     <string name="sale_error_host_connection_safe">No se pudo conectar al servidor %1$s después de %2$d intento(s).</string>
@@ -991,6 +1061,7 @@
     <string name="sale_card_display">Tarjeta %1$s</string>
     <string name="action_retry">Reintentar</string>
     <string name="action_cancel">Cancelar</string>
+    <string name="action_continue">Continuar</string>
 
     <!-- Transacción de prueba Echo -->
     <string name="echo_test_transaction">Prueba Echo</string>
@@ -1037,6 +1108,14 @@
     <string name="transaction_receipt_tran_nothing">NADA</string>
     <string name="transaction_display_sale">VENTA</string>
     <string name="transaction_receipt_sale">VENTA</string>
+    <string name="transaction_display_offline_pin_change">CAMBIO DE PIN FUERA DE LÍNEA</string>
+    <string name="transaction_receipt_offline_pin_change">CAMBIO DE PIN FUERA DE LÍNEA</string>
+    <string name="transaction_display_reversal_offline_pin_change">REVERSO DE CAMBIO DE PIN</string>
+    <string name="transaction_receipt_reversal_offline_pin_change">REVERSO DE CAMBIO DE PIN</string>
+    <string name="transaction_display_pin_unblock">DESBLOQUEO DE PIN</string>
+    <string name="transaction_receipt_pin_unblock">DESBLOQUEO DE PIN</string>
+    <string name="transaction_display_reversal_pin_unblock">REVERSO DE DESBLOQUEO DE PIN</string>
+    <string name="transaction_receipt_reversal_pin_unblock">REVERSO DE DESBLOQUEO DE PIN</string>
     <string name="transaction_display_ipp_sale">IPP VENTA</string>
     <string name="transaction_receipt_ipp_sale">IPP VENTA</string>
     <string name="transaction_display_cash">EFECTIVO</string>
@@ -1187,4 +1266,13 @@
     <string name="admin_ticket_message">Mensaje</string>
     <string name="admin_ticket_footer">Conserve este recibo para seguimiento.</string>
 
+    <string name="audio_test">Prueba de audio</string>
+    <string name="audio_test_description">Reproduzca cada sonido por separado. Estas pruebas no realizan cobros.</string>
+    <string name="audio_test_keypad">Teclado</string>
+    <string name="audio_test_reader">Pitido del lector</string>
+    <string name="audio_test_mastercard">Mastercard</string>
+    <string name="audio_test_mastercard_reload">Mastercard — recargar</string>
+    <string name="contactless_read_error">Error de lectura de tarjeta</string>
+    <string name="contactless_read_retry">Presente la tarjeta nuevamente.</string>
+    <string name="card_brand_not_supported">Marca de tarjeta no admitida</string>
 </resources>

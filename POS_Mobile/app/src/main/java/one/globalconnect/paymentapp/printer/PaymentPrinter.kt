@@ -53,7 +53,8 @@ interface PaymentPrinter {
         profile: Profile,
         tmsDatabase: TMSDATA,
         bitmap: ImageBitmap? = null,
-        recipient: String = MERCHANT
+        recipient: String = MERCHANT,
+        onPrintResult: ((Boolean) -> Unit)? = null,
     )
 
     fun printReversalReceipt(

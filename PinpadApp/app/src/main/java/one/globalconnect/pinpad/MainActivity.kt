@@ -18,6 +18,8 @@ import android.os.SystemClock
 import android.provider.Settings
 import android.util.Log
 import android.view.KeyEvent
+import android.view.View
+import android.view.WindowManager
 import android.widget.Toast
 import android.widget.VideoView
 import androidx.activity.ComponentActivity
@@ -148,6 +150,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 
 private const val VISA_SENSORY_FALLBACK_MS = 5_000L
 private const val MASTERCARD_SENSORY_FALLBACK_MS = 12_000L
@@ -169,6 +172,7 @@ class MainActivity : ComponentActivity() {
     private var licenseRegistering by mutableStateOf(false)
     private var exitingToAndroidHome = false
     private var leavingPinpadUi = false
+    private val nexgoSystemBarsGeneration = AtomicLong(0L)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -520,7 +524,16 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun enterImmersiveFullscreen() {
+        window.addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
         WindowCompat.setDecorFitsSystemWindows(window, false)
+        @Suppress("DEPRECATION")
+        window.decorView.systemUiVisibility =
+            View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or
+                View.SYSTEM_UI_FLAG_FULLSCREEN or
+                View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
+                View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
+                View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
+                View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
         WindowInsetsControllerCompat(window, window.decorView).apply {
             hide(WindowInsetsCompat.Type.systemBars())
             systemBarsBehavior =
@@ -548,12 +561,16 @@ class MainActivity : ComponentActivity() {
 
     private fun showAndroidSystemBars() {
         WindowCompat.setDecorFitsSystemWindows(window, true)
+        window.clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
+        @Suppress("DEPRECATION")
+        run { window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_VISIBLE }
         WindowInsetsControllerCompat(window, window.decorView).show(WindowInsetsCompat.Type.systemBars())
     }
 
     private fun restoreNexgoNavigationControls(action: () -> Unit) {
         val completed = AtomicBoolean(false)
         val mainHandler = Handler(Looper.getMainLooper())
+        val generation = nexgoSystemBarsGeneration.incrementAndGet()
         fun complete() {
             if (!completed.compareAndSet(false, true)) return
             mainHandler.postDelayed(action, SYSTEM_BAR_EXIT_DELAY_MS)
@@ -561,7 +578,7 @@ class MainActivity : ComponentActivity() {
 
         mainHandler.postDelayed(::complete, NEXGO_NAVIGATION_RESTORE_TIMEOUT_MS)
         Thread {
-            applyNexgoSystemBarsLocked(false)
+            applyNexgoSystemBarsLocked(false, generation)
             runCatching {
                 val helper = SystemServiceHelper.getInstance()
                 helper.init(applicationContext)
@@ -588,8 +605,11 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun applyNexgoSystemBarsLockedAsync(locked: Boolean) {
+        val generation = nexgoSystemBarsGeneration.incrementAndGet()
         Thread {
-            applyNexgoSystemBarsLocked(locked)
+            if (nexgoSystemBarsGeneration.get() == generation) {
+                applyNexgoSystemBarsLocked(locked, generation)
+            }
         }.apply {
             name = "PINPADSystemBars"
             isDaemon = true
@@ -597,16 +617,23 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun applyNexgoSystemBarsLocked(locked: Boolean) {
+    private fun applyNexgoSystemBarsLocked(locked: Boolean, generation: Long? = null) {
         val platform = (applicationContext as PinpadApplication).deviceEngine.platform
         runCatching {
             val helper = SystemServiceHelper.getInstance()
             helper.init(applicationContext)
+            if (generation != null && nexgoSystemBarsGeneration.get() != generation) {
+                return@runCatching
+            }
             helper.getSystemUIManager()?.apply {
-                enableControlBar(!locked)
-                enableMessageBar(!locked)
-                enableHome(!locked)
-                enableRecv(!locked)
+                val controlBar = enableControlBar(!locked)
+                val messageBar = enableMessageBar(!locked)
+                val home = enableHome(!locked)
+                val recents = enableRecv(!locked)
+                PinpadTraceLog.device(
+                    "system UI requested locked=$locked controlBar=$controlBar " +
+                        "messageBar=$messageBar home=$home recents=$recents",
+                )
             }
             if (locked) {
                 platform.hideNavigationBar()
@@ -721,7 +748,7 @@ private fun PinpadSettingsMenu(
     val context = LocalContext.current
     val passwordStore = remember(context) { PinpadSettingsPasswordStore(context) }
     val modelName = remember(context) { (context.applicationContext as PinpadApplication).deviceInfoProvider.modelName() }
-    val useHardwarePasswordEntry = remember(modelName) { modelName.isCt20pModel() }
+    val useHardwarePasswordEntry = remember(modelName) { DeviceModelConfig.hasPhysicalKeypad(modelName) }
     var protectedAction by remember { mutableStateOf<SettingsProtectedAction?>(null) }
     var passwordFailCount by remember { mutableStateOf(0) }
     var passwordLockUntilMs by remember { mutableStateOf(0L) }
@@ -1144,10 +1171,6 @@ private fun androidx.compose.ui.input.key.KeyEvent.passwordDigit(): Char? {
     }
 }
 
-private fun String.isCt20pModel(): Boolean {
-    return uppercase().filter(Char::isLetterOrDigit).contains("CT20P")
-}
-
 private enum class SettingsProtectedAction {
     AndroidSettings,
     ExitToAndroidHome,
@@ -1297,10 +1320,7 @@ private fun PinpadPromptContent(
         is PinpadDisplayState.TextEntry -> TextEntryPrompt(state)
         is PinpadDisplayState.EnterPin -> PinEntryPrompt(state.digits, state.promptLines)
         is PinpadDisplayState.KeyLoadAuthentication -> KeyLoadAuthenticationPrompt(state)
-        PinpadDisplayState.KeyInjectionMode -> PromptText(
-            stringResource(R.string.key_injection_mode_active),
-            Color(0xFF90F0B0),
-        )
+        PinpadDisplayState.KeyInjectionMode -> KeyInjectionModePrompt()
         is PinpadDisplayState.SignatureCapture -> SignatureCapturePrompt(state)
         is PinpadDisplayState.PhotoCapture -> PhotoCapturePrompt(state)
         is PinpadDisplayState.QrDisplay -> QrDisplayPrompt(state)
@@ -1331,6 +1351,46 @@ private fun PinpadPromptContent(
         is PinpadDisplayState.JpegSequence -> JpegSequencePrompt(state.paths)
         is PinpadDisplayState.Media -> MediaPrompt(state.path, state.video)
         is PinpadDisplayState.BrandSensory -> BrandSensoryPrompt(state.brand)
+    }
+}
+
+@Composable
+private fun KeyInjectionModePrompt() {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(top = 14.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .border(1.dp, Color(0xFF315C42), RoundedCornerShape(8.dp)),
+            color = Color(0xFF102419),
+            shape = RoundedCornerShape(8.dp),
+        ) {
+            Column(
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Text(
+                    text = stringResource(R.string.key_injection_mode_active),
+                    color = Color(0xFF90F0B0),
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    textAlign = TextAlign.Center,
+                    lineHeight = 24.sp,
+                )
+                Text(
+                    text = stringResource(R.string.key_injection_mode_hint),
+                    color = Color(0xFFB8C8BE),
+                    fontSize = 14.sp,
+                    textAlign = TextAlign.Center,
+                    lineHeight = 18.sp,
+                )
+            }
+        }
     }
 }
 
@@ -1617,7 +1677,7 @@ private fun BrandSensoryPrompt(brand: SensoryBrand) {
     LaunchedEffect(brand) {
         delay(brand.fallbackMs)
         if (PinpadDisplayController.state is PinpadDisplayState.BrandSensory) {
-            PinpadDisplayController.showIdle()
+            PinpadDisplayController.completeBrandSensory(brand)
         }
     }
     when (brand) {
@@ -1650,7 +1710,7 @@ private fun VisaSensoryPrompt() {
                 }
             },
             update = { view ->
-                view.animate { PinpadDisplayController.showIdle() }
+                view.animate { PinpadDisplayController.completeBrandSensory(SensoryBrand.Visa) }
             },
         )
     }
@@ -1863,7 +1923,7 @@ private object PinpadSensoryCache {
             )
         }.onFailure { error ->
             Log.w(BRAND_SENSORY_LOG_TAG, "Mastercard Sonic prepare failed", error)
-            PinpadDisplayController.showIdle()
+            PinpadDisplayController.completeBrandSensory(SensoryBrand.Mastercard)
         }
     }
 
@@ -1883,13 +1943,13 @@ private object PinpadSensoryCache {
             controller.play(sonicView, object : OnCompleteListener {
                 override fun onComplete(statusCode: Int) {
                     Log.d(BRAND_SENSORY_LOG_TAG, "Mastercard Sonic complete status=$statusCode")
-                    PinpadDisplayController.showIdle()
+                    PinpadDisplayController.completeBrandSensory(SensoryBrand.Mastercard)
                     prewarmMastercard(context)
                 }
             })
         }.onFailure { error ->
             Log.w(BRAND_SENSORY_LOG_TAG, "Mastercard Sonic play failed", error)
-            PinpadDisplayController.showIdle()
+            PinpadDisplayController.completeBrandSensory(SensoryBrand.Mastercard)
             prewarmMastercard(context)
         }
     }

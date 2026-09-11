@@ -25,6 +25,7 @@ import com.mastercard.sonic.controller.SonicEnvironment
 import com.mastercard.sonic.controller.SonicType
 import com.mastercard.sonic.model.SonicMerchant
 import com.mastercard.sonic.widget.SonicView
+import one.globalconnect.paymentapp.utils.AudioPlaybackDiagnostics
 
 private const val TAG = "BrandingAnimation"
 
@@ -35,6 +36,7 @@ fun BrandingAnimationOverlay(
     merchantId: String = "",
     city: String = "",
     countryCode: String = "USA",
+    usePreparedController: Boolean = true,
     onComplete: () -> Unit,
 ) {
     val type = cardType.lowercase()
@@ -47,6 +49,7 @@ fun BrandingAnimationOverlay(
             merchantId = merchantId,
             city = city,
             countryCode = countryCode,
+            usePreparedController = usePreparedController,
             onComplete = onComplete,
         )
         null -> LaunchedEffect(Unit) { onComplete() }
@@ -93,6 +96,7 @@ private fun VisaBrandingAnimation(onComplete: () -> Unit) {
                 .fillMaxWidth()
                 .wrapContentHeight(),
             factory = { ctx ->
+                AudioPlaybackDiagnostics.log(ctx, "Visa sensory start")
                 BrandingAnimationCache.buildVisaView(ctx, backdropColorArgb, langCode)
             },
             update = { vsb ->
@@ -109,6 +113,7 @@ private fun MastercardBrandingAnimation(
     merchantId: String,
     city: String,
     countryCode: String,
+    usePreparedController: Boolean,
     onComplete: () -> Unit,
 ) {
     Box(
@@ -119,6 +124,7 @@ private fun MastercardBrandingAnimation(
         AndroidView(
             modifier = Modifier.fillMaxSize(),
             factory = { ctx ->
+                AudioPlaybackDiagnostics.log(ctx, "Mastercard sensory start")
                 val sonicView = SonicView(ctx)
                 val mcMerchantName = merchantName.ifBlank { "Merchant" }
                 val mcMerchantId = merchantId.ifBlank { "0" }
@@ -126,13 +132,14 @@ private fun MastercardBrandingAnimation(
                 val mcCountry = countryCode.ifBlank { "USA" }
                 Log.d(TAG, "MC Sonic params: sonicType=SOUND_AND_ANIMATION sonicCue=checkout env=PRODUCTION haptics=true merchantName=$mcMerchantName merchantId=$mcMerchantId city=$mcCity countryCode=$mcCountry mcc=5999")
 
-                val preparedController = BrandingAnimationCache.takeSonicController()
+                val preparedController = if (usePreparedController) BrandingAnimationCache.takeSonicController() else null
                 if (preparedController != null) {
                     Log.d(TAG, "MC Sonic playing from pre-prepared controller")
                     preparedController.play(sonicView, object : OnCompleteListener {
                         override fun onComplete(statusCode: Int) {
                             Log.d(TAG, "MC Sonic onComplete statusCode=$statusCode")
-                            BrandingAnimationCache.onSonicPlayComplete(ctx)
+                            AudioPlaybackDiagnostics.log(ctx, "Mastercard sensory complete status=$statusCode")
+                            BrandingAnimationCache.onSonicPlayComplete(ctx, preparedController, statusCode)
                             onComplete()
                         }
                     })
@@ -152,14 +159,20 @@ private fun MastercardBrandingAnimation(
                         sonicEnvironment = SonicEnvironment.PRODUCTION,
                         merchant = merchant,
                         isHapticsEnabled = true,
-                        context = ctx,
+                        context = ctx.applicationContext,
                         onPrepareListener = object : OnPrepareListener {
                             override fun onPrepared(statusCode: Int) {
-                                Log.d(TAG, "MC Sonic onPrepared statusCode=$statusCode — calling play()")
+                                Log.d(TAG, "MC Sonic onPrepared statusCode=$statusCode")
+                                if (!isSonicSuccess(statusCode)) {
+                                    Log.w(TAG, "MC Sonic preparation failed; skipping playback")
+                                    onComplete()
+                                    return
+                                }
                                 sonicController.play(sonicView, object : OnCompleteListener {
                                     override fun onComplete(statusCode: Int) {
                                         Log.d(TAG, "MC Sonic onComplete statusCode=$statusCode")
-                                        BrandingAnimationCache.onSonicPlayComplete(ctx)
+                                        AudioPlaybackDiagnostics.log(ctx, "Mastercard sensory complete status=$statusCode")
+                                        BrandingAnimationCache.onSonicPlayComplete(ctx, sonicController, statusCode)
                                         onComplete()
                                     }
                                 })

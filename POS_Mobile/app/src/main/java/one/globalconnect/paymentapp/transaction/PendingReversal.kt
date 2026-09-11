@@ -36,6 +36,7 @@ enum class ReversalReason {
     NO_RESPONSE,
     RESPONSE_91,
     RESPONSE_96,
+    USER_DECLINED_PARTIAL,
     UNKNOWN
 }
 

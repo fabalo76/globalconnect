@@ -16,8 +16,10 @@ import one.globalconnect.paymentapp.R
 import one.globalconnect.paymentapp.GlobalConnectPaymentApplication
 import one.globalconnect.paymentapp.cardreader.nexgo.EmvTransactionListener
 import one.globalconnect.paymentapp.cardreader.nexgo.EmvTransactionRequest
+import one.globalconnect.paymentapp.cardreader.nexgo.EmvTransactionPurpose
 import one.globalconnect.paymentapp.cardreader.nexgo.MagstripeData
 import one.globalconnect.paymentapp.cardreader.nexgo.NexgoApi
+import one.globalconnect.paymentapp.cardreader.nexgo.awaitContactCardRemoval
 import one.globalconnect.paymentapp.cardreader.nexgo.NexgoSdkResult
 import one.globalconnect.paymentapp.cardreader.nexgo.OnlinePinScheme
 import one.globalconnect.paymentapp.cardreader.nexgo.PinStatus
@@ -51,11 +53,15 @@ internal val EMV_TAG_WHITELIST = arrayOf(
     "9f03",
     "9f33",
     "9f34",
+    "9f6e",
     "9b",
+    "9f5b",
     "9f35",
     "9f1e",
     "9f09",
     "84",
+    "9f12",
+    "50",
     "9f41",
     "5a",
     "57",
@@ -101,11 +107,16 @@ class CardReaderViewModel(
      * Initiates a card search across magnetic, contact, and contactless readers.
      */
     fun startCardSearch(
+        invoiceNumber: String,
         amount: String,
         cashbackAmount: String = "0.00",
         timeoutSeconds: Int = 60,
         countryCode: String = "0840",
         currencyCode: String = "0840",
+        allowSwipe: Boolean = true,
+        allowContact: Boolean = true,
+        allowContactless: Boolean = true,
+        purpose: EmvTransactionPurpose = EmvTransactionPurpose.PAYMENT,
     ) {
         Log.d(
             TAG,
@@ -131,6 +142,7 @@ class CardReaderViewModel(
                 cardData = null,
                 onlineAuthorizationPending = false,
                 applicationSelection = null,
+                mobileCvmSecondTap = false,
             )
         }
 
@@ -144,14 +156,15 @@ class CardReaderViewModel(
         val request = EmvTransactionRequest(
             amount = normalizedAmount,
             cashbackAmount = normalizedCashback,
-            traceNumber = nextTraceNumber(),
+            traceNumber = invoiceNumber,
             timeoutSeconds = timeoutSeconds,
-            allowSwipe = true,
-            allowContact = true,
-            allowContactless = true,
-            forceOnline = false,
+            allowSwipe = allowSwipe,
+            allowContact = allowContact,
+            allowContactless = allowContactless,
+            forceOnline = purpose == EmvTransactionPurpose.OFFLINE_PIN_UNBLOCK,
             countryCode = countryCode,
             currencyCode = currencyCode,
+            purpose = purpose,
         )
 
         Log.d(TAG, "startCardSearch created request trace=${request.traceNumber}")
@@ -174,6 +187,7 @@ class CardReaderViewModel(
                         )
                     ),
                     cardData = null,
+                    mobileCvmSecondTap = false,
                 )
             }
         }
@@ -212,7 +226,71 @@ class CardReaderViewModel(
                 cardData = null,
                 onlineAuthorizationPending = false,
                 applicationSelection = null,
+                mobileCvmSecondTap = false,
             )
+        }
+    }
+
+    /** Continues the same kernel transaction after the first tap requests mobile verification. */
+    fun continueMobileCvmCardSearch(timeoutSeconds: Int = 60) {
+        synchronized(stateLock) {
+            if (searchActive) {
+                Log.d(TAG, "Mobile CVM continuation already active, ignoring request")
+                return
+            }
+            searchActive = true
+        }
+
+        activeCardInfo = null
+        activeSlot = null
+        postState {
+            it.copy(
+                isSearching = true,
+                status = CardReaderStatus.Waiting,
+                cardData = null,
+                onlineAuthorizationPending = false,
+                applicationSelection = null,
+                mobileCvmSecondTap = true,
+            )
+        }
+
+        val started = runCatching {
+            nexgoApi.continueMobileCvmTransaction(timeoutSeconds)
+        }.onFailure { error ->
+            Log.e(TAG, "Unable to continue mobile CVM transaction", error)
+        }.getOrDefault(false)
+
+        if (!started) {
+            synchronized(stateLock) { searchActive = false }
+            postState {
+                it.copy(
+                    isSearching = false,
+                    status = CardReaderStatus.Error(
+                        getString(R.string.card_reader_error_exception, "Mobile CVM context unavailable")
+                    ),
+                    cardData = null,
+                    mobileCvmSecondTap = false,
+                )
+            }
+        }
+    }
+
+    fun beepMobileCvmInstruction() {
+        nexgoApi.beepSeePhoneInstruction()
+    }
+
+    /** Produces audible feedback while the contact ICC retry instruction is visible. */
+    fun beepContactCardRequired() {
+        nexgoApi.beepContactCardRequired()
+    }
+
+    /**
+     * Suspends navigation or the next authorization until the customer removes a contact card.
+     * Card presence is polled on the I/O dispatcher because the Nexgo SDK reads device state.
+     */
+    suspend fun awaitContactCardRemoval() {
+        nexgoApi.awaitContactCardRemoval { required ->
+            _uiState.update { it.copy(cardRemovalRequired = required) }
         }
     }
 
@@ -233,12 +311,10 @@ class CardReaderViewModel(
 
     override fun onCleared() {
         Log.d(TAG, "onCleared invoked")
-        try {
-            nexgoApi.cancelTransaction()
-            Log.d(TAG, "onCleared requested Nexgo cancellation")
-        } catch (error: Throwable) {
-            Log.w(TAG, "Failed to cancel card transaction on clear", error)
-        }
+        // A completed reader screen can be disposed after the result screen has
+        // started sensory playback. Only cancel SDK work if our search is active;
+        // otherwise this would issue a second hardware cancellation after completion.
+        cancelCardSearch()
         nexgoApi.transactionListener = null
         Log.d(TAG, "onCleared released Nexgo API listeners")
         super.onCleared()
@@ -282,7 +358,19 @@ class CardReaderViewModel(
         return try {
             val raw = handler.getTlvByTags(EMV_TAG_WHITELIST)
             Log.d(TAG, "gatherEmvData rawLength=${raw?.length}")
-            parseEmvData(raw)
+            val field55Data = parseEmvData(raw)
+
+            // Cardholder name (5F20) is needed for the receipt but must not be appended to DE55.
+            val cardholderData = runCatching {
+                parseEmvData(handler.getTlvByTags(arrayOf("5f20")))
+            }.onFailure { error ->
+                Log.d(TAG, "Cardholder name tag 5F20 is unavailable", error)
+            }.getOrDefault(EmvData())
+            field55Data.copy(
+                tags = (field55Data.tags + cardholderData.tags)
+                    .distinctBy { tag -> tag.tag.uppercase(Locale.US) },
+                values = field55Data.values + cardholderData.values,
+            )
         } catch (error: Throwable) {
             Log.w(TAG, "Unable to read EMV tags", error)
             EmvData()
@@ -412,6 +500,7 @@ class CardReaderViewModel(
                 cardData = if (status is CardReaderStatus.Success) result else null,
                 onlineAuthorizationPending = false,
                 applicationSelection = null,
+                mobileCvmSecondTap = false,
             )
         }
     }
@@ -422,12 +511,6 @@ class CardReaderViewModel(
             Log.d(TAG, "postState applying reducer")
             _uiState.update(reducer)
         }
-    }
-
-    private fun nextTraceNumber(): String {
-        Log.d(TAG, "nextTraceNumber invoked")
-        val value = (System.currentTimeMillis() % 1_000_000).toInt()
-        return value.toString().padStart(6, '0')
     }
 
     private fun normaliseAmountInput(value: String): String {
@@ -470,6 +553,10 @@ class CardReaderViewModel(
         val onlinePinScheme = NexgoApi.pinData.scheme.takeIf { onlinePinEntered }
         val onlinePinKeyIndex = NexgoApi.pinData.keyIndex.takeIf { onlinePinEntered }
         val compatibleAcquirerIds = NexgoApi.pinData.compatibleAcquirerIds.takeIf { onlinePinEntered }.orEmpty()
+        val kernelCvmResult = runCatching { NexgoApi.emvHandler?.emvCvmResult?.name }
+            .onFailure { error -> Log.w(TAG, "Unable to read kernel CVM result", error) }
+            .getOrNull()
+        Log.d(TAG, "createCardResult kernelCvmResult=$kernelCvmResult")
 
         return base?.copy(
             maskedCardNumber = base.maskedCardNumber ?: derived.maskedPan,
@@ -486,6 +573,7 @@ class CardReaderViewModel(
             onlinePinScheme = onlinePinScheme,
             onlinePinKeyIndex = onlinePinKeyIndex,
             onlinePinAcquirerIds = compatibleAcquirerIds,
+            kernelCvmResult = kernelCvmResult,
         ) ?: CardReadResult(
             returnCode = retCode,
             slotType = slot,
@@ -507,6 +595,7 @@ class CardReaderViewModel(
             onlinePinScheme = onlinePinScheme,
             onlinePinKeyIndex = onlinePinKeyIndex,
             onlinePinAcquirerIds = compatibleAcquirerIds,
+            kernelCvmResult = kernelCvmResult,
         )
     }
 
@@ -813,14 +902,25 @@ class CardReaderViewModel(
             val wasOnlineAuthorizationPending = _uiState.value.onlineAuthorizationPending
             val emvData = gatherEmvData()
             val cardResult = createCardResult(resultCode, activeCardInfo, null, emvData)
-            val status = if (resultCode == SdkResult.Success) {
-                CardReaderStatus.Success
-            } else {
-                val errorMessage = NexgoApi.pinData.errorMessage.ifBlank {
-                    NexgoSdkResult.friendlyMessage(resultCode)
+            val status = when (resultCode) {
+                SdkResult.Success -> CardReaderStatus.Success
+                NexgoSdkResult.Emv_Plz_See_Phone -> {
+                    Log.i(TAG, "Mobile CVM requested; waiting before contactless-only second tap")
+                    CardReaderStatus.MobileCvmRequired
                 }
-                Log.w(TAG, "EMV result: $sdkName ($resultCode) — $errorMessage")
-                CardReaderStatus.Error(errorMessage)
+                else -> {
+                    val errorMessage = NexgoApi.pinData.errorMessage.ifBlank {
+                        if (resultCode == NexgoSdkResult.Emv_Candidatelist_Empty) {
+                            getString(R.string.card_brand_not_supported)
+                        } else NexgoSdkResult.friendlyMessage(resultCode)
+                    }
+                    Log.w(TAG, "EMV result: $sdkName ($resultCode) — $errorMessage")
+                    CardReaderStatus.Error(
+                        reason = errorMessage,
+                        resultCode = resultCode,
+                        cardSlot = cardResult.slotType,
+                    )
+                }
             }
             finishTransaction(status, cardResult)
             if (wasOnlineAuthorizationPending) {
@@ -908,6 +1008,8 @@ data class CardReaderUiState(
     val cardData: CardReadResult? = null,
     val onlineAuthorizationPending: Boolean = false,
     val applicationSelection: EmvApplicationSelection? = null,
+    val cardRemovalRequired: Boolean = false,
+    val mobileCvmSecondTap: Boolean = false,
 )
 
 data class EmvApplicationSelection(
@@ -921,8 +1023,13 @@ sealed class CardReaderStatus {
     data object ProcessingEmv : CardReaderStatus()
     data object SwipeIncorrect : CardReaderStatus()
     data object MultipleCards : CardReaderStatus()
+    data object MobileCvmRequired : CardReaderStatus()
     data object Success : CardReaderStatus()
-    data class Error(val reason: String) : CardReaderStatus()
+    data class Error(
+        val reason: String,
+        val resultCode: Int? = null,
+        val cardSlot: CardSlotTypeEnum? = null,
+    ) : CardReaderStatus()
 }
 
 data class CardReadResult(
@@ -946,6 +1053,8 @@ data class CardReadResult(
     val onlinePinScheme: OnlinePinScheme? = null,
     val onlinePinKeyIndex: Int? = null,
     val onlinePinAcquirerIds: Set<String> = emptySet(),
+    val pinChangePinConfirmed: Boolean = false,
+    val kernelCvmResult: String? = null,
 )
 
 data class EmvTag(

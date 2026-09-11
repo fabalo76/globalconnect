@@ -20,7 +20,7 @@ internal sealed partial class A10DemoControl
     private static string PersistentKeySettingsPath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "Global Connect ONE",
-        "Pinpad Media Manager",
+        "Pinpad Demo",
         "key-injection-test-settings.json");
 
     private Control BuildKeyInjectionPage()
@@ -29,7 +29,7 @@ internal sealed partial class A10DemoControl
         {
             Dock = DockStyle.Fill,
             ColumnCount = 2,
-            RowCount = 4,
+            RowCount = 3,
             Padding = new Padding(8),
         };
         root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
@@ -37,13 +37,11 @@ internal sealed partial class A10DemoControl
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 62));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 38));
-        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
-        var showKeys = new CheckBox { Text = "Show key material", AutoSize = true, Checked = true };
-        var sessionKey = SecretValue("32323638373037353232363836333237", 48);
+        var showKeys = new CheckBox { Text = "Show clear key material", AutoSize = true, Checked = true };
+        var sessionKey = SharedSessionKeyEditor();
         var activeMaster = Combo("0", "1", "2", "3", "4", "5", "6", "7", "8", "9");
         var activeDukpt = Combo("0", "1");
-        sessionKey.UseSystemPasswordChar = false;
         sessionKey.Width = 330;
         sessionKey.Dock = DockStyle.None;
         activeMaster.Width = 65;
@@ -53,6 +51,7 @@ internal sealed partial class A10DemoControl
         var toolbar = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, WrapContents = true };
         toolbar.Controls.Add(new Label { Text = "Session key", AutoSize = true, Margin = new Padding(3, 9, 4, 0) });
         toolbar.Controls.Add(sessionKey);
+        toolbar.Controls.Add(CreateKeyLengthLabel(sessionKey));
         toolbar.Controls.Add(showKeys);
         toolbar.Controls.Add(new Label { Text = "Active master key", AutoSize = true, Margin = new Padding(14, 9, 4, 0) });
         toolbar.Controls.Add(activeMaster);
@@ -65,7 +64,6 @@ internal sealed partial class A10DemoControl
         var dukptGrid = BuildDukptKeyGrid(showKeys);
         showKeys.CheckedChanged += (_, _) =>
         {
-            sessionKey.UseSystemPasswordChar = !showKeys.Checked;
             masterGrid.Invalidate();
             dukptGrid.Invalidate();
         };
@@ -115,12 +113,6 @@ internal sealed partial class A10DemoControl
         _actionControls.Add(activeMaster);
         _actionControls.Add(activeDukpt);
 
-        var help = InfoLabel(
-            "Enter authenticated Key Injection Mode on the terminal before loading or checking master keys. " +
-            "The mode accepts commands 02, 04, 06, and 08 and closes after one minute of inactivity. " +
-            "Key material and PIN blocks are redacted from protocol logs. Configuration files contain clear test keys; protect them accordingly.");
-        root.Controls.Add(help, 0, 3);
-        root.SetColumnSpan(help, 2);
         return root;
     }
 
@@ -294,14 +286,14 @@ internal sealed partial class A10DemoControl
         if (dialog.ShowDialog(this) != DialogResult.OK) return;
         var config = JsonSerializer.Deserialize<KeyInjectionConfiguration>(File.ReadAllText(dialog.FileName))
                      ?? throw new InvalidDataException("The key configuration file is empty.");
-        sessionKey.Text = config.SessionKey ?? "";
+        sessionKey.Text = InitialSessionPinKey(config.SessionKey);
         SelectCombo(activeMaster, config.ActiveMasterKey);
         SelectCombo(activeDukpt, config.ActiveDukptKeySet.ToString());
         ApplyMasterConfiguration(masterGrid, config.MasterKeys);
         ApplyDukptConfiguration(dukptGrid, config.DukptKeys);
         SavePersistentKeyConfiguration(CaptureKeyConfiguration(
             masterGrid, dukptGrid, sessionKey, activeMaster, activeDukpt));
-        _status.Text = $"Read key configuration: {Path.GetFileName(dialog.FileName)}";
+        SetStatus($"Read key configuration: {Path.GetFileName(dialog.FileName)}");
     }
 
     private void SaveKeyConfiguration(
@@ -327,7 +319,7 @@ internal sealed partial class A10DemoControl
         if (dialog.ShowDialog(this) != DialogResult.OK) return;
         var config = CaptureKeyConfiguration(masterGrid, dukptGrid, sessionKey, activeMaster, activeDukpt);
         File.WriteAllText(dialog.FileName, JsonSerializer.Serialize(config, KeyJsonOptions));
-        _status.Text = $"Saved key configuration: {Path.GetFileName(dialog.FileName)}";
+        SetStatus($"Saved key configuration: {Path.GetFileName(dialog.FileName)}");
     }
 
     private static void InitializeKeyPersistence(
@@ -340,9 +332,11 @@ internal sealed partial class A10DemoControl
     {
         var loading = true;
         var persisted = LoadPersistentKeyConfiguration();
+        var repairPersistedSessionKey = false;
         if (persisted is not null)
         {
-            sessionKey.Text = persisted.SessionKey ?? "";
+            repairPersistedSessionKey = string.IsNullOrWhiteSpace(persisted.SessionKey);
+            sessionKey.Text = InitialSessionPinKey(persisted.SessionKey);
             SelectCombo(activeMaster, persisted.ActiveMasterKey);
             SelectCombo(activeDukpt, persisted.ActiveDukptKeySet.ToString());
             ApplyMasterConfiguration(masterGrid, persisted.MasterKeys);
@@ -406,8 +400,11 @@ internal sealed partial class A10DemoControl
         };
 
         loading = false;
-        if (persisted is null) SaveNow();
+        if (persisted is null || repairPersistedSessionKey) SaveNow();
     }
+
+    private static string InitialSessionPinKey(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? DefaultSessionPinKey : value;
 
     private static KeyInjectionConfiguration CaptureKeyConfiguration(
         DataGridView masterGrid,

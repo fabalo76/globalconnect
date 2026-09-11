@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.UICPaymentApp" parent="android:Theme.Material.Light.NoActionBar">
+    <style name="Theme.GlobalConnectPaymentApp" parent="android:Theme.Material.Light.NoActionBar">
         <item name="android:windowNoTitle">true</item>
         <item name="android:windowActionBar">false</item>
         <item name="android:windowFullscreen">false</item>
@@ -10,7 +10,7 @@
     <!-- Splash screen theme — shown from icon tap until appInitialized emits true.
          Replaces the system white window with a branded screen so there is no
          blank flash before Compose renders its first frame. -->
-    <style name="Theme.UICPaymentApp.DialogHost" parent="android:Theme.Material.Light.NoActionBar">
+    <style name="Theme.GlobalConnectPaymentApp.DialogHost" parent="android:Theme.Material.Light.NoActionBar">
         <item name="android:windowNoTitle">true</item>
         <item name="android:windowActionBar">false</item>
         <item name="android:windowIsTranslucent">true</item>
@@ -18,9 +18,9 @@
         <item name="android:backgroundDimEnabled">true</item>
     </style>
 
-    <style name="Theme.UICPaymentApp.Starting" parent="Theme.SplashScreen">
+    <style name="Theme.GlobalConnectPaymentApp.Starting" parent="Theme.SplashScreen">
         <item name="windowSplashScreenBackground">#FDFCFF</item>
         <item name="windowSplashScreenAnimatedIcon">@drawable/splash_logo</item>
-        <item name="postSplashScreenTheme">@style/Theme.UICPaymentApp</item>
+        <item name="postSplashScreenTheme">@style/Theme.GlobalConnectPaymentApp</item>
     </style>
 </resources>

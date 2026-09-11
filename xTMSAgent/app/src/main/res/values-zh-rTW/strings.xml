@@ -14,4 +14,10 @@
     <string name="store_download_progress">下載 %1$d%%</string>
     <string name="store_error_generic">商店目前無法使用。</string>
     <string name="store_install_failed">無法安裝應用程式。</string>
+    <string name="tms_reset_registration">重設 TMS 註冊</string>
+    <string name="tms_reset_registration_title">要重設 TMS 註冊嗎？</string>
+    <string name="tms_reset_registration_warning">這會移除目前的 IoT 註冊與憑證。xTMSAgent 將中斷連線並重新註冊。是否繼續？</string>
+    <string name="tms_reset_registration_confirm">重設註冊</string>
+    <string name="tms_reset_registration_started">TMS 註冊已重設，正在重新連線…</string>
+    <string name="tms_reset_registration_failed">無法重設 TMS 註冊。</string>
 </resources>

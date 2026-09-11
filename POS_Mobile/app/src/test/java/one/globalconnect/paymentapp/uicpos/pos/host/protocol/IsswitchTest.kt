@@ -7,13 +7,81 @@ import one.globalconnect.paymentapp.uicpos.pos.errcode.Constants
 import one.globalconnect.paymentapp.uicpos.pos.host.HostProtocolContext
 import one.globalconnect.paymentapp.uicpos.pos.model.ProcInfo
 import one.globalconnect.paymentapp.uicpos.pos.model.TransLog
+import one.globalconnect.paymentapp.BuildConfig
 import java.io.File
 import java.time.LocalDateTime
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Test
 
 class IsswitchTest {
+
+    @Test
+    fun `field 55 sends 9F6E unchanged only when supplied by the kernel`() {
+        val isoFactory = IsoConfigParser.fromFile(isoConfigFile())
+        for (optionalTag in listOf("", "9F6E0401020304", "9F6E0701020304050607")) {
+            val expected = "9F2608ABCDEF1234567890${optionalTag}9F3602001A"
+            val message = Isswitch().buildIsoMessage(
+                HostProtocolContext(
+                    procInfo = ProcInfo(TransLog = TransLog(
+                        TxnType = Constants.HOST_TRANS_SALE,
+                        TxnAmt = "20.00",
+                        CardDataSource = "CONTACTLESS",
+                        Field55 = "5A085413330089700067$expected",
+                    )),
+                    acquirer = createAcquirer(),
+                    terminal = createTerminal(onlinePinCap = false),
+                    isoFactory = isoFactory,
+                    stanSupplier = { "000008" },
+                    timestampSupplier = { LocalDateTime.of(2026, 9, 10, 19, 18, 19) },
+                ),
+            )
+
+            assertEquals(expected, message.getFieldValue(55))
+            assertEquals(expected, isoFactory.parse(message.toByteArray(), 0).getFieldValue(55))
+        }
+    }
+
+    @Test
+    fun `packed entry mode preserves PIN capability for all capture methods`() {
+        val isoFactory = IsoConfigParser.fromFile(isoConfigFile())
+        val capabilities = listOf(
+            TMS_Terminal(onlinePinCap = true, offlineEncrPinCap = false, offlineClearPinCap = false),
+            TMS_Terminal(onlinePinCap = false, offlineEncrPinCap = true, offlineClearPinCap = false),
+            TMS_Terminal(onlinePinCap = false, offlineEncrPinCap = false, offlineClearPinCap = true),
+            TMS_Terminal(onlinePinCap = false, offlineEncrPinCap = false, offlineClearPinCap = false),
+        )
+        for ((source, capture) in listOf("SWIPE" to "02", "CHIP" to "05", "CONTACTLESS" to "07", "MANUAL" to "01")) {
+            for (terminal in capabilities) {
+                val pinDigit = if (terminal.onlinePinCap || terminal.offlineEncrPinCap || terminal.offlineClearPinCap) "1" else "2"
+                val expected = capture + pinDigit
+                val message = Isswitch().buildIsoMessage(
+                    HostProtocolContext(
+                        procInfo = ProcInfo(TransLog = TransLog(
+                            TxnType = Constants.HOST_TRANS_SALE,
+                            TxnAmt = "20.00",
+                            CardDataSource = source,
+                            PINBlock = null,
+                        )),
+                        acquirer = createAcquirer(sendAqEntryCap = false, acqEntryCap = ""),
+                        terminal = terminal,
+                        isoFactory = isoFactory,
+                        stanSupplier = { "000008" },
+                        timestampSupplier = { LocalDateTime.of(2026, 9, 10, 19, 18, 19) },
+                    ),
+                )
+                val packedField = java.io.ByteArrayOutputStream()
+                isoFactory.getParser(22).write(packedField, message.getFieldValue(22))
+                org.junit.Assert.assertArrayEquals(
+                    "$source entry mode $expected must retain the PIN digit on the wire",
+                    byteArrayOf(0, (capture.last().digitToInt() * 16 + pinDigit.toInt()).toByte()),
+                    packedField.toByteArray(),
+                )
+                assertEquals(expected, isoFactory.parse(message.toByteArray(), 0).getFieldValue(22))
+            }
+        }
+    }
 
     @Test
     fun `buildIsoMessage populates expected ISO fields`() {
@@ -58,7 +126,7 @@ class IsswitchTest {
         assertEquals("000123", message.getFieldValue(11))
         assertEquals("030405", message.getFieldValue(12))
         assertEquals("0102", message.getFieldValue(13))
-        assertEquals("0051", message.getFieldValue(22))
+        assertEquals("051", message.getFieldValue(22))
         assertEquals("005", message.getFieldValue(24))
         assertEquals("00000001", message.getFieldValue(41)?.trim())
         assertEquals("000000000000001", message.getFieldValue(42)?.trim())
@@ -84,6 +152,35 @@ class IsswitchTest {
         assertEquals("FFFF9876543210E00008", tags["33"])
         assertEquals("000000000150", tags["82"])
         assertEquals("E0", tags["1C"])
+    }
+
+    @Test
+    fun `buildIsoMessage removes PAN and track tags from field 55`() {
+        val isoFactory = IsoConfigParser.fromFile(isoConfigFile())
+        val retainedTags = "9F2608ABCDEF12345678909F3602001A"
+        val sensitiveTags = "5A085413330089700067560411223344570455667788"
+        val transLog = TransLog(
+            TxnType = Constants.HOST_TRANS_SALE,
+            TxnAmt = "10.00",
+            InvoiceId = "000068",
+            CardNbr = "5413330089700067",
+            Track2 = ";5413330089700067=49122010123456789?",
+            CardDataSource = "CHIP",
+            Field55 = retainedTags.substringBefore("9F36") + sensitiveTags + "9F3602001A",
+        )
+
+        val message = Isswitch().buildIsoMessage(
+            HostProtocolContext(
+                procInfo = ProcInfo(TransLog = transLog),
+                acquirer = createAcquirer(),
+                terminal = createTerminal(onlinePinCap = true),
+                isoFactory = isoFactory,
+                stanSupplier = { "000068" },
+                timestampSupplier = { LocalDateTime.of(2026, 8, 29, 9, 20, 45) },
+            )
+        )
+
+        assertEquals(retainedTags, message.getFieldValue(55))
     }
 
     @Test
@@ -148,6 +245,132 @@ class IsswitchTest {
         assertEquals("ABC123", message.getFieldValue(38))
     }
 
+    @Test
+    fun `offline PIN change maps to zero amount contact ICC request with PIN data`() {
+        val isoFactory = IsoConfigParser.fromFile(isoConfigFile())
+        val field55 = "9F02060000000000009F2701809F3403010002"
+        val transLog = TransLog(
+            TxnType = Constants.HOST_TRANS_OFFLINE_PIN_CHANGE,
+            TxnAmt = "0.00",
+            InvoiceId = "000321",
+            CardNbr = "5413330089020045",
+            CardDataSource = "CHIP",
+            TxnInterface = "1",
+            Field55 = field55,
+            PINBlock = "50E55547A5027551",
+            KSN = "FFFF9876543210E00008",
+        )
+
+        val message = Isswitch().buildIsoMessage(
+            HostProtocolContext(
+                procInfo = ProcInfo(TransLog = transLog),
+                acquirer = createAcquirer(),
+                terminal = createTerminal(onlinePinCap = true),
+                isoFactory = isoFactory,
+                stanSupplier = { "000321" },
+                timestampSupplier = { LocalDateTime.of(2024, 2, 3, 4, 5, 6) },
+            ),
+        )
+
+        assertEquals("0200", message.messageType)
+        assertEquals("920000", message.getFieldValue(3))
+        assertEquals("000000000000", message.getFieldValue(4))
+        assertEquals("051", message.getFieldValue(22))
+        assertEquals("50E55547A5027551", message.getFieldValue(52))
+        assertEquals(field55, message.getFieldValue(55))
+        assertEquals("FFFF9876543210E00008", PrivateUseData63.parse(message.getFieldValue(63))["33"])
+    }
+
+    @Test
+    fun `PIN unblock maps to processing code 91 without field 52`() {
+        val isoFactory = IsoConfigParser.fromFile(isoConfigFile())
+        val field55 = "9F02060000000000009F2701809F34031F0002"
+        val transLog = TransLog(
+            TxnType = Constants.HOST_TRANS_PIN_UNBLOCK,
+            TxnAmt = "0.00",
+            InvoiceId = "000322",
+            CardNbr = "5413330089020102",
+            CardDataSource = "CHIP",
+            TxnInterface = "1",
+            Field55 = field55,
+        )
+
+        val message = Isswitch().buildIsoMessage(
+            HostProtocolContext(
+                procInfo = ProcInfo(TransLog = transLog),
+                acquirer = createAcquirer(),
+                terminal = createTerminal(onlinePinCap = false),
+                isoFactory = isoFactory,
+                stanSupplier = { "000322" },
+                timestampSupplier = { LocalDateTime.of(2026, 8, 22, 15, 6, 45) },
+            ),
+        )
+
+        assertEquals("0200", message.messageType)
+        assertEquals("910000", message.getFieldValue(3))
+        assertEquals("000000000000", message.getFieldValue(4))
+        // PIN capability is independent from the presence of a PIN block. The terminal still
+        // supports offline PIN even though online PIN is disabled for this test transaction.
+        assertEquals("051", message.getFieldValue(22))
+        assertFalse(message.hasField(52))
+        assertEquals(field55, message.getFieldValue(55))
+    }
+
+    @Test
+    fun `loyalty sale matches A10 Banpais processing contract`() {
+        val message = Isswitch().buildIsoMessage(
+            HostProtocolContext(
+                procInfo = ProcInfo(
+                    TransLog = TransLog(
+                        TxnType = Constants.HOST_TRANS_LOYALTYSALE,
+                        TxnAmt = "122.22",
+                        InvoiceId = "000101",
+                        CardDataSource = "CONTACTLESS",
+                        Track2 = ";5413330089700067=49122010123456789?",
+                    ),
+                ),
+                acquirer = createAcquirer(),
+                terminal = createTerminal(onlinePinCap = true),
+                isoFactory = IsoConfigParser.fromFile(isoConfigFile()),
+                stanSupplier = { "000101" },
+                timestampSupplier = { LocalDateTime.of(2026, 9, 6, 12, 0, 0) },
+            ),
+        )
+
+        assertEquals("0200", message.messageType)
+        assertEquals("009500", message.getFieldValue(3))
+        assertEquals("000000012222", message.getFieldValue(4))
+        assertEquals("071", message.getFieldValue(22))
+    }
+
+    @Test
+    fun `loyalty balance matches A10 request and omits amount`() {
+        val message = Isswitch().buildIsoMessage(
+            HostProtocolContext(
+                procInfo = ProcInfo(
+                    TransLog = TransLog(
+                        TxnType = Constants.HOST_TRANS_LOYALTYBALANCE,
+                        TxnAmt = "0.00",
+                        InvoiceId = "000102",
+                        CardDataSource = "CONTACTLESS",
+                        Track2 = ";5413330089700067=49122010123456789?",
+                    ),
+                ),
+                acquirer = createAcquirer(),
+                terminal = createTerminal(onlinePinCap = true, sendAppVersion = true),
+                isoFactory = IsoConfigParser.fromFile(isoConfigFile()),
+                stanSupplier = { "000102" },
+                timestampSupplier = { LocalDateTime.of(2026, 9, 6, 12, 1, 0) },
+            ),
+        )
+
+        assertEquals("0100", message.messageType)
+        assertEquals("309500", message.getFieldValue(3))
+        assertFalse(message.hasField(4))
+        assertEquals("071", message.getFieldValue(22))
+        assertEquals(BuildConfig.VERSION_NAME, PrivateUseData63.parse(message.getFieldValue(63))["1D"])
+    }
+
     private fun createAcquirer(
         sendAqEntryCap: Boolean = false,
         acqEntryCap: String = "",
@@ -170,8 +393,12 @@ class IsswitchTest {
      * @param onlinePinCap whether the test terminal advertises online PIN capability.
      * @return terminal configuration containing the requested capability.
      */
-    private fun createTerminal(onlinePinCap: Boolean): TMS_Terminal = TMS_Terminal(
+    private fun createTerminal(
+        onlinePinCap: Boolean,
+        sendAppVersion: Boolean = false,
+    ): TMS_Terminal = TMS_Terminal(
         onlinePinCap = onlinePinCap,
+        sendAppVersion = sendAppVersion,
     )
 
     private fun isoConfigFile(): File {

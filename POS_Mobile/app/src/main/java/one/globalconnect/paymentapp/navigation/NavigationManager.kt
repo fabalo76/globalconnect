@@ -41,12 +41,15 @@ class NavigationManager(
         dst_Cash,
         dst_Payment,
         dst_LoyaltySale,
+        dst_LoyaltyBalance,
         dst_QuotaSale,
         dst_ExtrasSale,
         dst_CheckIn,
         dst_CheckOut,
         dst_NewTransaction,
         dst_MoreMenu,
+        dst_OfflinePinChange,
+        dst_PinUnblock,
     )
 
     private val hiddenBottomBarRoutes = buildSet {
@@ -74,6 +77,31 @@ class NavigationManager(
         }
     }
 
+    /**
+     * Opens a transaction from the hotel home without replacing that home in the back stack.
+     * The legacy New Transaction menu keeps its existing root-navigation behaviour.
+     */
+    fun onHotelHomeDestinationSelected(destination: UICDestination) {
+        currentTab = dst_Sale
+        val targetRoute = buildTargetRoute(destination)
+        Log.i(TAG, "Navigating from hotel home to ${destination.route} (resolved route: $targetRoute)")
+        navController.navigate(targetRoute) {
+            popUpTo(dst_Sale.route) {
+                inclusive = false
+            }
+            launchSingleTop = true
+        }
+    }
+
+    /** Opens Check-Out with the selected open Check-In already attached to the flow. */
+    fun onCheckOutSelected(checkInId: Int) {
+        val targetRoute = "${dst_CheckOut.route}?$CHECK_IN_ID_KEY=$checkInId"
+        Log.i(TAG, "Navigating to selected Check-Out (checkInId=$checkInId)")
+        navController.navigate(targetRoute) {
+            launchSingleTop = true
+        }
+    }
+
     fun shouldShowBottomBar(currentDestination: NavDestination?): Boolean {
         val routeName = currentDestination?.route?.toBaseRoute() ?: return true
         return routeName !in hiddenBottomBarRoutes
@@ -97,11 +125,15 @@ class NavigationManager(
 
     private fun resolveSelectedTab(destination: UICDestination): UICDestination {
         return when (destination) {
-            dst_Sale -> dst_Sale
+            dst_Sale,
+            dst_SaleTransaction,
+            dst_OpenCheckIns,
+            dst_IncrementalCheckIn -> dst_Sale
             dst_Transactions -> dst_Transactions
             dst_Refund,
             dst_Cash,
             dst_LoyaltySale,
+            dst_LoyaltyBalance,
             dst_QuotaSale,
             dst_ExtrasSale,
             dst_Payment,
@@ -112,6 +144,8 @@ class NavigationManager(
             dst_EndOfDay,
             dst_CheckInReport,
             dst_SystemSettings,
+            dst_OfflinePinChange,
+            dst_PinUnblock,
             dst_MoreMenu -> dst_MoreMenu
             else -> dst_MoreMenu
         }

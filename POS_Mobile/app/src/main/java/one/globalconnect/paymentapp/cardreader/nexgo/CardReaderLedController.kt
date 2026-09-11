@@ -160,9 +160,9 @@ internal class CardReaderLedController(
     private fun stopMsrJob() {
         msrJob?.cancel()
         msrJob = null
-        if (supportsDecorativeLight) {
-            setDecorativeLight(false)
-        }
+        // Cancellation is non-blocking, and startMsrBlink's finally block turns the light off on
+        // the controller's I/O dispatcher. Calling the Nexgo LED driver here would run hardware
+        // Binder IPC on the caller (usually the main thread) and can cause an input-timeout ANR.
     }
 
     private fun cancelIdleJob() {

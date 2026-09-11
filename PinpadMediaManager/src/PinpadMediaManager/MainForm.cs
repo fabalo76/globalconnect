@@ -85,7 +85,7 @@ public sealed class MainForm : Form
         _client = new PinpadClient(new SerialPinpadTransport());
         _client.Trace += AppendLog;
 
-        Text = "Global Connect ONE — Pinpad Media Manager";
+        Text = "Global Connect ONE — Pinpad Demo";
         MinimumSize = new Size(1040, 720);
         ClientSize = new Size(1260, 820);
         StartPosition = FormStartPosition.CenterScreen;
@@ -231,17 +231,21 @@ public sealed class MainForm : Form
         var mediaPage = new TabPage("Media — M commands") { Padding = new Padding(8) };
         var signaturePage = new TabPage("Signature — S commands") { Padding = new Padding(8) };
         var cameraQrPage = new TabPage("Camera & QR — PH/QR commands") { Padding = new Padding(8) };
-        var a10DemoPage = new TabPage("A10 Demo") { Padding = new Padding(8) };
+        var a10DemoPage = new TabPage("Pinpad Demo") { Padding = new Padding(8) };
+        var offlinePinChangePage = new TabPage("Offline PIN change") { Padding = new Padding(8) };
+        var a10Demo = new A10DemoControl(_client, status => _statusLabel.Text = status);
         jpegPage.Controls.Add(BuildJpegPage());
         mediaPage.Controls.Add(BuildMediaPage());
         signaturePage.Controls.Add(BuildSignaturePage());
         cameraQrPage.Controls.Add(BuildCameraQrPage());
-        a10DemoPage.Controls.Add(new A10DemoControl(_client));
+        a10DemoPage.Controls.Add(a10Demo);
+        offlinePinChangePage.Controls.Add(a10Demo.OfflinePinChangeContent);
         tabs.TabPages.Add(jpegPage);
         tabs.TabPages.Add(mediaPage);
         tabs.TabPages.Add(signaturePage);
         tabs.TabPages.Add(cameraQrPage);
         tabs.TabPages.Add(a10DemoPage);
+        tabs.TabPages.Add(offlinePinChangePage);
         return tabs;
     }
 
@@ -1608,7 +1612,7 @@ public sealed class MainForm : Form
             var answer = MessageBox.Show(
                 this,
                 "A transfer is active. Cancel it and close the application?",
-                "Close Pinpad Media Manager",
+                "Close Pinpad Demo",
                 MessageBoxButtons.YesNo,
                 MessageBoxIcon.Warning);
             if (answer != DialogResult.Yes)

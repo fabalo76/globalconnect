@@ -58,6 +58,10 @@ class DiagnosticsActivity : AppCompatActivity() {
             orientation = LinearLayout.VERTICAL
             setPadding(padding, padding, padding, padding)
             addView(buttons)
+            addView(Button(this@DiagnosticsActivity).apply {
+                text = getString(R.string.diagnostics_export)
+                setOnClickListener { exportReport() }
+            })
             addView(reportView)
         }
         return ScrollView(this).apply { addView(content) }
@@ -98,6 +102,34 @@ class DiagnosticsActivity : AppCompatActivity() {
                 ).show()
             } else {
                 startActivity(chooser)
+            }
+        }
+    }
+
+    private fun exportReport() {
+        lifecycleScope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    NexgoDiagnosticsManager.exportToPublicDownloads(this@DiagnosticsActivity)
+                }
+            }.onSuccess { export ->
+                Toast.makeText(
+                    this@DiagnosticsActivity,
+                    getString(R.string.diagnostics_exported, export.displayPath),
+                    Toast.LENGTH_LONG,
+                ).show()
+                reportView.text = withContext(Dispatchers.IO) {
+                    NexgoDiagnosticsManager.readDisplayReport(this@DiagnosticsActivity)
+                }
+            }.onFailure { exception ->
+                Toast.makeText(
+                    this@DiagnosticsActivity,
+                    getString(
+                        R.string.diagnostics_export_failed,
+                        exception.message ?: exception.javaClass.simpleName,
+                    ),
+                    Toast.LENGTH_LONG,
+                ).show()
             }
         }
     }

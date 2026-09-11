@@ -19,6 +19,14 @@ interface TransactionDao {
     @Delete
     suspend fun delete(vararg transactions: Transaction)
 
+    /**
+     * Deletes every transaction in the active terminal batch.
+     *
+     * @return the number of transaction rows removed.
+     */
+    @Query("DELETE FROM `transaction`")
+    suspend fun deleteAllTransactions(): Int
+
     @Update
     suspend fun update(vararg transactions: Transaction)
 
@@ -93,6 +101,17 @@ interface TransactionDao {
     @Delete
     suspend fun deleteReversal(reversal: PendingReversal)
 
+    /**
+     * Deletes every queued reversal awaiting transmission.
+     *
+     * @return the number of pending reversal rows removed.
+     */
+    @Query("DELETE FROM pending_reversals")
+    suspend fun deleteAllPendingReversals(): Int
+
     @Query("SELECT * FROM pending_reversals WHERE acquirerId = :acquirerId ORDER BY createdAt ASC")
     suspend fun getPendingReversals(acquirerId: String): List<PendingReversal>
+
+    @Query("SELECT * FROM pending_reversals ORDER BY createdAt ASC")
+    suspend fun getAllPendingReversals(): List<PendingReversal>
 }

@@ -5,6 +5,7 @@ import com.uic.pos.iso8583.IsoMessageFactory
 import com.uic.pos.iso8583.exception.Iso8583Exception
 import com.uic.pos.iso8583.util.IsoHexUtils
 import one.globalconnect.tms.paymentapp.TMS_Acquirer
+import one.globalconnect.tms.paymentapp.TMS_Terminal
 import one.globalconnect.paymentapp.BuildConfig
 import one.globalconnect.paymentapp.uicpos.pos.host.BatchNumberProvider
 import one.globalconnect.paymentapp.uicpos.pos.host.EntryModeMapper
@@ -65,14 +66,19 @@ class Isswitch(
         val processingCode = transLog.ProcessingCodeOverride
             ?.trim()
             ?.takeIf { it.isNotEmpty() }
-            ?: transactionConfig.processingCode
+            ?: when (transLog.TxnType) {
+                TransactionConfigRegistry.TransactionCode.LOYALTY_BALANCE.code -> LOYALTY_BALANCE_PROCESSING_CODE
+                TransactionConfigRegistry.TransactionCode.LOYALTY_SALE.code -> LOYALTY_SALE_PROCESSING_CODE
+                else -> transactionConfig.processingCode
+            }
         if (!PROCESSING_CODE_PATTERN.matches(processingCode)) {
             throw HostProtocolException("Invalid processing code")
         }
         message.setFieldValue(3, processingCode)
         fieldValues[3] = processingCode
 
-        transLog.TxnAmt.takeIf { it.isNotBlank() && !isSettlementMessage }?.let {
+        val isLoyaltyBalance = transLog.TxnType == TransactionConfigRegistry.TransactionCode.LOYALTY_BALANCE.code
+        transLog.TxnAmt.takeIf { it.isNotBlank() && !isSettlementMessage && !isLoyaltyBalance }?.let {
             val amount = IsoFieldFormatter.amount(it)
             fieldValues[4] = amount
             Log.d(TAG, "Formatting amount '$it' as '$amount'")
@@ -86,6 +92,8 @@ class Isswitch(
         val entryMode = EntryModeMapper.from(
             transLog = transLog,
             onlinePinCap = context.terminal.onlinePinCap,
+            offlineEncrPinCap = context.terminal.offlineEncrPinCap,
+            offlineClearPinCap = context.terminal.offlineClearPinCap,
         )
         val nii = IsoFieldFormatter.numeric(context.acquirer.NII, 3)
         val terminalId = IsoFieldFormatter.alphaNumeric(context.acquirer.AcqTermID, 8)
@@ -204,7 +212,7 @@ class Isswitch(
             message.setFieldValue(52, pinBlock)
         }
 
-        buildField55(transLog, hasTrackData = trackData != null)?.let { emvData ->
+        buildField55(transLog)?.let { emvData ->
             if (BuildConfig.ENABLE_ISO8583_DEBUG_LOGS) {
                 Log.d(TAG, "Resolved EMV data for field 055: ${LogSanitizer.sanitizeIsoField(55, emvData)}")
             }
@@ -216,7 +224,7 @@ class Isswitch(
             }
         }
 
-        buildField63(transLog, context.acquirer, messageType)?.let { privateData ->
+        buildField63(transLog, context.acquirer, context.terminal, messageType)?.let { privateData ->
             if (BuildConfig.ENABLE_ISO8583_DEBUG_LOGS) {
                 Log.d(TAG, "Resolved private data for field 063: ${LogSanitizer.sanitizeIsoField(63, privateData)}")
             }
@@ -283,7 +291,7 @@ class Isswitch(
         return hexadecimal.takeIf { it.isNotEmpty() }
     }
 
-    private fun buildField55(transLog: TransLog, hasTrackData: Boolean): String? {
+    private fun buildField55(transLog: TransLog): String? {
         val raw = transLog.Field55?.takeIf { !it.isNullOrBlank() } ?: return null
         val normalized = WHITESPACE_PATTERN.replace(raw, "").uppercase(Locale.US)
         if (normalized.length % 2 != 0) {
@@ -300,7 +308,9 @@ class Isswitch(
             return null
         }
 
-        val sanitized = if (hasTrackData) removeTlvTag(normalized, "57") else normalized
+        val sanitized = SENSITIVE_FIELD_55_TAGS.fold(normalized) { tlv, tag ->
+            removeTlvTag(tlv, tag)
+        }
         return sanitized.takeIf { it.isNotEmpty() }
     }
 
@@ -378,10 +388,15 @@ class Isswitch(
         return builder.toString()
     }
 
-    private fun buildField63(transLog: TransLog, acquirer: TMS_Acquirer, messageType: String): String? {
+    private fun buildField63(
+        transLog: TransLog,
+        acquirer: TMS_Acquirer,
+        terminal: TMS_Terminal,
+        messageType: String,
+    ): String? {
         return when (messageType) {
             SETTLEMENT_MESSAGE_TYPE -> buildSettlementField63(transLog)
-            else -> buildStandardField63(transLog, acquirer)
+            else -> buildStandardField63(transLog, acquirer, terminal)
         }
     }
 
@@ -472,7 +487,11 @@ class Isswitch(
         return IsoHexUtils.encodeHex(bytes, 0, bytes.size)
     }
 
-    private fun buildStandardField63(transLog: TransLog, acquirer: TMS_Acquirer): String? {
+    private fun buildStandardField63(
+        transLog: TransLog,
+        acquirer: TMS_Acquirer,
+        terminal: TMS_Terminal,
+    ): String? {
         val tags = mutableListOf<Tag>()
 
         transLog.FolioNumber?.takeIf { it.isNotBlank() }?.let { tags += Tag("14", it.trim()) }
@@ -492,6 +511,9 @@ class Isswitch(
         if (acquirer.SendAqEntryCap && acquirer.Acq_Entry_Cap.isNotBlank()) {
             tags += Tag("1C", acquirer.Acq_Entry_Cap.trim())
         }
+        if (terminal.sendAppVersion) {
+            tags += Tag("1D", BuildConfig.VERSION_NAME)
+        }
 
         return PrivateUseData63.encode(tags)
     }
@@ -506,6 +528,8 @@ class Isswitch(
     companion object {
         private const val TAG = "IsswitchProtocol"
         private const val CONFIG_ASSET = "iso8583_ISSWITCH_config.xml"
+        private const val LOYALTY_BALANCE_PROCESSING_CODE = "309500"
+        private const val LOYALTY_SALE_PROCESSING_CODE = "009500"
         private const val DEFAULT_CONDITION_CODE = "00"
         private const val SETTLEMENT_MESSAGE_TYPE = "0500"
         private const val BATCH_UPLOAD_MESSAGE_TYPE = "0320"
@@ -514,5 +538,6 @@ class Isswitch(
         private val PIN_BLOCK_PATTERN = Regex("[0-9A-F]{16}")
         private val KSN_PATTERN = Regex("[0-9A-F]{12,20}")
         private val PROCESSING_CODE_PATTERN = Regex("[0-9]{6}")
+        private val SENSITIVE_FIELD_55_TAGS = arrayOf("5A", "56", "57")
     }
 }

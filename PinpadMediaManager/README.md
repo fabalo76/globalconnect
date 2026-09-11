@@ -21,7 +21,8 @@ into the Global Connect tool without loading its old `UIC.*` assemblies:
   command `20` loads or rotates the Secret MK, command `21` loads Secret SK slots
   0-9, and commands `22`, `23`, and `24` request standard, external-prompt, or
   custom-prompt PIN entry. Echoed keys are verified before acceptance, and secret
-  key material, account data, and PIN blocks are redacted from the protocol trace.
+  the demo protocol trace displays complete request and response frames, including test key material,
+  account data, and encrypted PIN blocks.
 - **PIN entry** covers Master/Session and DUKPT PIN capture with standard,
   external, and custom prompts while redacting keys and PIN blocks from the
   shared protocol trace.
@@ -31,6 +32,16 @@ into the Global Connect tool without loading its old `UIC.*` assemblies:
   applies it to the NEXGO EMV kernel.
 - **ICC transaction** reproduces the legacy `T11` / `T15` / `T27` / `T17`
   flow and includes an approve, decline, or no-response host simulator.
+- **Offline PIN change** runs `T37`, captures and confirms a new encrypted PIN
+  through `7G` (MK/SK) or `7H` (DUKPT), calls the standalone EMV Operations API,
+  sends the returned issuer script with `T19`, and completes the kernel with
+  `T17`. **Offline PIN unblock** uses `T37` with No CVM, never captures a PIN,
+  and requests only the MAC-only `84 24 00 00 08` issuer script. The API address,
+  test API key, and optional client-certificate settings
+  are loaded from `src/PinpadMediaManager/appsettings.json` and remain editable
+  on the page. Acquirer entries in that file bind the PIN method, terminal key
+  slot, encrypted session key, and server-side PIN profile so they cannot be
+  selected independently during a transaction.
 - **Contactless transaction** reproduces the `T61` / `T65` / `T71` flow.
 - **ICC / SAM card** provides card-presence, cold-reset, deactivate, and raw
   APDU operations.

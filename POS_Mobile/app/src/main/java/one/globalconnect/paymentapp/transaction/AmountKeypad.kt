@@ -66,6 +66,7 @@ fun AmountKeypad(
     onEnterPressed: (() -> Unit)? = null,
     onCancelPressed: (() -> Unit)? = null,
     onFunctionKey: ((HardwareFunctionKey) -> Unit)? = null,
+    showDecimalKey: Boolean = true,
 ) {
     RegisterAmountKeypadHardwareHandler(
         onDigit = onDigit,
@@ -203,20 +204,28 @@ fun AmountKeypad(
                         "." -> onDecimalPoint
                         else -> { { onDigit(bottom) } }
                     }
-                    AmountKeyButton(
-                        text = top,
-                        sound = SoundEffect.KEY_TICK,
-                        visuals = visuals,
-                        modifier = Modifier.fillMaxWidth().weight(1f),
-                        onClick = topClick,
-                    )
-                    AmountKeyButton(
-                        text = bottom,
-                        sound = if (bottom == ".") SoundEffect.KEY_STANDARD else SoundEffect.KEY_TICK,
-                        visuals = visuals,
-                        modifier = Modifier.fillMaxWidth().weight(1f),
-                        onClick = bottomClick,
-                    )
+                    if (top == "." && !showDecimalKey) {
+                        Spacer(modifier = Modifier.fillMaxWidth().weight(1f))
+                    } else {
+                        AmountKeyButton(
+                            text = top,
+                            sound = SoundEffect.KEY_TICK,
+                            visuals = visuals,
+                            modifier = Modifier.fillMaxWidth().weight(1f),
+                            onClick = topClick,
+                        )
+                    }
+                    if (bottom == "." && !showDecimalKey) {
+                        Spacer(modifier = Modifier.fillMaxWidth().weight(1f))
+                    } else {
+                        AmountKeyButton(
+                            text = bottom,
+                            sound = if (bottom == ".") SoundEffect.KEY_STANDARD else SoundEffect.KEY_TICK,
+                            visuals = visuals,
+                            modifier = Modifier.fillMaxWidth().weight(1f),
+                            onClick = bottomClick,
+                        )
+                    }
                 }
             }
 

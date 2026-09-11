@@ -126,7 +126,7 @@ object NexgoRuntimeInspector {
         values.firstOrNull { !it.isNullOrBlank() }?.trim()
 }
 
-private object AndroidSystemProperties {
+internal object AndroidSystemProperties {
     private val getMethod by lazy {
         runCatching {
             Class.forName("android.os.SystemProperties").getMethod("get", String::class.java)

@@ -2,34 +2,39 @@ package one.globalconnect.paymentapp.navigation
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.FactCheck
+import androidx.compose.material.icons.automirrored.filled.Login
+import androidx.compose.material.icons.automirrored.filled.Logout
+import androidx.compose.material.icons.automirrored.filled.ReceiptLong
 import androidx.compose.material.icons.automirrored.filled.ShowChart
 import androidx.compose.material.icons.automirrored.filled.TrendingUp
 import androidx.compose.material.icons.filled.AddCard
 import androidx.compose.material.icons.filled.Cached
 import androidx.compose.material.icons.filled.CreditCard
 import androidx.compose.material.icons.filled.CreditScore
-import androidx.compose.material.icons.filled.Hotel
-import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Payments
 import androidx.compose.material.icons.filled.Print
 import androidx.compose.material.icons.filled.RemoveCircleOutline
+import androidx.compose.material.icons.filled.VpnKey
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -37,12 +42,14 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
@@ -52,7 +59,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.tooling.preview.Preview
+import one.globalconnect.paymentapp.GlobalConnectPaymentApplication
 import one.globalconnect.paymentapp.R
+import one.globalconnect.paymentapp.transaction.OfflinePinChangeContract
 import one.globalconnect.paymentapp.ui.theme.GlobalConnectPaymentTheme
 import one.globalconnect.paymentapp.ui.theme.color_primaryBrand
 import one.globalconnect.paymentapp.ui.theme.color_secondaryThree
@@ -74,6 +83,10 @@ fun NewTransactionMenuScreen(
     val isN62Screen = swDp >= 480      // N62: 480dp SW
     var currentMenuId by rememberSaveable(initialMenuId) { mutableStateOf(initialMenuId) }
     var showNotAllowed by rememberSaveable(initialShowNotAllowed) { mutableStateOf(initialShowNotAllowed) }
+    val paymentApplication = GlobalConnectPaymentApplication.instance
+    val terminal = paymentApplication.tmsDatabase.Terminal.firstOrNull()
+    val acquirers = paymentApplication.tmsDatabase.Acquirer
+    val loyaltyEnabled = terminal?.enableLoyalty == true && acquirers.any { it.enableLoyalty }
 
     fun showNotAllowedMessage() {
         SoundManager.play(SoundEffect.KEY_INVALID) // 🔊 Play Click Sound
@@ -84,25 +97,53 @@ fun NewTransactionMenuScreen(
         MenuConfig(
             id = "main",
             title = stringResource(id = R.string.transactions),
-            buttons = listOf(
+            buttons = listOfNotNull(
                 ButtonConfig(stringResource(id = R.string.reprint), Icons.Filled.Print) { onDestinationSelected(dst_Transactions) },
                 ButtonConfig(stringResource(id = R.string.trans_void), Icons.Filled.RemoveCircleOutline) { onDestinationSelected(dst_Transactions) },
-                ButtonConfig(stringResource(id = R.string.miles_sale), Icons.Filled.CreditScore) { onDestinationSelected(dst_LoyaltySale) },
-                ButtonConfig(stringResource(id = R.string.miles_balance), Icons.AutoMirrored.Filled.ShowChart) { showNotAllowedMessage() },
+                if (loyaltyEnabled) {
+                    ButtonConfig(stringResource(id = R.string.miles_sale), Icons.Filled.CreditScore) {
+                        onDestinationSelected(dst_LoyaltySale)
+                    }
+                } else null,
+                if (loyaltyEnabled) {
+                    ButtonConfig(stringResource(id = R.string.miles_balance), Icons.AutoMirrored.Filled.ShowChart) {
+                        onDestinationSelected(dst_LoyaltyBalance)
+                    }
+                } else null,
                 ButtonConfig(stringResource(id = R.string.trans_payment), Icons.Filled.Payments) {
                     onDestinationSelected(dst_Payment)
                 },
                 ButtonConfig(stringResource(id = R.string.intras_extras), Icons.Filled.AddCard) { currentMenuId = "intrasextras" },
-                ButtonConfig(stringResource(id = R.string.hotel), Icons.Filled.Hotel) { currentMenuId = "hotel" },
+                ButtonConfig(stringResource(id = R.string.hotel), Icons.AutoMirrored.Filled.ReceiptLong) { currentMenuId = "hotel" },
                 ButtonConfig(stringResource(id = R.string.return_sale), Icons.Filled.Cached) { onDestinationSelected(dst_Refund) },
+                if (OfflinePinChangeContract.isConfiguredForMenu(terminal, acquirers)) {
+                    ButtonConfig(
+                        stringResource(id = R.string.trans_offline_pin_change),
+                        Icons.Filled.VpnKey,
+                    ) {
+                        onDestinationSelected(dst_OfflinePinChange)
+                    }
+                } else null,
+                if (OfflinePinChangeContract.isPinUnblockConfiguredForMenu(terminal)) {
+                    ButtonConfig(
+                        stringResource(id = R.string.trans_pin_unblock),
+                        Icons.Filled.VpnKey,
+                    ) {
+                        onDestinationSelected(dst_PinUnblock)
+                    }
+                } else null,
             )
         ),
         MenuConfig(
             id = "hotel",
             title = stringResource(id = R.string.hotel),
             buttons = listOf(
-                ButtonConfig(stringResource(id = R.string.trans_checkout), Icons.Filled.Info) { onDestinationSelected(dst_CheckOut) },
-                ButtonConfig(stringResource(id = R.string.trans_checkin), Icons.Filled.CreditCard) { onDestinationSelected(dst_CheckIn) },
+                ButtonConfig(stringResource(id = R.string.trans_checkin), Icons.AutoMirrored.Filled.Login) { onDestinationSelected(dst_CheckIn) },
+                ButtonConfig(stringResource(id = R.string.trans_checkout), Icons.AutoMirrored.Filled.Logout) { onDestinationSelected(dst_CheckOut) },
+                ButtonConfig(
+                    stringResource(id = R.string.hotel_check_in_report_title),
+                    Icons.AutoMirrored.Filled.FactCheck,
+                ) { onDestinationSelected(dst_OpenCheckIns) },
                 ButtonConfig(stringResource(id = R.string.trans_void_checkin), Icons.Filled.RemoveCircleOutline) { showNotAllowedMessage() },
                 ButtonConfig(stringResource(id = R.string.back), Icons.AutoMirrored.Filled.ArrowBack) { currentMenuId = "main" }
             )
@@ -164,35 +205,133 @@ fun NewTransactionMenuScreen(
                 }
             }
 
-            LazyVerticalGrid(
-                modifier = Modifier.fillMaxWidth().padding(4.dp, 0.dp),
-                columns = GridCells.Fixed(2),
-                userScrollEnabled = false
-            ) {
-                items(menuConfig.buttons) { button ->
-                    Button(
-                        modifier = Modifier.fillMaxWidth().height(when { isN62Screen -> 112.dp; isCompactScreen -> 72.dp; else -> 100.dp }).padding(2.dp).shadow(4.dp, shape = menuButtonShape),
-                        onClick = {
-                            SoundManager.play(SoundEffect.KEY_TICK) // 🔊 Play Click Sound
-                            button.action()
-                        },
-                        shape = menuButtonShape,
-                        colors = ButtonDefaults.buttonColors(containerColor = color_white, contentColor = color_secondaryFive),
-                        contentPadding = PaddingValues(
-                            start = 0.dp,
-                            end = 0.dp,
-                            top = ButtonDefaults.ContentPadding.calculateTopPadding(),
-                            bottom = ButtonDefaults.ContentPadding.calculateBottomPadding()
-                        )
-                    ) {
-                        Column(Modifier.fillMaxWidth().align(Alignment.CenterVertically)) {
-                            Icon(
-                                imageVector = button.icon,
-                                contentDescription = button.text,
-                                modifier = Modifier.padding(bottom = if (isCompactScreen) 2.dp else 4.dp).align(Alignment.CenterHorizontally).size(when { isN62Screen -> 28.dp; isCompactScreen -> 20.dp; else -> 24.dp }),
-                                tint = color_secondaryFive
-                            )
-                            Text(button.text, fontSize = when { isN62Screen -> 26.sp; isCompactScreen -> 18.sp; else -> 24.sp }, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+            BoxWithConstraints(modifier = Modifier.fillMaxWidth().weight(1f)) {
+                val availableHeight = maxHeight
+                val desiredRowHeight = when {
+                    isN62Screen -> 116.dp
+                    isCompactScreen -> 76.dp
+                    else -> 104.dp
+                }
+                val provisionalRowsPerPage = maxOf(
+                    1,
+                    (availableHeight.value / desiredRowHeight.value).toInt(),
+                )
+                val requiresPaging = menuConfig.buttons.size > provisionalRowsPerPage * 2
+                val indicatorHeight = if (requiresPaging) 24.dp else 0.dp
+                val rowsPerPage = provisionalRowsPerPage
+                val rowHeight = minOf(
+                    desiredRowHeight,
+                    (availableHeight - indicatorHeight) / rowsPerPage,
+                )
+                val pages = menuConfig.buttons.chunked(rowsPerPage * 2)
+                val pagerState = rememberPagerState(pageCount = { pages.size })
+
+                LaunchedEffect(currentMenuId) {
+                    pagerState.scrollToPage(0)
+                }
+
+                Column(modifier = Modifier.fillMaxSize()) {
+                    HorizontalPager(
+                        state = pagerState,
+                        modifier = Modifier.fillMaxWidth().weight(1f),
+                    ) { pageIndex ->
+                        Column(
+                            modifier = Modifier.fillMaxSize().padding(horizontal = 4.dp),
+                            verticalArrangement = Arrangement.Top,
+                        ) {
+                            pages[pageIndex].chunked(2).forEach { rowButtons ->
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(rowHeight),
+                                ) {
+                                    rowButtons.forEach { button ->
+                                        Button(
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .fillMaxHeight()
+                                                .padding(2.dp)
+                                                .shadow(4.dp, shape = menuButtonShape),
+                                            onClick = {
+                                                SoundManager.play(SoundEffect.KEY_TICK)
+                                                button.action()
+                                            },
+                                            shape = menuButtonShape,
+                                            colors = ButtonDefaults.buttonColors(
+                                                containerColor = color_white,
+                                                contentColor = color_secondaryFive,
+                                            ),
+                                            contentPadding = PaddingValues(
+                                                start = 0.dp,
+                                                end = 0.dp,
+                                                top = ButtonDefaults.ContentPadding.calculateTopPadding(),
+                                                bottom = ButtonDefaults.ContentPadding.calculateBottomPadding(),
+                                            ),
+                                        ) {
+                                            Column(
+                                                Modifier
+                                                    .fillMaxWidth()
+                                                    .align(Alignment.CenterVertically),
+                                            ) {
+                                                Icon(
+                                                    imageVector = button.icon,
+                                                    contentDescription = button.text,
+                                                    modifier = Modifier
+                                                        .padding(bottom = if (isCompactScreen) 2.dp else 4.dp)
+                                                        .align(Alignment.CenterHorizontally)
+                                                        .size(
+                                                            when {
+                                                                isN62Screen -> 28.dp
+                                                                isCompactScreen -> 20.dp
+                                                                else -> 24.dp
+                                                            },
+                                                        ),
+                                                    tint = color_secondaryFive,
+                                                )
+                                                Text(
+                                                    text = button.text,
+                                                    fontSize = when {
+                                                        isN62Screen -> 26.sp
+                                                        isCompactScreen -> 18.sp
+                                                        else -> 24.sp
+                                                    },
+                                                    textAlign = TextAlign.Center,
+                                                    modifier = Modifier.fillMaxWidth(),
+                                                )
+                                            }
+                                        }
+                                    }
+                                    if (rowButtons.size == 1) {
+                                        Spacer(modifier = Modifier.weight(1f))
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if (pages.size > 1) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(indicatorHeight),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            pages.indices.forEach { index ->
+                                Box(
+                                    modifier = Modifier
+                                        .padding(horizontal = 4.dp)
+                                        .size(if (pagerState.currentPage == index) 10.dp else 7.dp)
+                                        .clip(CircleShape)
+                                        .background(
+                                            if (pagerState.currentPage == index) {
+                                                color_primaryBrand
+                                            } else {
+                                                color_white.copy(alpha = 0.5f)
+                                            },
+                                        ),
+                                )
+                            }
                         }
                     }
                 }

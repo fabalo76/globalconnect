@@ -2,6 +2,7 @@ package one.globalconnect.pinpad.ui
 
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -62,23 +63,37 @@ object PinpadDisplayController {
         updateState(PinpadDisplayState.Message(text))
     }
 
-    fun showMessageThenIdle(text: String) {
-        showTemporaryMessage(text, PinpadDisplayState.Idle)
+    fun showMessageThenIdle(
+        text: String,
+        durationMillis: Long = THANK_YOU_MS,
+        preserveOnTransactionComplete: Boolean = false,
+    ) {
+        showTemporaryMessage(
+            text,
+            PinpadDisplayState.Idle,
+            durationMillis,
+            preserveOnTransactionComplete,
+        )
     }
 
     fun showMessageThenKeyInjectionMode(text: String) {
-        showTemporaryMessage(text, PinpadDisplayState.KeyInjectionMode)
+        showTemporaryMessage(text, PinpadDisplayState.KeyInjectionMode, THANK_YOU_MS)
     }
 
-    private fun showTemporaryMessage(text: String, returnState: PinpadDisplayState) {
+    private fun showTemporaryMessage(
+        text: String,
+        returnState: PinpadDisplayState,
+        durationMillis: Long,
+        preserveOnTransactionComplete: Boolean = false,
+    ) {
         clearContactlessLeds()
-        val messageState = PinpadDisplayState.Message(text)
+        val messageState = PinpadDisplayState.Message(text, preserveOnTransactionComplete)
         updateState(messageState)
         mainHandler.postDelayed({
             if (state == messageState) {
                 updateState(returnState)
             }
-        }, THANK_YOU_MS)
+        }, durationMillis.coerceAtLeast(0L))
     }
 
     fun showTextEntry(prompt: String, text: String, echoMode: TextEntryEchoMode) {
@@ -545,6 +560,27 @@ object PinpadDisplayController {
         mainHandler.postDelayed({ state = PinpadDisplayState.Idle }, THANK_YOU_MS)
     }
 
+    fun showThankYouAfterTransactionComplete() {
+        val showThankYou = {
+            val current = state
+            val preserve = when (current) {
+                is PinpadDisplayState.Message -> current.preserveOnTransactionComplete
+                is PinpadDisplayState.BrandSensory -> current.preserveOnTransactionComplete
+                else -> false
+            }
+            if (preserve) {
+                PinpadTraceLog.device("display transaction completion preserved state=${current::class.simpleName}")
+            } else {
+                showThankYouThenIdle()
+            }
+        }
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            showThankYou()
+        } else {
+            mainHandler.post(showThankYou)
+        }
+    }
+
     fun showJpeg(path: String) {
         clearContactlessLeds()
         updateState(PinpadDisplayState.Jpeg(path))
@@ -562,9 +598,62 @@ object PinpadDisplayController {
         updateState(PinpadDisplayState.Media(path, video))
     }
 
-    fun showBrandSensory(brand: SensoryBrand) {
+    fun showBrandSensory(
+        brand: SensoryBrand,
+        completionMessage: String? = null,
+        completionMessageDurationMillis: Long = THANK_YOU_MS,
+        minimumDisplayMillis: Long = if (brand == SensoryBrand.Mastercard) MASTERCARD_MINIMUM_DISPLAY_MS else 0L,
+        preserveOnTransactionComplete: Boolean = false,
+        onComplete: (() -> Unit)? = null,
+    ) {
         clearContactlessLeds()
-        updateState(PinpadDisplayState.BrandSensory(brand))
+        updateState(
+            PinpadDisplayState.BrandSensory(
+                brand = brand,
+                completionMessage = completionMessage,
+                completionMessageDurationMillis = completionMessageDurationMillis,
+                minimumCompletionAtMillis = SystemClock.elapsedRealtime() + minimumDisplayMillis.coerceAtLeast(0L),
+                preserveOnTransactionComplete = preserveOnTransactionComplete,
+                onComplete = onComplete,
+            ),
+        )
+    }
+
+    fun completeBrandSensory(expectedBrand: SensoryBrand? = null): Boolean {
+        val complete = {
+            val current = state as? PinpadDisplayState.BrandSensory
+            if (current == null || expectedBrand != null && current.brand != expectedBrand) {
+                false
+            } else {
+                val remainingMillis = current.minimumCompletionAtMillis - SystemClock.elapsedRealtime()
+                if (remainingMillis > 0L) {
+                    mainHandler.postDelayed(
+                        { completeBrandSensory(expectedBrand) },
+                        remainingMillis,
+                    )
+                } else {
+                    if (current.completionMessage.isNullOrBlank()) {
+                        showIdle()
+                    } else {
+                        showMessageThenIdle(
+                            current.completionMessage,
+                            current.completionMessageDurationMillis,
+                            current.preserveOnTransactionComplete,
+                        )
+                    }
+                    current.onComplete?.invoke()
+                }
+                true
+            }
+        }
+        return if (Looper.myLooper() == Looper.getMainLooper()) {
+            complete()
+        } else {
+            val active = state is PinpadDisplayState.BrandSensory &&
+                (expectedBrand == null || (state as PinpadDisplayState.BrandSensory).brand == expectedBrand)
+            if (active) mainHandler.post { complete() }
+            active
+        }
     }
 
     fun showContactlessLeds(next: ContactlessLedState) {
@@ -596,6 +685,7 @@ object PinpadDisplayController {
     private const val SELECTING_APPLICATION_MS = 5_000L
     private const val PROCESSING_MS = 3_000L
     private const val THANK_YOU_MS = 3_000L
+    private const val MASTERCARD_MINIMUM_DISPLAY_MS = 3_000L
 }
 
 sealed interface PinpadDisplayState {
@@ -604,7 +694,10 @@ sealed interface PinpadDisplayState {
     data class InsertCard(val transaction: PinpadTransactionDisplay? = null) : PinpadDisplayState
     data class TapCard(val transaction: PinpadTransactionDisplay? = null) : PinpadDisplayState
     data class PresentCard(val transaction: PinpadTransactionDisplay? = null) : PinpadDisplayState
-    data class Message(val text: String) : PinpadDisplayState
+    data class Message(
+        val text: String,
+        val preserveOnTransactionComplete: Boolean = false,
+    ) : PinpadDisplayState
     data class TextEntry(
         val prompt: String,
         val text: String = "",
@@ -663,7 +756,14 @@ sealed interface PinpadDisplayState {
     data class Jpeg(val path: String) : PinpadDisplayState
     data class JpegSequence(val paths: List<String>) : PinpadDisplayState
     data class Media(val path: String, val video: Boolean) : PinpadDisplayState
-    data class BrandSensory(val brand: SensoryBrand) : PinpadDisplayState
+    data class BrandSensory(
+        val brand: SensoryBrand,
+        val completionMessage: String? = null,
+        val completionMessageDurationMillis: Long = 3_000L,
+        val minimumCompletionAtMillis: Long = 0L,
+        val preserveOnTransactionComplete: Boolean = false,
+        val onComplete: (() -> Unit)? = null,
+    ) : PinpadDisplayState
 }
 
 enum class SensoryBrand {

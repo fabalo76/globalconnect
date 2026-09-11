@@ -265,6 +265,62 @@ object PendingUpdateManager {
         }
     }
 
+    /**
+     * Re-checks the live batch and releases every deferred operation that is safe only when
+     * the terminal is idle and the batch is empty.
+     *
+     * Parameter updates are applied through the normal guarded update path. Pending application
+     * installs are released only after the same fresh transaction-count check succeeds.
+     *
+     * @param context application context used to load deferred state and send update broadcasts.
+     * @return a summary describing whether the batch was empty and which operations were released.
+     */
+    suspend fun processPendingOperationsIfBatchEmpty(
+        context: Context,
+    ): PendingBatchOperationsResult {
+        val app = GlobalConnectPaymentApplication.instanceOrNull
+            ?: return PendingBatchOperationsResult(batchEmpty = false)
+        val liveTransactionCount = withContext(Dispatchers.IO) {
+            try {
+                app.container.transactionRepository.getTransactionCount().first()
+            } catch (error: Exception) {
+                Log.e(TAG, "Could not verify the live batch before processing pending operations", error)
+                null
+            }
+        }
+        if (shouldDeferParameterUpdate(isOperationInProgress, liveTransactionCount)) {
+            Log.i(
+                TAG,
+                "Pending operations remain deferred " +
+                    "(operationInProgress=$isOperationInProgress liveTransactions=$liveTransactionCount)",
+            )
+            return PendingBatchOperationsResult(batchEmpty = false)
+        }
+
+        val parameterResult = if (hasPendingParamUpdate(context)) {
+            applyPendingParamUpdateIfBatchEmpty(context)
+        } else {
+            PendingParamUpdateResult.NoPendingUpdate
+        }
+        val appUpdateReleased = if (hasPendingAppUpdate(context)) {
+            notifyXtmsAgentCanProceed(context)
+            clearPendingAppUpdate(context)
+            true
+        } else {
+            false
+        }
+        Log.i(
+            TAG,
+            "Pending-operation check completed " +
+                "(parameterResult=$parameterResult appUpdateReleased=$appUpdateReleased)",
+        )
+        return PendingBatchOperationsResult(
+            batchEmpty = true,
+            parameterResult = parameterResult,
+            appUpdateReleased = appUpdateReleased,
+        )
+    }
+
     /** Restore in-memory StateFlow values from persisted state on app start. */
     fun restoreFromPrefs(context: Context) {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -284,3 +340,12 @@ enum class PendingParamUpdateResult {
     Applied,
     Failed,
 }
+
+/**
+ * Outcome of checking operations that must wait for the active transaction batch to become empty.
+ */
+data class PendingBatchOperationsResult(
+    val batchEmpty: Boolean,
+    val parameterResult: PendingParamUpdateResult = PendingParamUpdateResult.NoPendingUpdate,
+    val appUpdateReleased: Boolean = false,
+)

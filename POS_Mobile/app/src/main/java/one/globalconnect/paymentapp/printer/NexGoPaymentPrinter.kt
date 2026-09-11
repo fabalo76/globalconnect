@@ -25,20 +25,23 @@ import one.globalconnect.paymentapp.admin.AdminTicketData
 import one.globalconnect.paymentapp.profile.Profile
 import one.globalconnect.paymentapp.records.SummaryMetric
 import one.globalconnect.paymentapp.records.buildSummaryReport
-import one.globalconnect.paymentapp.records.dateFormatter
 import one.globalconnect.paymentapp.records.dateTimeFormatter
 import one.globalconnect.paymentapp.records.dateTimeFormatterForUsers
 import one.globalconnect.paymentapp.records.toSignedAmount
 import one.globalconnect.paymentapp.settlement.storage.SettlementSnapshot
 import one.globalconnect.paymentapp.transaction.BatchSummary
-import one.globalconnect.paymentapp.transaction.CVMType
 import one.globalconnect.paymentapp.transaction.PrintableTotalsLine
 import one.globalconnect.paymentapp.transaction.PrintableTotalsReport
 import one.globalconnect.paymentapp.transaction.ReturnStatus
+import one.globalconnect.paymentapp.transaction.ReceiptPinVerification
 import one.globalconnect.paymentapp.transaction.ReversalReceiptData
 import one.globalconnect.paymentapp.transaction.Transaction
 import one.globalconnect.paymentapp.transaction.TransactionType
 import one.globalconnect.paymentapp.transaction.TotalsMetric
+import one.globalconnect.paymentapp.transaction.Tax1DiscountCalculator
+import one.globalconnect.paymentapp.transaction.resolveReceiptCvmPresentation
+import one.globalconnect.paymentapp.transaction.resolveReceiptReferenceValues
+import one.globalconnect.paymentapp.transaction.partialApprovalReceipt
 import one.globalconnect.paymentapp.transaction.toStringForUsers
 import one.globalconnect.paymentapp.transaction.toTransactionString
 import one.globalconnect.paymentapp.uicpos.pos.host.InvoiceNumberProvider
@@ -68,7 +71,10 @@ object NexGoPaymentPrinter : PaymentPrinter {
     private const val SETTLEMENT_TRANSACTION_FORMAT_LEFT = "%-3s %-6s %-6s%1s"
     private const val SETTLEMENT_TRANSACTION_FORMAT_RIGHT = "%-6s %12s"
     private val dottedSpacer = "-".repeat(22)
-    private val reversalDateFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd")
+    private val receiptDateFormatter: DateTimeFormatter
+        get() = DateTimeFormatter.ofPattern(
+            GlobalConnectPaymentApplication.instance.resources.getString(R.string.receipt_date_pattern),
+        )
     private val reversalTimeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss")
     private val settlementDateFormatter = DateTimeFormatter.ofPattern("yyyy/MM/dd")
     private val settlementTimeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss")
@@ -81,6 +87,7 @@ object NexGoPaymentPrinter : PaymentPrinter {
     private const val CHARSPERLINE_LARGEFONTSIZE = 25
     private const val CHARSPERLINE_MASSIVEFONTSIZE = 22
     private const val MIN_WRAPPED_LAST_LINE = 8
+    private val PRINT_GRAY_LEVEL = GrayLevelEnum.LEVEL_3
 
     /**
      * Function to test printer capabilities.
@@ -91,7 +98,7 @@ object NexGoPaymentPrinter : PaymentPrinter {
     override fun printerTest(context: Context) {
         val deviceEngine = APIProxy.getDeviceEngine(context)
         val printer = deviceEngine.printer
-        val grayLevel = GrayLevelEnum.LEVEL_0
+        val grayLevel = PRINT_GRAY_LEVEL
         val fonts = listOf(
             Typeface.DEFAULT to listOf(PrintFontSize.MIN, PrintFontSize.TINY, PrintFontSize.SMALL, PrintFontSize.MEDIUM),
             Typeface.DEFAULT_BOLD to listOf(PrintFontSize.MIN, PrintFontSize.TINY, PrintFontSize.SMALL, PrintFontSize.MEDIUM),
@@ -252,7 +259,7 @@ object NexGoPaymentPrinter : PaymentPrinter {
         printer.initPrinter()
         val state = printer.status
         Log.d(TAG, "printer state = $state")
-        printer.setGray(GrayLevelEnum.LEVEL_0)
+        printer.setGray(PRINT_GRAY_LEVEL)
 
         val terminal = tmsDatabase.Terminal[0]
         val acquirer = tmsDatabase.Acquirer[0]
@@ -541,7 +548,7 @@ object NexGoPaymentPrinter : PaymentPrinter {
         val state = printer.status
         Log.d(TAG, "printer state = $state")
 
-        printer.setGray(GrayLevelEnum.LEVEL_0)
+        printer.setGray(PRINT_GRAY_LEVEL)
         printer.setLetterSpacing(4)
         //printer.setTypeface(Typeface.DEFAULT)
         // Business info
@@ -696,7 +703,7 @@ object NexGoPaymentPrinter : PaymentPrinter {
         val deviceEngine = APIProxy.getDeviceEngine(context)
         val printer = deviceEngine.printer
         printer.initPrinter()
-        printer.setGray(GrayLevelEnum.LEVEL_0)
+        printer.setGray(PRINT_GRAY_LEVEL)
         printer.setTypeface(Typeface.DEFAULT)
 
         val terminal = tmsDatabase.Terminal[0]
@@ -792,7 +799,7 @@ object NexGoPaymentPrinter : PaymentPrinter {
         val deviceEngine = APIProxy.getDeviceEngine(context)
         val printer = deviceEngine.printer
         printer.initPrinter()
-        printer.setGray(GrayLevelEnum.LEVEL_0)
+        printer.setGray(PRINT_GRAY_LEVEL)
         //printer.setTypeface(Typeface.DEFAULT)
 
         val resources = GlobalConnectPaymentApplication.Companion.instance.resources
@@ -1085,9 +1092,17 @@ object NexGoPaymentPrinter : PaymentPrinter {
         profile: Profile,
         tmsDatabase: TMSDATA,
         bitmap: ImageBitmap?,
-        recipient: String
+        recipient: String,
+        onPrintResult: ((Boolean) -> Unit)?,
     ) {
-        val tax1Present = (transaction.tax1Amount.toBigDecimal() > BigDecimal.ZERO) || (tmsDatabase.Terminal[0].Tax1Mandatory)
+        val originalTax1Amount = Tax1DiscountCalculator.originalTaxAmountFromDiscounted(
+            discountedTaxAmount = transaction.tax1Amount,
+            discountAmount = transaction.tax1DiscountAmount,
+        )
+        val receiptBaseAmount = transaction.baseAmount.ifBlank {
+            transaction.subTotal.ifBlank { transaction.totalAmount }
+        }
+        val tax1Present = (originalTax1Amount.toBigDecimal() > BigDecimal.ZERO) || (tmsDatabase.Terminal[0].Tax1Mandatory)
         val tax1DiscountPresent = (transaction.tax1DiscountAmount.toBigDecimal() > BigDecimal.ZERO)
         val tax2Present = (transaction.tax2Amount.toBigDecimal() > BigDecimal.ZERO)
         val tipPresent = (transaction.tipAmount.toBigDecimal() > BigDecimal.ZERO)
@@ -1098,7 +1113,7 @@ object NexGoPaymentPrinter : PaymentPrinter {
         val state = printer.status
         Log.d(TAG, "printer state = $state")
         //printerManager.setPrintFont("/system/fonts/Android-1.ttf");
-        printer.setGray(GrayLevelEnum.LEVEL_0)
+        printer.setGray(PRINT_GRAY_LEVEL)
         //printer.setLetterSpacing(4)
         //printer.setTypeface(Typeface.MONOSPACE)
         // Business info
@@ -1123,7 +1138,7 @@ object NexGoPaymentPrinter : PaymentPrinter {
 
         val time = LocalDateTime.parse(transaction.localDateTime, dateTimeFormatter)
         printer.appendPrnStr(
-            time.format(dateFormatter), time.format(
+            time.format(receiptDateFormatter), time.format(
                 DateTimeFormatter.ofPattern("HH:mm:ss")
             ), SMALLFONTSIZE, false
         )
@@ -1144,51 +1159,155 @@ object NexGoPaymentPrinter : PaymentPrinter {
 
         printer.appendPrnStr(transaction.masked_cardNumber, transaction.cardType,  MEDIUMFONTSIZE, false)
 
-        printer.appendPrnStr("RRN: ${transaction.transactionId}", "${
+        printer.appendPrnStr("RRN: ${transaction.retrievalReferenceNumber.trim().ifBlank { "----" }}", "${
             GlobalConnectPaymentApplication.Companion.instance.resources.getString(
                 R.string.invoice_short)}: ${transaction.invoiceId}" , TINYFONTSIZE, false)
 
-        printer.appendPrnStr("${GlobalConnectPaymentApplication.Companion.instance.resources.getString(R.string.ext_ref)}: ", "${
-            GlobalConnectPaymentApplication.Companion.instance.resources.getString(
-                R.string.auth_code_short)}: ${transaction.authCode}" , TINYFONTSIZE, false)
+        val resources = GlobalConnectPaymentApplication.Companion.instance.resources
+        val receiptReferences = resolveReceiptReferenceValues(
+            folioNumber = transaction.folioNumber,
+            externalReferenceNumber = transaction.externalReferenceNumber,
+        )
+        if (transaction.authCode.isNotBlank()) {
+            printer.appendPrnStr(
+                "${resources.getString(R.string.auth_code_short)}: ${transaction.authCode.trim()}",
+                TINYFONTSIZE,
+                AlignEnum.RIGHT,
+                false,
+            )
+        }
+        receiptReferences.folioNumber?.let { folioNumber ->
+            printer.appendPrnStr(
+                "${resources.getString(R.string.hotel_check_in_report_detail_folio_label)}: $folioNumber",
+                SMALLFONTSIZE,
+                AlignEnum.LEFT,
+                true,
+            )
+        }
+        receiptReferences.externalReferenceNumber?.let { externalReferenceNumber ->
+            printer.appendPrnStr(
+                "${resources.getString(R.string.ext_ref)}: $externalReferenceNumber",
+                SMALLFONTSIZE,
+                AlignEnum.LEFT,
+                true,
+            )
+        }
 
         printer.appendPrnStr(" ", LARGEFONTSIZE, AlignEnum.LEFT, false )
         // Transaction info
         if (transaction.returnStatus == ReturnStatus.Voided) {
             printer.appendPrnStr(GlobalConnectPaymentApplication.Companion.instance.resources.getString(R.string.receipt_void_prefix), LARGEFONTSIZE, AlignEnum.LEFT, false)
         }
-        printer.appendPrnStr(transaction.type.toStringForUsers(), FormatterUtils.formatAmount(curSym, transaction.subTotal), LARGEFONTSIZE, false)
-        if (tax1Present) {
+        val isLoyaltyBalance = transaction.type == TransactionType.LOYALTY_BALANCE
+        val partialApproval = transaction.partialApprovalReceipt()
+        if (partialApproval != null) {
+            printer.appendPrnStr(resources.getString(R.string.receipt_partial_approved), SMALLFONTSIZE, AlignEnum.CENTER, true)
+            printer.appendPrnStr(resources.getString(R.string.receipt_verify_amount), SMALLFONTSIZE, AlignEnum.CENTER, true)
+            printer.appendPrnStr(" ", SMALLFONTSIZE, AlignEnum.LEFT, false)
+        }
+        if (isLoyaltyBalance) {
+            printer.appendPrnStr(
+                transaction.type.toStringForUsers(),
+                LARGEFONTSIZE,
+                AlignEnum.CENTER,
+                true,
+            )
+            transaction.loyaltyBalancePoints.takeIf { it.isNotBlank() }?.let { points ->
+                printer.appendPrnStr(
+                    resources.getString(R.string.loyalty_points_available, one.globalconnect.paymentapp.transaction.LoyaltyContract.formatPoints(points)),
+                    LARGEFONTSIZE,
+                    AlignEnum.CENTER,
+                    true,
+                )
+            }
+        } else {
+            printer.appendPrnStr(transaction.type.toStringForUsers(), FormatterUtils.formatAmount(curSym, receiptBaseAmount), LARGEFONTSIZE, false)
+        }
+        if (!isLoyaltyBalance && tax1Present) {
             printer.appendPrnStr(" ${GlobalConnectPaymentApplication.Companion.instance.resources.getString(R.string.Tax).uppercase()}",
-                FormatterUtils.formatAmount(curSym, transaction.tax1Amount),SMALLFONTSIZE,false)
+                FormatterUtils.formatAmount(curSym, originalTax1Amount),SMALLFONTSIZE,false)
             if (tax1DiscountPresent)
             {
                 printer.appendPrnStr("  ${GlobalConnectPaymentApplication.Companion.instance.resources.getString(R.string.Tax_Discount).uppercase()}", "${FormatterUtils.formatAmount(curSym, transaction.tax1DiscountAmount.toBigDecimal().negate())}   ", SMALLFONTSIZE, false)
             }
         }
-        if (tax2Present)
+        if (!isLoyaltyBalance && tax2Present)
             printer.appendPrnStr(" ${GlobalConnectPaymentApplication.Companion.instance.resources.getString(R.string.Tax2).uppercase()}" , FormatterUtils.formatAmount(curSym, transaction.tax2Amount), SMALLFONTSIZE, false)
-        if (tipPresent)
+        if (!isLoyaltyBalance && tipPresent)
             printer.appendPrnStr(" ${GlobalConnectPaymentApplication.Companion.instance.resources.getString(R.string.Tip).uppercase()}", FormatterUtils.formatAmount(curSym, transaction.tipAmount), SMALLFONTSIZE, false)
 
-        printer.appendPrnStr("-".repeat(CHARSPERLINE_SMALLFONTSIZE/3), SMALLFONTSIZE, AlignEnum.RIGHT, false)
-        printer.appendPrnStr(GlobalConnectPaymentApplication.Companion.instance.resources.getString(R.string.Total).uppercase(), FormatterUtils.formatAmount(curSym, transaction.totalAmount), LARGEFONTSIZE, false)
+        if (!isLoyaltyBalance) {
+            printer.appendPrnStr("-".repeat(CHARSPERLINE_SMALLFONTSIZE/3), SMALLFONTSIZE, AlignEnum.RIGHT, false)
+            if (partialApproval != null) {
+                printer.appendPrnStr(resources.getString(R.string.receipt_original_amount),
+                    partialApproval.originalAmount?.let { FormatterUtils.formatAmount(curSym, it) } ?: "----",
+                    SMALLFONTSIZE, false)
+                printer.appendPrnStr(resources.getString(R.string.receipt_approved_amount),
+                    FormatterUtils.formatAmount(curSym, partialApproval.approvedAmount), LARGEFONTSIZE, false)
+            } else {
+                printer.appendPrnStr(resources.getString(R.string.Total).uppercase(), FormatterUtils.formatAmount(curSym, transaction.totalAmount), LARGEFONTSIZE, false)
+            }
+        }
 
         /** Tip stuff for auth transactions */
         if (transaction.type != TransactionType.REFUND && transaction.returnStatus != ReturnStatus.Voided) {
-            if (transaction.CVM == CVMType.PinVerified) {
-                printer.appendPrnStr(GlobalConnectPaymentApplication.Companion.instance.resources.getString(R.string.PinVerified), SMALLFONTSIZE, AlignEnum.CENTER, true)
+            val cvmPresentation = resolveReceiptCvmPresentation(
+                transaction = transaction,
+                configuredSignatureRequired = SysParam.Companion.getInstance().signatureMode != SignatureMode.None,
+            )
+            when (cvmPresentation.pinVerification) {
+                ReceiptPinVerification.ONLINE -> printer.appendPrnStr(
+                    resources.getString(R.string.PinVerified),
+                    SMALLFONTSIZE,
+                    AlignEnum.CENTER,
+                    true,
+                )
+                ReceiptPinVerification.OFFLINE -> printer.appendPrnStr(
+                    resources.getString(R.string.PinVerifiedICC),
+                    SMALLFONTSIZE,
+                    AlignEnum.CENTER,
+                    true,
+                )
+                ReceiptPinVerification.NONE -> Unit
             }
-            if (SysParam.Companion.getInstance().signatureMode != SignatureMode.None
-                || transaction.CVM == CVMType.Signature) {
-                val signaturetext = GlobalConnectPaymentApplication.Companion.instance.resources.getString(R.string.receipt_signature)
+
+            if (cvmPresentation.noSignatureRequiredEmv) {
+                printer.appendPrnStr(
+                    resources.getString(
+                        when {
+                            cvmPresentation.noSignatureRequiredCdcvm ->
+                                R.string.receipt_no_signature_required_cdcvm
+                            cvmPresentation.noSignatureRequiredCvm ->
+                                R.string.receipt_no_signature_required_cvm
+                            else -> R.string.receipt_no_signature_required_emv
+                        },
+                    ),
+                    // The English MTIP wording is 33 characters; the tiny font fits 38 per line.
+                    TINYFONTSIZE,
+                    AlignEnum.CENTER,
+                    true,
+                )
+                printer.appendPrnStr(
+                    transaction.cardholderName.trim(),
+                    SMALLFONTSIZE,
+                    AlignEnum.CENTER,
+                    false,
+                )
+            } else if (cvmPresentation.signatureRequired) {
+                val signaturetext = resources.getString(R.string.receipt_signature)
                 if (bitmap == null) {
                     printer.appendPrnStr("          ", LARGEFONTSIZE, AlignEnum.CENTER, false)
                     printer.appendPrnStr("          ", LARGEFONTSIZE, AlignEnum.CENTER, false)
                     printer.appendPrnStr(signaturetext + "_".repeat(CHARSPERLINE_SMALLFONTSIZE - signaturetext.length), SMALLFONTSIZE, AlignEnum.LEFT, false)
-                    val agreement1 = GlobalConnectPaymentApplication.Companion.instance.resources.getString(R.string.receipt_agreement_1).uppercase().trim()
-                    val agreement2 = GlobalConnectPaymentApplication.Companion.instance.resources.getString(R.string.receipt_agreement_2).uppercase().trim()
-                    val agreement3 = GlobalConnectPaymentApplication.Companion.instance.resources.getString(R.string.receipt_agreement_3).uppercase().trim()
+                    printer.appendPrnStr(
+                        transaction.cardholderName.trim(),
+                        SMALLFONTSIZE,
+                        AlignEnum.CENTER,
+                        false,
+                    )
+                    val agreement1 = resources.getString(R.string.receipt_agreement_1).uppercase().trim()
+                    val agreement2 = resources.getString(R.string.receipt_agreement_2).uppercase().trim()
+                    val agreement3 = resources.getString(R.string.receipt_agreement_3).uppercase().trim()
                     if (agreement1.isNotEmpty())
                         printer.appendPrnStr(agreement1, TINYFONTSIZE, AlignEnum.CENTER,false)
                     if (agreement2.isNotEmpty())
@@ -1200,6 +1319,12 @@ object NexGoPaymentPrinter : PaymentPrinter {
                         bitmap.asAndroidBitmap(),
                         AlignEnum.CENTER
                     )
+                    printer.appendPrnStr(
+                        transaction.cardholderName.trim(),
+                        SMALLFONTSIZE,
+                        AlignEnum.CENTER,
+                        false,
+                    )
                 }
             }
         }
@@ -1210,12 +1335,19 @@ object NexGoPaymentPrinter : PaymentPrinter {
             printer.appendPrnStr("$emvdotter$emvinfolabel$emvdotter", TINYFONTSIZE, AlignEnum.CENTER, false)
             /** Additional Info */
 
-            printer.appendPrnStr(transaction.applicationName, transaction.AID, TINYFONTSIZE, false)
+            printer.appendPrnStr(
+                "${resources.getString(R.string.receipt_emv_app_label)} ${transaction.applicationName.trim()}",
+                TINYFONTSIZE, AlignEnum.LEFT, false,
+            )
+            printer.appendPrnStr(
+                "${resources.getString(R.string.AID)} ${transaction.AID.trim()}",
+                TINYFONTSIZE, AlignEnum.LEFT, false,
+            )
 
             printer.appendPrnStr("${GlobalConnectPaymentApplication.Companion.instance.resources.getString(R.string.TVR)} ${transaction.TVR}", "${GlobalConnectPaymentApplication.Companion.instance.resources.getString(
                     R.string.TSI)} ${transaction.TSI}", TINYFONTSIZE, false)
-            printer.appendPrnStr("${GlobalConnectPaymentApplication.Companion.instance.resources.getString(R.string.ARC)} ${transaction.ARC}", "${GlobalConnectPaymentApplication.Companion.instance.resources.getString(
-                    R.string.AC)} ${transaction.AC}", TINYFONTSIZE, false)
+            printer.appendPrnStr("${resources.getString(R.string.AC)} ${transaction.AC}",
+                "${resources.getString(R.string.ARC)} ${transaction.ARC}", TINYFONTSIZE, false)
             printer.appendPrnStr("=".repeat(CHARSPERLINE_TINYFONTSIZE), TINYFONTSIZE, AlignEnum.CENTER, false)
         }
         if (recipient == MERCHANT) {
@@ -1224,7 +1356,7 @@ object NexGoPaymentPrinter : PaymentPrinter {
             printer.appendPrnStr(GlobalConnectPaymentApplication.Companion.instance.resources.getString(R.string.customer_copy), MINFONTSIZE, AlignEnum.CENTER, false)
         }
         printer.appendPrnStr(
-            GlobalConnectPaymentApplication.Companion.instance.resources.getString(R.string.poweredbyuic), MINFONTSIZE,
+            GlobalConnectPaymentApplication.Companion.instance.resources.getString(R.string.powered_by_global_connect), MINFONTSIZE,
             AlignEnum.CENTER,false)
 
         val versionText = "${GlobalConnectPaymentApplication.Companion.instance.resources.getString(R.string.version)}: ${GlobalConnectPaymentApplication.Companion.instance.appVersion}"
@@ -1266,7 +1398,12 @@ object NexGoPaymentPrinter : PaymentPrinter {
             }
         }
 
-        printer.startPrint(false, listener)
+        printer.startPrint(false, object : OnPrintListener {
+            override fun onPrintResult(result: Int) {
+                listener.onPrintResult(result)
+                onPrintResult?.invoke(result == SdkResult.Success)
+            }
+        })
     }
 
     override fun printReversalReceipt(
@@ -1278,7 +1415,7 @@ object NexGoPaymentPrinter : PaymentPrinter {
         val deviceEngine = APIProxy.getDeviceEngine(context)
         val printer = deviceEngine.printer
         printer.initPrinter()
-        printer.setGray(GrayLevelEnum.LEVEL_0)
+        printer.setGray(PRINT_GRAY_LEVEL)
 
         val terminal = tmsDatabase.Terminal.firstOrNull()
         val acquirer = tmsDatabase.Acquirer.firstOrNull()
@@ -1291,7 +1428,7 @@ object NexGoPaymentPrinter : PaymentPrinter {
 
         val timestamp = data.timestamp
         printer.appendPrnStr(
-            timestamp.format(reversalDateFormatter),
+            timestamp.format(receiptDateFormatter),
             timestamp.format(reversalTimeFormatter),
             SMALLFONTSIZE,
             false
@@ -1345,7 +1482,7 @@ object NexGoPaymentPrinter : PaymentPrinter {
         val printer = deviceEngine.printer
         val resources = context.resources
         printer.initPrinter()
-        printer.setGray(GrayLevelEnum.LEVEL_0)
+        printer.setGray(PRINT_GRAY_LEVEL)
         printer.setTypeface(Typeface.MONOSPACE)
 
         val tmsDatabase = GlobalConnectPaymentApplication.instance.tmsDatabase
@@ -1513,7 +1650,7 @@ object NexGoPaymentPrinter : PaymentPrinter {
         val deviceEngine = APIProxy.getDeviceEngine(context)
         val printer = deviceEngine.printer
         printer.initPrinter()
-        printer.setGray(GrayLevelEnum.LEVEL_0)
+        printer.setGray(PRINT_GRAY_LEVEL)
         printer.setTypeface(Typeface.MONOSPACE)
 
         val terminal = tmsDatabase.Terminal.firstOrNull()
@@ -1532,7 +1669,7 @@ object NexGoPaymentPrinter : PaymentPrinter {
         val now = LocalDateTime.now()
         printer.printCentered("CONFIGURATION REPORT", PrintFontSize.LARGE, isBold = true)
         printer.printCentered(
-            "${now.format(dateFormatter)} ${now.format(reversalTimeFormatter)}",
+            "${now.format(receiptDateFormatter)} ${now.format(reversalTimeFormatter)}",
             PrintFontSize.SMALL,
         )
         printer.printWrappedField("Model", GlobalConnectPaymentApplication.model)
@@ -1568,7 +1705,7 @@ object NexGoPaymentPrinter : PaymentPrinter {
         val deviceEngine = APIProxy.getDeviceEngine(context)
         val printer = deviceEngine.printer
         printer.initPrinter()
-        printer.setGray(GrayLevelEnum.LEVEL_0)
+        printer.setGray(PRINT_GRAY_LEVEL)
         printer.setTypeface(Typeface.MONOSPACE)
 
         val terminal = tmsDatabase.Terminal.firstOrNull()
@@ -1586,7 +1723,7 @@ object NexGoPaymentPrinter : PaymentPrinter {
         val now = LocalDateTime.now()
         printer.printCentered("PIN PAD KEY STATUS", PrintFontSize.LARGE, isBold = true)
         printer.printCentered(
-            "${now.format(dateFormatter)} ${now.format(reversalTimeFormatter)}",
+            "${now.format(receiptDateFormatter)} ${now.format(reversalTimeFormatter)}",
             PrintFontSize.SMALL,
         )
         printer.printWrappedField("Model", GlobalConnectPaymentApplication.model)

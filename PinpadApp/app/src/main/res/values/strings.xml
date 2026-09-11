@@ -5,7 +5,8 @@
     <string name="keyload_authentication_invalid">Invalid password. %1$d attempt(s) remaining.</string>
     <string name="keyload_authentication_cooldown">Key loading locked. Try again in %1$d seconds.</string>
     <string name="keyload_authentication_confirm">OK</string>
-    <string name="key_injection_mode_active">Key Injection Mode\nAuthorized for clear-key commands.\nPress CANCEL to exit.</string>
+    <string name="key_injection_mode_active">Key injection mode active</string>
+    <string name="key_injection_mode_hint">Clear-key commands enabled • Press CANCEL to exit</string>
     <string name="app_name">PINPAD</string>
     <string name="license_required_title">PINPAD authorization required</string>
     <string name="license_required_message">Connect the device to TMS to register this application.</string>
@@ -24,6 +25,15 @@
     <string name="transaction_type_refund">REFUND</string>
     <string name="transaction_type_generic">TYPE %1$s</string>
     <string name="prompt_enter_pin">ENTER PIN</string>
+    <string name="prompt_enter_pin_icc">ENTER PIN (ICC)</string>
+    <string name="prompt_enter_new_pin">ENTER NEW PIN</string>
+    <string name="prompt_confirm_new_pin">CONFIRM NEW PIN</string>
+    <string name="prompt_pin_mismatch">PIN CONFIRMATION DOES NOT MATCH</string>
+    <string name="prompt_pin_entry_error">PIN ENTRY ERROR</string>
+    <plurals name="prompt_offline_pin_incorrect_with_tries">
+        <item quantity="one">INCORRECT PIN\n%1$d TRY LEFT</item>
+        <item quantity="other">INCORRECT PIN\n%1$d TRIES LEFT</item>
+    </plurals>
     <string name="prompt_enter_data">ENTER DATA</string>
     <string name="prompt_select_application">SELECT APPLICATION</string>
     <string name="prompt_selecting_application">Selecting App\n%1$s</string>
@@ -36,8 +46,10 @@
     <string name="prompt_pin_key_scheme_error">INCORRECT PIN KEY SCHEME ON ACTIVE MK KEY %1$s</string>
     <string name="prompt_key_metadata_missing">KEY METADATA MISSING FOR ACTIVE MK KEY %1$s</string>
     <string name="prompt_thank_you">THANK YOU</string>
-    <string name="setup_title">Communication Setup</string>
-    <string name="setup_hint">Configure USB Serial, RS232, or IP. Save restarts the communication service with the selected settings.</string>
+    <string name="prompt_pin_changed_successfully">PIN CHANGED SUCCESSFULLY</string>
+    <string name="prompt_pin_unblocked_successfully">PIN UNBLOCKED SUCCESSFULLY</string>
+    <string name="setup_title">Comms Setup</string>
+    <string name="setup_hint">Configure USB Serial, RS232, or IP.</string>
     <string name="setup_transport">Communication</string>
     <string name="setup_usb_serial">USB Serial</string>
     <string name="setup_ip">IP (Wi-Fi/Ethernet)</string>
@@ -52,7 +64,7 @@
     <string name="setup_close">Close</string>
     <string name="settings_menu_title">Settings</string>
     <string name="settings_menu_hint">Select a configuration option.</string>
-    <string name="settings_serial_settings">Communication Settings</string>
+    <string name="settings_serial_settings">Comms Settings</string>
     <string name="settings_android_settings">Android Settings</string>
     <string name="settings_wifi_settings">Wi-Fi Settings</string>
     <string name="settings_cloud_update">Cloud Update</string>

@@ -1,5 +1,6 @@
 package one.globalconnect.paymentapp.cardreader.nexgo
 
+import one.globalconnect.tms.paymentapp.TMS_ContactlessTechnicalValues
 import java.util.Locale
 
 internal enum class EmvCapabilityInterface {
@@ -13,6 +14,8 @@ internal data class EmvTerminalCapabilityProfile(
     val base9F33: ByteArray?,
     val controlledCvmMask: Int,
     val enabledCvmMask: Int,
+    val ttq: ByteArray? = null,
+    val contactlessTechnicalValues: TMS_ContactlessTechnicalValues? = null,
 )
 
 internal object EmvTerminalCapabilities {
@@ -49,6 +52,27 @@ internal object EmvTerminalCapabilities {
             (currentCvm and profile.controlledCvmMask.inv()) or
                 (profile.enabledCvmMask and profile.controlledCvmMask)
             ).toByte()
+        return result
+    }
+
+    fun applyOfflinePinChangeCvmPolicy(configured9F33: ByteArray?): ByteArray? {
+        val source = configured9F33?.takeIf { it.size >= 3 } ?: return null
+        val result = source.copyOf(3)
+        val offlinePinMask = PLAINTEXT_OFFLINE_PIN or ENCIPHERED_OFFLINE_PIN
+        val currentCvm = result[1].toInt() and 0xFF
+        val offlinePinCapabilities = currentCvm and offlinePinMask
+        if (offlinePinCapabilities == 0) return null
+        result[1] = ((currentCvm and STANDARD_CVM_MASK.inv()) or offlinePinCapabilities).toByte()
+        return result
+    }
+
+    /** Restricts CVM capabilities to No CVM so an already-blocked card never requests its current PIN. */
+    fun applyOfflinePinUnblockCvmPolicy(configured9F33: ByteArray?): ByteArray? {
+        val source = configured9F33?.takeIf { it.size >= 3 } ?: return null
+        val result = source.copyOf(3)
+        val currentCvm = result[1].toInt() and 0xFF
+        if (currentCvm and NO_CVM == 0) return null
+        result[1] = ((currentCvm and STANDARD_CVM_MASK.inv()) or NO_CVM).toByte()
         return result
     }
 

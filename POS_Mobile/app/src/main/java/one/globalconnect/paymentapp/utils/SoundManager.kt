@@ -177,6 +177,19 @@ object SoundManager {
         }
     }
 
+    /**
+     * Plays an audible acknowledgement for a card-reader or cardholder instruction.
+     *
+     * The Nexgo kernel can ignore hardware-buzzer requests made while returning from
+     * an EMV callback. This application-audio tone provides a reliable fallback for
+     * contactless reads and important cardholder instructions.
+     */
+    fun playAcknowledgementBeep(durationMs: Int) {
+        val safeDurationMs = durationMs.coerceAtLeast(1)
+        toneGenerator.stopTone()
+        toneGenerator.startTone(ToneGenerator.TONE_PROP_ACK, safeDurationMs)
+    }
+
     private fun playLoadedSample(sampleId: Int, soundEffect: SoundEffect) {
         val volume = when (soundEffect) {
             SoundEffect.KEY_SPACEBAR, SoundEffect.KEY_RETURN -> 0.7f  // ⬇ 30% Lower Volume (1.0 -> 0.7)

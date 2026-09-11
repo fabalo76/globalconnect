@@ -3,9 +3,11 @@ package one.globalconnect.paymentapp.transaction
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -22,16 +24,27 @@ import androidx.compose.runtime.livedata.observeAsState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntRect
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupPositionProvider
+import androidx.compose.ui.window.PopupProperties
 import androidx.lifecycle.viewmodel.compose.viewModel
 import one.globalconnect.paymentapp.AppViewModelProvider
+import one.globalconnect.paymentapp.GlobalConnectPaymentApplication
 import one.globalconnect.paymentapp.R
+import one.globalconnect.paymentapp.cardreader.nexgo.awaitContactCardRemoval
 import one.globalconnect.paymentapp.ui.theme.color_black
 import one.globalconnect.paymentapp.ui.theme.color_grey95
 import one.globalconnect.paymentapp.ui.theme.color_primaryBrand
@@ -50,21 +63,49 @@ fun TransactionFinishedScreen(
     val viewModel: FinishedPaymentViewModel = viewModel(factory = viewModelFactory)
     val transaction by viewModel.transaction.observeAsState(Transaction())
     val receiptPreviewState by viewModel.receiptPreviewState.collectAsState(initial = null)
+    val merchantPrintStatus by viewModel.merchantReceiptPrintStatus.collectAsState()
+    val nexgoApi = remember { GlobalConnectPaymentApplication.instance.nexgoApi }
 
-    val transactionId = transaction.id
-    var dismissed by remember(transactionId) { mutableStateOf(false) }
+    val transactionLoaded = transaction.type != TransactionType.ERROR
+    var dismissed by remember { mutableStateOf(false) }
+    var cardRemovalRequired by remember(transaction.id) { mutableStateOf(false) }
+    var cardRemovalCheckComplete by remember(transaction.id) { mutableStateOf(false) }
+    val isPinMaintenance = OfflinePinChangeContract.isPinMaintenance(transaction.type)
+    val currencySymbol = viewModel.tmsAcquirer?.Currency?.takeIf { it.isNotBlank() } ?: "$"
+    val mustCheckContactCard = transactionLoaded &&
+        requiresContactCardRemoval(transaction.cardEntryMethod)
+    val canLeaveResult = transactionLoaded && cardRemovalCheckComplete && !cardRemovalRequired
 
-    LaunchedEffect(transactionId, dismissed) {
-        if (transactionId != 0 && !dismissed) {
+    LaunchedEffect(transaction.id, transactionLoaded, mustCheckContactCard) {
+        if (!transactionLoaded) return@LaunchedEffect
+        // This destination follows the sensory kit. Submit the merchant copy before
+        // starting card-removal prompts or their reminder sounds.
+        viewModel.submitAutomaticMerchantReceipt()
+        if (mustCheckContactCard) {
+            nexgoApi.awaitContactCardRemoval { required ->
+                cardRemovalRequired = required
+            }
+        }
+        cardRemovalCheckComplete = true
+    }
+
+    LaunchedEffect(canLeaveResult, dismissed) {
+        if (canLeaveResult && !dismissed) {
             delay(15_000)
-            if (!dismissed) {
+            if (!dismissed && canLeaveResult) {
                 dismissed = true
                 onNewSalePress()
             }
         }
     }
 
-    val amountText = transaction.totalAmount.takeIf { it.isNotBlank() }?.let { "$$it" }
+    val amountText = when {
+        isPinMaintenance -> null
+        transaction.type == TransactionType.LOYALTY_BALANCE -> transaction.loyaltyBalancePoints
+            .takeIf { it.isNotBlank() }
+            ?.let { stringResource(R.string.loyalty_points_available, LoyaltyContract.formatPoints(it)) }
+        else -> transaction.totalAmount.takeIf { it.isNotBlank() }?.let { "$currencySymbol$it" }
+    }
     val subtitle = transaction.masked_cardNumber.takeIf { it.isNotBlank() }
         ?: transaction.cardRangeName.takeIf { it.isNotBlank() }
 
@@ -81,17 +122,28 @@ fun TransactionFinishedScreen(
                 tint = color_success,
             )
             Text(
-                text = if (transaction.type == TransactionType.REFUND) {
-                    stringResource(id = R.string.refund_complete)
-                } else {
-                    stringResource(id = R.string.payment_complete)
+                text = when (transaction.type) {
+                    TransactionType.REFUND -> stringResource(id = R.string.refund_complete)
+                    TransactionType.OFFLINE_PIN_CHANGE -> {
+                        stringResource(id = R.string.offline_pin_change_complete)
+                    }
+                    TransactionType.PIN_UNBLOCK -> stringResource(id = R.string.pin_unblock_complete)
+                    else -> stringResource(id = R.string.payment_complete)
                 },
                 fontSize = 20.sp,
                 fontWeight = FontWeight.SemiBold,
                 textAlign = TextAlign.Center,
             )
             Text(
-                text = stringResource(id = R.string.thank_you_payment),
+                text = when (transaction.type) {
+                    TransactionType.OFFLINE_PIN_CHANGE -> {
+                        stringResource(id = R.string.offline_pin_change_complete_detail)
+                    }
+                    TransactionType.PIN_UNBLOCK -> {
+                        stringResource(id = R.string.pin_unblock_complete_detail)
+                    }
+                    else -> stringResource(id = R.string.thank_you_payment)
+                },
                 fontSize = 16.sp,
                 color = color_secondaryFive.copy(alpha = 0.8f),
                 textAlign = TextAlign.Center,
@@ -114,6 +166,7 @@ fun TransactionFinishedScreen(
                         SoundManager.play(SoundEffect.KEY_TICK)
                         viewModel.printMerchantReceipt()
                     },
+                    enabled = canLeaveResult && merchantPrintStatus == MerchantReceiptPrintStatus.READY,
                 ) {
                     Text(
                         textAlign = TextAlign.Center,
@@ -134,6 +187,7 @@ fun TransactionFinishedScreen(
                         SoundManager.play(SoundEffect.KEY_TICK)
                         viewModel.printCustomerReceipt()
                     },
+                    enabled = canLeaveResult && merchantPrintStatus != MerchantReceiptPrintStatus.PRINTING,
                 ) {
                     Text(
                         textAlign = TextAlign.Center,
@@ -146,33 +200,68 @@ fun TransactionFinishedScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(52.dp),
+                enabled = canLeaveResult,
                 shape = RoundedCornerShape(24.dp),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = color_primaryBrand,
                     contentColor = color_black,
                 ),
                 onClick = {
-                    if (!dismissed) {
+                    if (!dismissed && canLeaveResult) {
                         dismissed = true
                         SoundManager.play(SoundEffect.KEY_TICK)
                         onNewSalePress()
                     }
                 },
             ) {
-                val label = if (transaction.type == TransactionType.REFUND) {
-                    stringResource(id = R.string.return_sale_screen)
-                } else {
-                    stringResource(id = R.string.new_transaction)
+                val label = when (transaction.type) {
+                    TransactionType.REFUND -> stringResource(id = R.string.return_sale_screen)
+                    TransactionType.OFFLINE_PIN_CHANGE -> {
+                        stringResource(id = R.string.offline_pin_change_finish)
+                    }
+                    TransactionType.PIN_UNBLOCK -> stringResource(id = R.string.offline_pin_change_finish)
+                    else -> stringResource(id = R.string.new_transaction)
                 }
                 Text(textAlign = TextAlign.Center, text = label)
             }
         }
 
         receiptPreviewState?.let { previewState ->
-            ReceiptPrintPreview(
-                state = previewState,
-                onDismissed = { viewModel.dismissReceiptPreview() },
-            )
+            Popup(
+                popupPositionProvider = WindowTopLeftPopupPositionProvider,
+                properties = PopupProperties(
+                    focusable = true,
+                    dismissOnBackPress = false,
+                    dismissOnClickOutside = false,
+                    clippingEnabled = false,
+                ),
+            ) {
+                ReceiptPrintPreview(
+                    state = previewState,
+                    onDismissed = { viewModel.dismissReceiptPreview() },
+                )
+            }
+        }
+
+        if (cardRemovalRequired) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.White)
+                    .padding(24.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                RemoveCardContent()
+            }
         }
     }
+}
+
+private object WindowTopLeftPopupPositionProvider : PopupPositionProvider {
+    override fun calculatePosition(
+        anchorBounds: IntRect,
+        windowSize: IntSize,
+        layoutDirection: LayoutDirection,
+        popupContentSize: IntSize,
+    ): IntOffset = IntOffset.Zero
 }

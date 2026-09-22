@@ -1,4 +1,9 @@
 <resources>
+    <string name="release_log_title">Release debug log</string>
+    <string name="release_log_allow_storage">Allow storage access</string>
+    <string name="release_log_description">Today: /sdcard/Logs/Pinpad/log_today.txt. Up to 9 older daily logs are retained. Android requires All files access to write this folder; until allowed, logs remain inside the app. After allowing access, return here to check the path.</string>
+    <string name="release_log_settings_unavailable">Storage access settings are unavailable. Logs remain inside the app.</string>
+    <string name="audio_recording_notification">Recording audio · maximum 30 minutes</string>
     <string name="keyload_authentication_title">Key-load authorization</string>
     <string name="keyload_authentication_command">Protected command %1$s</string>
     <string name="keyload_authentication_hardware_hint">Enter both seven-digit passwords using the physical keypad.</string>
@@ -112,4 +117,14 @@
     <string name="camera_permission_required">Camera permission is required for this operation.</string>
     <string name="action_done">Done</string>
     <string name="action_cancel">Cancel</string>
+    <string name="setup_usb_base">USB</string>
+    <string name="setup_usb_base_port">USB port</string>
+    <string name="setup_export_connection_log">Export connection log</string>
+    <string name="setup_log_saved">Connection log saved</string>
+    <string name="setup_log_failed">Could not save the connection log</string>
+    <string name="key_injection_mode_touch_hint">Clear-key loading enabled</string>
+    <string name="key_injection_mode_exit">Exit key injection</string>
+    <string name="prompt_swipe_tap_card">SWIPE OR TAP CARD</string>
+    <string name="prompt_swipe_insert_card">SWIPE OR INSERT CARD</string>
+    <string name="prompt_insert_tap_card">INSERT OR TAP CARD</string>
 </resources>

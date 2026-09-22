@@ -28,6 +28,7 @@ data class PendingReversal(
     val transactionAmount: String = "0.00",
     val maskedPan: String = "",
     val cardBrand: String = "",
+    @ColumnInfo(defaultValue = "''") val paymentPlanQueryResponse: String = "",
 )
 
 /** Explains why the reversal was queued. */
@@ -51,4 +52,5 @@ data class ReversalReceiptData(
     val invoiceNumber: String,
     val transactionTypeLabel: String,
     val totalAmountText: String,
+    val installmentDetails: one.globalconnect.paymentapp.transaction.installments.InstallmentDetails? = null,
 )

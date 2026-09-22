@@ -43,7 +43,9 @@ data class LengthConfig(
  */
 object LengthPrefixRegistry {
     private val hostOverrides = mapOf<Long, Int>(
-        12L to 2 // ISSWITCH default
+        HostProtocolRegistry.ISSWITCH to 2,
+        HostProtocolRegistry.BANPAIS_GL to 2,
+        HostProtocolRegistry.BANPAIS_IO to 2,
     )
 
     fun resolve(hostProtocol: Long, terminal: TMS_Terminal?): LengthConfig {

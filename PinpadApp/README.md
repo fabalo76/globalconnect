@@ -24,6 +24,22 @@ Stage 1 is implemented:
 - `protocol/PINPADSessionController` converts valid frames into the Stage 1 command responses.
 - `model/PinpadCommandModels` defines the internal JSON-style request/response shape used between the protocol/service layer and the pinpad command layer.
 
+## Startup through xTMSAgent
+
+Pinpad exposes `android.intent.action.PAY_APP` with the `DEFAULT` category on
+its main activity, in addition to the normal launcher icon. xTMSAgent's boot
+launcher queries this entry after its HOME activity resumes, so it can start
+Pinpad after a local installation without relying solely on Pinpad's own boot
+receiver. xTMSAgent must be the terminal's HOME launcher. Its existing selection
+policy prefers its matching payment-app flavor, or the sole PAY_APP package;
+installing multiple payment applications can therefore select another app.
+
+The temporary release log records `boot receiver received BOOT_COMPLETED`,
+`ACTIVITY created entry=PAY_APP`, and `ACTIVITY resumed`. A boot receiver launch
+request alone does not prove that Android displayed the activity. Validate on
+the terminal by installing the release APK through xTMSAgent and rebooting;
+check the idle screen and a communication command, then review the daily log.
+
 ## SDK Libraries
 
 The Nexgo SmartPOS SDK AAR is stored locally in `app/libs` and loaded by Gradle with `implementation fileTree(dir: 'libs', include: ['*.aar'])`.
@@ -102,6 +118,111 @@ For accelerated media transfer:
 5. To restore 9600/8-N-1, send command `13` with payload `41` and repeat the same handshake.
 
 ## Media Management Protocol
+
+### Temporary production debug logs
+
+Release 1.3.128 includes temporary file diagnostics at
+`/sdcard/Logs/Pinpad/log_today.txt`. On the first event of a new day, the previous day becomes
+`log_YYYY-MM-DD.txt`. Today plus the newest nine archives are retained (ten log
+files total). Each file is capped at 4 MiB; when today's file fills, its recent
+tail is retained with a truncation marker. Raw payment/key/PIN/track payloads,
+recorded PCM/Base64, and unrestricted SDK logcat output are not written.
+
+Use the administration menu → connection/serial settings → **Release debug log**
+→ **Allow storage access**. On Android 11+, allow the app's **All files access**
+and return to Pinpad App. Older Android versions use the storage permission
+prompt. The status dialog reports the public path or a storage error. No ADB is
+required. If firmware policy prevents this grant, logs remain privately under
+`files/release-logs` until permission becomes available.
+
+Events include app version/model/firmware, connection settings, RX/TX command
+identifiers and byte lengths, parser validation, ACK/NAK/EOT and retry timeouts,
+transport errors, audio command statuses/response lengths, and capture start/end
+and errors. Writes use a bounded background queue and publish approximately once
+per second; overload drops are counted. Abrupt process loss can omit queued events.
+Internal and public copies are both bounded to ten logs. Unrelated files in the
+public folder are preserved.
+
+Disable this temporary logger in a future build with
+`-PtemporaryProductionLogEnabled=false`; regular raw release tracing remains off.
+
+### Audio recording commands (N6 Pro only)
+
+Release 1.3.126 adds background microphone capture, independent of the media table.
+From release 1.3.127, the exact identifiers `N6Pro` and `N6ProLite` are enabled
+(case and punctuation are ignored). The tested N6 Pro firmware identifies itself
+as `N6ProLite`, as confirmed by xTMSAgent diagnostics. N6, N96, CT20P, and all other models return status `U` for
+every recording command, without opening the microphone or touching storage.
+
+Grant microphone permission when Pinpad App opens on the N6 Pro. Start capture
+while Pinpad App is visible; Android may reject microphone foreground-service
+activation from a background app. Once started, capture continues in the serial
+foreground service while the host sends other commands or the activity changes.
+The service notification indicates that audio is recording. No ADB is needed.
+
+All commands use transaction framing and the usual ACK/response/ACK exchange.
+The PINPAD acknowledges before potentially slow microphone/storage operations.
+`FS` below is byte `0x1C`; all numeric fields are ASCII decimal without padding.
+
+| Command | Request payload | Successful response payload |
+|---|---|---|
+| `M20` Start | Empty: standard microphone (no selection) | `0 + FS + newFileName` |
+| `M21` Stop | Empty | `0 + FS + savedFileName` |
+| `M22` List | Empty | `0`, followed by FS-separated `state\|sizeBytes\|durationMs\|fileName` records |
+| `M23` Get | `fileName + FS + byteOffset`, starting at zero | `0 + FS + echoedOffset + FS + totalBytes + FS + Base64(chunk)` |
+| `M24` Delete one | Exact filename returned by Start/List | `0` |
+| `M25` Reset/Delete all | Empty | `0` |
+
+From release 1.3.128, each M23 chunk independently encodes at most 1,024 raw bytes
+(1,368 Base64 characters), keeping the entire response below the NEXGO serial
+SDK's 2,048-byte write limit as well as the demo's 4 KiB frame limit. The previous
+2,048-raw-byte packets exceeded the SDK limit after encoding, causing all sends
+to fail and the retry handler to emit EOT after 15 seconds. Decode each chunk separately,
+advance the offset by the decoded byte count, and stop when it equals totalBytes.
+Requests for the same filename/offset are repeatable; no temporary Base64 copy or
+transfer cursor is stored on the terminal. Files are immutable after capture.
+If another command deletes/rotates the requested file, subsequent reads return
+not found. Download only stopped recordings. Prefer TCP or 115,200 baud for large
+recordings. New AAC recordings are approximately 5.4 MB plus ADTS headers per 30 minutes; old WAV files remain downloadable.
+
+List states: `R` recording, `S` stopped, `F` the current capture ended with an
+error. Size and duration of an active recording are snapshots. Start returns only
+after the microphone has started; it does not wait for recording to finish.
+Starting while already recording returns Busy plus the current filename.
+Stop returns only after the worker has finalized the audio, or Busy if it is still
+finishing. A second Stop after an acknowledged Stop returns No active recording.
+After automatic timeout, Stop can acknowledge the last completion until the next
+Start or reset.
+
+From 1.3.130, capture uses AAC-LC at 24 kbps, 16 kHz mono, in ADTS `.aac` files,
+with the standard microphone. M20 requires an empty payload; legacy source
+parameters `0` and `1` now return Invalid. Recording duration is capped at 30
+minutes; complete encoded frames beyond the limit are discarded at finalization.
+A 10 MiB safety cap bounds storage if the encoder exceeds its requested bitrate. Capture also stops on `M21`, pinpad
+reset `Z1`/`72`, service shutdown, or `M25`. Pinpad reset preserves saved audio;
+`M25` stops capture and deletes all recordings. Deleting/getting the active file
+returns Busy. At most ten recordings are kept in private `files/audio-recordings`;
+starting an eleventh deletes the oldest first. Filenames contain a timestamp and
+UUID. The directory is separate from M10–M17 media; media initialization cannot
+delete recordings. Startup preserves legacy WAV files and repairs their headers. For AAC, it
+retains complete ADTS frames and discards an incomplete tail after process death.
+AAC duration comes from frame sample counts, not compressed byte size.
+A new capture requires the 10 MiB safety allowance plus 10 MiB reserve after
+rotation. Unexpected storage exhaustion returns an error and finalizes available
+audio where possible.
+
+| Status | Meaning |
+|---|---|
+| `0` | Success |
+| `1` | Invalid payload, source, filename, or offset |
+| `2` | Microphone permission/security restriction |
+| `3` | Busy: active recording, file in use, or capture still stopping |
+| `4` | Recording not found |
+| `5` | No active recording |
+| `6` | Capture or storage failure |
+| `U` | Unsupported model; protocol response includes `FS + reportedModel` |
+
+### Existing media commands
 
 Media management uses three-character transaction command IDs because all commands beginning with `M` are parsed as three-character IDs. `M03` and `M04` remain reserved for permanent unit serial-number management.
 

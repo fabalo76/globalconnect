@@ -22,6 +22,7 @@ import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import android.view.View
+import android.view.WindowManager
 import android.widget.ImageView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.activity.result.contract.ActivityResultContracts
@@ -78,6 +79,10 @@ class ConfigMenuActivity : AppCompatActivity() {
     ) { uri: Uri? ->
         uri?.let(::installLocalApk)
     }
+
+    private val selectLocalFirmware = registerForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri: Uri? -> uri?.let(::installLocalFirmware) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -188,15 +193,6 @@ class ConfigMenuActivity : AppCompatActivity() {
                 onClickAction   = Runnable { triggerUpdate() }
             ),
             GridAdapter.ButtonItem(
-                text            = getString(R.string.config_diagnostics),
-                packageName     = "cfg_diagnostics",
-                backgroundColor = "#455A64".toColorInt(),
-                iconDrawable    = ContextCompat.getDrawable(this, R.drawable.ic_tms_server),
-                onClickAction   = Runnable {
-                    startActivity(Intent(this, DiagnosticsActivity::class.java))
-                }
-            ),
-            GridAdapter.ButtonItem(
                 text            = getString(R.string.config_factory_tms),
                 packageName     = "cfg_factory_tms",
                 backgroundColor = "#5D4037".toColorInt(),
@@ -207,7 +203,7 @@ class ConfigMenuActivity : AppCompatActivity() {
                 text            = getString(R.string.config_usb),
                 packageName     = "cfg_usb",
                 backgroundColor = "#37474F".toColorInt(),
-                iconDrawable    = ContextCompat.getDrawable(this, R.drawable.ic_network),
+                iconDrawable    = ContextCompat.getDrawable(this, R.drawable.ic_usb),
                 onClickAction   = Runnable {
                     requestPassword { showUsbFileTransferDialog() }
                 }
@@ -218,7 +214,14 @@ class ConfigMenuActivity : AppCompatActivity() {
                 backgroundColor = "#7B1FA2".toColorInt(),
                 iconDrawable    = ContextCompat.getDrawable(this, R.drawable.update),
                 onClickAction   = Runnable {
-                    requestPassword { openLocalApkPicker() }
+                    requestPassword {
+                        AlertDialog.Builder(this)
+                            .setTitle(R.string.local_install_title)
+                            .setItems(arrayOf(getString(R.string.local_apk_option), getString(R.string.local_firmware_option))) { _, selected ->
+                                if (selected == 0) openLocalApkPicker()
+                                else selectLocalFirmware.launch(arrayOf("application/zip", "application/x-zip-compressed", "application/octet-stream"))
+                            }.show()
+                    }
                 }
             )
         )
@@ -233,6 +236,22 @@ class ConfigMenuActivity : AppCompatActivity() {
             ))
         }
 
+        items.add(GridAdapter.ButtonItem(
+            text            = getString(R.string.config_volume),
+            packageName     = "cfg_volume",
+            backgroundColor = "#00838F".toColorInt(),
+            iconDrawable    = ContextCompat.getDrawable(this, R.drawable.ic_volume),
+            onClickAction   = Runnable { openVolumeControls() }
+        ))
+        items.add(GridAdapter.ButtonItem(
+            text            = getString(R.string.config_diagnostics),
+            packageName     = "cfg_diagnostics",
+            backgroundColor = "#455A64".toColorInt(),
+            iconDrawable    = ContextCompat.getDrawable(this, R.drawable.ic_tms_server),
+            onClickAction   = Runnable {
+                startActivity(Intent(this, DiagnosticsActivity::class.java))
+            }
+        ))
         items.add(GridAdapter.ButtonItem(
             text            = getString(R.string.config_back),
             packageName     = "cfg_back",
@@ -252,6 +271,21 @@ class ConfigMenuActivity : AppCompatActivity() {
             itemHeightPx = it.height / rows
             buildPages(vp, rows * 2)
         }
+    }
+
+    private fun openVolumeControls() {
+        // Some terminal firmware omits the volume panel but provides sound settings.
+        for (action in listOf(Settings.Panel.ACTION_VOLUME, Settings.ACTION_SOUND_SETTINGS)) {
+            try {
+                startActivity(Intent(action))
+                return
+            } catch (exception: android.content.ActivityNotFoundException) {
+                Log.w(TAG, "Volume controls unavailable: $action", exception)
+            } catch (exception: SecurityException) {
+                Log.w(TAG, "Volume controls restricted: $action", exception)
+            }
+        }
+        showMsg(getString(R.string.volume_controls_unavailable))
     }
 
     private fun buildPages(vp: ViewPager2, buttonsPerPage: Int) {
@@ -331,7 +365,7 @@ class ConfigMenuActivity : AppCompatActivity() {
         val edit2 = view.findViewById<EditText>(R.id.password2)
         PhysicalKeypadInputPolicy.configure(edit1, edit2)
 
-        AlertDialog.Builder(this)
+        val passwordDialog = AlertDialog.Builder(this)
             .setView(view)
             .setPositiveButton(R.string.ok) { _, _ ->
                 if (verifyPassword(edit1.text.toString(), edit2.text.toString())) {
@@ -347,7 +381,21 @@ class ConfigMenuActivity : AppCompatActivity() {
                 }
             }
             .setNegativeButton(R.string.cancel, null)
-            .show()
+            .create()
+        passwordDialog.setOnShowListener {
+            edit1.requestFocus()
+        }
+        PasswordDialogInput.bind(edit1, edit2) {
+            passwordDialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick()
+        }
+        // Request the IME as the dialog gains window focus, while respecting
+        // the physical-keypad policy on CT20 terminals.
+        passwordDialog.window?.setSoftInputMode(
+            WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE or
+                if (edit1.showSoftInputOnFocus) WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE
+                else WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN,
+        )
+        passwordDialog.show()
     }
 
     private fun verifyPassword(p1: String, p2: String): Boolean {
@@ -399,6 +447,9 @@ class ConfigMenuActivity : AppCompatActivity() {
             .setNeutralButton(R.string.cancel, null)
             .create()
         verifyDlg.setCancelable(false)
+        PasswordDialogInput.bind(cur1, cur2) {
+            verifyDlg.getButton(AlertDialog.BUTTON_POSITIVE).performClick()
+        }
         verifyDlg.setCanceledOnTouchOutside(false)
         verifyDlg.setOnShowListener {
             verifyDlg.getButton(AlertDialog.BUTTON_POSITIVE).setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f)
@@ -473,6 +524,74 @@ class ConfigMenuActivity : AppCompatActivity() {
         )
     }
 
+    private fun installLocalFirmware(uri: Uri) {
+        if (localInstallRunning) return
+        localInstallRunning = true
+        timeoutHandler.removeCallbacks(timeoutRunnable)
+        val progress = AlertDialog.Builder(this)
+            .setTitle(R.string.local_firmware_option)
+            .setMessage(R.string.firmware_validating)
+            .setView(ProgressBar(this).apply { isIndeterminate = true })
+            .setCancelable(false).create()
+        progress.show()
+        lifecycleScope.launch(loggingCoroutineExceptionHandler(TAG)) {
+            var prepared: one.globalconnect.xtmsagent.install.PreparedFirmware? = null
+            var submitted = false
+            try {
+                withContext(Dispatchers.IO) {
+                    prepared = one.globalconnect.xtmsagent.install.LocalFirmwareInstaller.prepare(this@ConfigMenuActivity, uri)
+                }
+                progress.dismiss()
+                val firmware = requireNotNull(prepared)
+                val confirmed = kotlinx.coroutines.suspendCancellableCoroutine<Boolean> { continuation ->
+                    val dialog = AlertDialog.Builder(this@ConfigMenuActivity)
+                        .setTitle(R.string.local_firmware_option)
+                        .setMessage(getString(R.string.firmware_confirm, android.os.Build.MODEL,
+                            firmware.version.ifBlank { getString(R.string.firmware_version_unknown) }))
+                        .setPositiveButton(R.string.firmware_install) { _, _ ->
+                            if (continuation.isActive) continuation.resumeWith(Result.success(true))
+                        }
+                        .setNegativeButton(R.string.cancel) { _, _ ->
+                            if (continuation.isActive) continuation.resumeWith(Result.success(false))
+                        }
+                        .setOnCancelListener {
+                            if (continuation.isActive) continuation.resumeWith(Result.success(false))
+                        }.create()
+                    continuation.invokeOnCancellation { runOnUiThread { dialog.dismiss() } }
+                    dialog.show()
+                }
+                if (confirmed) {
+                    submitted = true
+                    withContext(Dispatchers.IO) {
+                        one.globalconnect.xtmsagent.install.LocalFirmwareInstaller.requestUpdate(this@ConfigMenuActivity, firmware)
+                    }
+                    MainActivity.writeLog("Local firmware update requested; awaiting system updater")
+                    showMsg(getString(R.string.firmware_requested))
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.e(TAG, "Local firmware update failed", e)
+                val message = when (e.message) {
+                    "firmware_metadata_missing" -> R.string.firmware_metadata_missing
+                    "firmware_wrong_device" -> R.string.firmware_wrong_device
+                    "firmware_wrong_base" -> R.string.firmware_wrong_base
+                    "firmware_signature" -> R.string.firmware_signature
+                    "firmware_storage" -> R.string.firmware_storage
+                    "firmware_battery" -> R.string.firmware_battery
+                    "firmware_request_failed" -> R.string.firmware_request_failed
+                    else -> R.string.firmware_invalid
+                }
+                showMsg(getString(message))
+            } finally {
+                if (!submitted) prepared?.file?.delete()
+                progress.dismiss()
+                localInstallRunning = false
+                resetIdleTimeout()
+            }
+        }
+    }
+
     private fun installLocalApk(uri: Uri) {
         localInstallRunning = true
         timeoutHandler.removeCallbacks(timeoutRunnable)
@@ -486,7 +605,12 @@ class ConfigMenuActivity : AppCompatActivity() {
 
         lifecycleScope.launch(loggingCoroutineExceptionHandler(TAG)) {
             val result = withContext(Dispatchers.IO) {
-                LocalApkInstaller.install(this@ConfigMenuActivity, uri)
+                val started = android.os.SystemClock.elapsedRealtime()
+                one.globalconnect.xtmsagent.diagnostics.DailyFileLog.record(this@ConfigMenuActivity, "Local install started")
+                LocalApkInstaller.install(this@ConfigMenuActivity, uri).also { result ->
+                    one.globalconnect.xtmsagent.diagnostics.DailyFileLog.record(this@ConfigMenuActivity,
+                        "Local install finished success=${result.success} package=${result.packageName} elapsedMs=${android.os.SystemClock.elapsedRealtime() - started}")
+                }
             }
             progressDialog.dismiss()
             localInstallRunning = false

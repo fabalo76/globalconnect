@@ -20,6 +20,7 @@ private const val TAG = "TmsHkAlarmReceiver"
 class TmsHkAlarmReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
+        if (one.globalconnect.xtmsagent.recovery.StartupRecoveryGuard.inRecovery) return
         try {
         val ctx = context.applicationContext
         when (intent.action) {

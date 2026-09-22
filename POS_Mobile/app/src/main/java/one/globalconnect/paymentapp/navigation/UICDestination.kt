@@ -576,7 +576,7 @@ object dst_Transactions : UICDestination {
     override val icon = Icons.Filled.Dashboard
     override val route: String = "Transactions"
     override fun getLabel(context: Context): String {
-        return context.getString(R.string.transaction_tab_label)
+        return context.getString(R.string.batch_nav_label)
     }
     val screen: @Composable ((String) -> Unit, () -> Unit) -> Unit =
         { onPressTransaction: (String) -> Unit, onQuickTipNav: () -> Unit ->

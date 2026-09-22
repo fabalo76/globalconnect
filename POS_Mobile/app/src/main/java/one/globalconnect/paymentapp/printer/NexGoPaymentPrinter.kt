@@ -1,5 +1,10 @@
 package one.globalconnect.paymentapp.printer
 
+import one.globalconnect.paymentapp.transaction.installments.installmentDetails
+import one.globalconnect.paymentapp.transaction.installments.InstallmentDetails
+import one.globalconnect.paymentapp.transaction.resolvedCardBrand
+import one.globalconnect.paymentapp.transaction.shortReportLabel
+
 import android.content.Context
 import android.content.res.Resources
 import android.graphics.Bitmap
@@ -21,6 +26,7 @@ import com.nexgo.oaf.apiv3.device.pinpad.WorkKeyTypeEnum
 import one.globalconnect.tms.paymentapp.TMSDATA
 import one.globalconnect.paymentapp.R
 import one.globalconnect.paymentapp.GlobalConnectPaymentApplication
+import one.globalconnect.paymentapp.cardreader.nexgo.NexgoSdkResult
 import one.globalconnect.paymentapp.admin.AdminTicketData
 import one.globalconnect.paymentapp.profile.Profile
 import one.globalconnect.paymentapp.records.SummaryMetric
@@ -253,9 +259,14 @@ object NexGoPaymentPrinter : PaymentPrinter {
         printTransactions: Boolean,
         profile: Profile,
         tmsDatabase: TMSDATA,
+        onPrintResult: ((Boolean) -> Unit)?,
     ) {
         val deviceEngine = APIProxy.getDeviceEngine(context)
         val printer = deviceEngine.printer
+        if (onPrintResult != null && printer.status != SdkResult.Success) {
+            onPrintResult(false)
+            return
+        }
         printer.initPrinter()
         val state = printer.status
         Log.d(TAG, "printer state = $state")
@@ -320,13 +331,13 @@ object NexGoPaymentPrinter : PaymentPrinter {
         printer.appendPrnStr(dottedSpacer, SMALLFONTSIZE, AlignEnum.CENTER, false)
 
         if (printTransactions) {
-            printer.appendPrnStr(
-                resources.getString(R.string.report_audit_columns),
-                SMALLFONTSIZE,
-                AlignEnum.LEFT,
-                true,
+            val (headerLeft, headerRight) = formatTransactionHeader(resources)
+            printer.printLine(
+                headerLeft, headerRight,
+                PrintFontSize.TINY,
+                isBold = true,
             )
-            printer.appendPrnStr(dottedSpacer, SMALLFONTSIZE, AlignEnum.CENTER, false)
+            printer.printLine("-".repeat(getLineWidth(PrintFontSize.SMALL)), PrintFontSize.SMALL)
 
             if (transactions.isEmpty()) {
                 printer.appendPrnStr("          ", LARGEFONTSIZE, AlignEnum.CENTER, false)
@@ -338,12 +349,12 @@ object NexGoPaymentPrinter : PaymentPrinter {
                 )
             } else {
                 transactions.forEach { transaction ->
-                    printer.appendPrnStr(
-                        formatAuditLine(transaction, summaryData.currencySymbol),
-                        SMALLFONTSIZE,
-                        AlignEnum.LEFT,
-                        false,
+                    val (left, right) = formatTransactionLine(transaction)
+                    printer.printLine(
+                        left, right,
+                        PrintFontSize.TINY,
                     )
+                    printInstallmentDetails(printer, transaction.installmentDetails())
                 }
             }
 
@@ -471,6 +482,7 @@ object NexGoPaymentPrinter : PaymentPrinter {
         printer.appendPrnStr(dottedSpacer, SMALLFONTSIZE, AlignEnum.CENTER, false)
 
         val listener = OnPrintListener { p0 ->
+            onPrintResult?.invoke(p0 == SdkResult.Success)
             when (p0) {
                 SdkResult.Success -> Log.d(TAG, "Printer job finished successfully!")
                 SdkResult.Printer_Print_Fail -> Log.e(TAG, "Printer Failed: $p0")
@@ -492,33 +504,6 @@ object NexGoPaymentPrinter : PaymentPrinter {
         return String.Companion.format(Locale.US, "%3d %-3s %10s", metric.count, currency, amount)
     }
 
-    private fun formatAuditLine(transaction: Transaction, currencySymbol: String): String {
-        val shortLabel = getShortTransactionLabel(transaction)
-        val invoice = transaction.invoiceId.takeIf { it.isNotBlank() } ?: transaction.orderNo.toString()
-        val cardLast4 = transaction.masked_cardNumber.takeLast(4).ifBlank { transaction.cardNumber.takeLast(4) }
-        val entryMode = getEntryModeLetter(transaction)
-        val cardDisplay = when {
-            cardLast4.isNotBlank() -> "****$cardLast4 $entryMode"
-            entryMode.isNotBlank() -> entryMode
-            else -> "-"
-        }
-        val auth = transaction.authorizationId.takeIf { it.isNotBlank() }
-            ?: transaction.authCode.takeIf { it.isNotBlank() }
-            ?: "-"
-        val currency = currencySymbol.takeIf { it.isNotBlank() } ?: ""
-        val amount = transaction.toSignedAmount().setScale(2, RoundingMode.HALF_UP).toPlainString()
-        return String.Companion.format(
-            Locale.US,
-            "%-3s %-10s %-14s %-12s %3s %10s",
-            shortLabel,
-            invoice.takeLast(10),
-            cardDisplay.take(14),
-            auth.take(12),
-            currency,
-            amount,
-        )
-    }
-
     private fun getEntryModeLetter(transaction: Transaction): String {
         return when (transaction.cardEntryMethod.uppercase(Locale.US)) {
             "EMV" -> "C"
@@ -531,9 +516,7 @@ object NexGoPaymentPrinter : PaymentPrinter {
     }
 
     private fun getShortTransactionLabel(transaction: Transaction): String {
-        val transactionCode = transaction.type.toTransactionString()
-        val config = TransactionConfigRegistry.configFor(transactionCode)
-        return config?.shortLabel ?: transaction.type.name.take(3).uppercase(Locale.US)
+        return transaction.shortReportLabel()
     }
 
     override fun printBatchReport(
@@ -610,7 +593,7 @@ object NexGoPaymentPrinter : PaymentPrinter {
                     )
                     printer.appendPrnStr(
                         "TxnId: ${transaction.transactionId}",
-                        "${transaction.cardType} ${transaction.masked_cardNumber.takeLast(4)}",
+                        "${transaction.resolvedCardBrand()} ${transaction.masked_cardNumber.takeLast(4)}",
                         TINYFONTSIZE,
                         false
                     )
@@ -697,11 +680,16 @@ object NexGoPaymentPrinter : PaymentPrinter {
         report: PrintableTotalsReport,
         profile: Profile?,
         tmsDatabase: TMSDATA,
+        onPrintResult: ((Boolean) -> Unit)?,
     ) {
         //printerTest(context);
         //return
         val deviceEngine = APIProxy.getDeviceEngine(context)
         val printer = deviceEngine.printer
+        if (onPrintResult != null && printer.status != SdkResult.Success) {
+            onPrintResult(false)
+            return
+        }
         printer.initPrinter()
         printer.setGray(PRINT_GRAY_LEVEL)
         printer.setTypeface(Typeface.DEFAULT)
@@ -759,6 +747,7 @@ object NexGoPaymentPrinter : PaymentPrinter {
         printer.appendPrnStr(dottedSpacer, SMALLFONTSIZE, AlignEnum.CENTER, false)
 
         val listener = OnPrintListener { result ->
+            onPrintResult?.invoke(result == SdkResult.Success)
             when (result) {
                 SdkResult.Success -> Log.d(TAG, "Totals report printed successfully")
                 SdkResult.Printer_Print_Fail -> Log.e(TAG, "Totals report failed: $result")
@@ -878,6 +867,7 @@ object NexGoPaymentPrinter : PaymentPrinter {
                     left, right,
                     PrintFontSize.TINY,
                 )
+                printInstallmentDetails(printer, transaction.installmentDetails())
             }
         }
 
@@ -963,6 +953,15 @@ object NexGoPaymentPrinter : PaymentPrinter {
             resources.getString(R.string.settlement_receipt_amount_header),
         )
         return Pair(left,right)
+    }
+
+    private fun printInstallmentDetails(printer: Printer, details: InstallmentDetails?) {
+        details ?: return
+        val resources = GlobalConnectPaymentApplication.instance.resources
+        printer.appendPrnStr("${resources.getString(R.string.receipt_payment_plan)}: ${details.planName} (${details.planCode})",
+            TINYFONTSIZE, AlignEnum.LEFT, false)
+        printer.appendPrnStr("${resources.getString(R.string.receipt_installment_count)}: ${details.count}",
+            TINYFONTSIZE, AlignEnum.LEFT, false)
     }
 
     private fun formatTransactionLine(transaction: Transaction): Pair<String,String> {
@@ -1094,6 +1093,7 @@ object NexGoPaymentPrinter : PaymentPrinter {
         bitmap: ImageBitmap?,
         recipient: String,
         onPrintResult: ((Boolean) -> Unit)?,
+        onPrintStatus: ((Int) -> Unit)?,
     ) {
         val originalTax1Amount = Tax1DiscountCalculator.originalTaxAmountFromDiscounted(
             discountedTaxAmount = transaction.tax1Amount,
@@ -1112,6 +1112,12 @@ object NexGoPaymentPrinter : PaymentPrinter {
         printer.initPrinter()
         val state = printer.status
         Log.d(TAG, "printer state = $state")
+        if (state != SdkResult.Success) {
+            Log.e(TAG, "Printer preflight failed: ${NexgoSdkResult.sdkName(state)} ($state)")
+            onPrintStatus?.invoke(state)
+            onPrintResult?.invoke(false)
+            return
+        }
         //printerManager.setPrintFont("/system/fonts/Android-1.ttf");
         printer.setGray(PRINT_GRAY_LEVEL)
         //printer.setLetterSpacing(4)
@@ -1157,13 +1163,14 @@ object NexGoPaymentPrinter : PaymentPrinter {
         val batchno = 1
         printer.appendPrnStr(entryMode, "${GlobalConnectPaymentApplication.Companion.instance.resources.getString(R.string.batch)}#: ${FormatterUtils.paddedInteger(batchno, 6)}" , TINYFONTSIZE, false )
 
-        printer.appendPrnStr(transaction.masked_cardNumber, transaction.cardType,  MEDIUMFONTSIZE, false)
+        printer.appendPrnStr(transaction.masked_cardNumber, transaction.resolvedCardBrand(),  MEDIUMFONTSIZE, false)
 
         printer.appendPrnStr("RRN: ${transaction.retrievalReferenceNumber.trim().ifBlank { "----" }}", "${
             GlobalConnectPaymentApplication.Companion.instance.resources.getString(
                 R.string.invoice_short)}: ${transaction.invoiceId}" , TINYFONTSIZE, false)
 
         val resources = GlobalConnectPaymentApplication.Companion.instance.resources
+        printInstallmentDetails(printer, transaction.installmentDetails())
         val receiptReferences = resolveReceiptReferenceValues(
             folioNumber = transaction.folioNumber,
             externalReferenceNumber = transaction.externalReferenceNumber,
@@ -1401,6 +1408,7 @@ object NexGoPaymentPrinter : PaymentPrinter {
         printer.startPrint(false, object : OnPrintListener {
             override fun onPrintResult(result: Int) {
                 listener.onPrintResult(result)
+                onPrintStatus?.invoke(result)
                 onPrintResult?.invoke(result == SdkResult.Success)
             }
         })
@@ -1446,6 +1454,7 @@ object NexGoPaymentPrinter : PaymentPrinter {
         val invoiceLabel = GlobalConnectPaymentApplication.Companion.instance.resources.getString(R.string.invoice_short)
         val invoiceValue = data.invoiceNumber.ifBlank { "----" }
         printer.appendPrnStr("RRN: ${data.rrn}", "$invoiceLabel: $invoiceValue", TINYFONTSIZE, false)
+        printInstallmentDetails(printer, data.installmentDetails)
 
         printer.appendPrnStr(" ", LARGEFONTSIZE, AlignEnum.LEFT, false)
         printer.appendPrnStr(data.transactionTypeLabel, data.totalAmountText, LARGEFONTSIZE, false)

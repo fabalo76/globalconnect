@@ -5,6 +5,7 @@ import com.nexgo.oaf.apiv3.device.led.LightModeEnum
 import com.nexgo.oaf.apiv3.device.led.LEDDriver
 import com.nexgo.oaf.apiv3.device.reader.CardSlotTypeEnum
 import one.globalconnect.paymentapp.GlobalConnectPaymentApplication
+import one.globalconnect.paymentapp.utils.DeviceCapabilities
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -34,6 +35,10 @@ internal class CardReaderLedController(
             ?.equals("N96", ignoreCase = true) == true
     }
 
+    private val supportsSdkContactlessLights: Boolean by lazy {
+        !DeviceCapabilities.usesInAppCardReaderLights(model = deviceModelProvider())
+    }
+
     private var idleJob: Job? = null
     private var msrJob: Job? = null
 
@@ -42,8 +47,8 @@ internal class CardReaderLedController(
      * is true the controller keeps the currently lit LEDs until the first idle pulse occurs.
      */
     fun enterIdle(preserveCurrentState: Boolean = false) {
-        if (ledDriver == null) {
-            Log.d(TAG, "enterIdle skipped; LED driver unavailable")
+        if (ledDriver == null || !supportsSdkContactlessLights) {
+            Log.d(TAG, "enterIdle skipped; SDK contactless lights disabled for this model")
             return
         }
         cancelIdleJob()
@@ -63,8 +68,8 @@ internal class CardReaderLedController(
 
     /** Prepares the LED state before invoking a new card search. */
     fun prepareForTransaction(allowContactless: Boolean, allowSwipe: Boolean) {
-        if (ledDriver == null) {
-            Log.d(TAG, "prepareForTransaction skipped; LED driver unavailable")
+        if (ledDriver == null || !supportsSdkContactlessLights) {
+            Log.d(TAG, "prepareForTransaction skipped; SDK contactless lights disabled for this model")
             return
         }
         cancelIdleJob()
@@ -124,7 +129,7 @@ internal class CardReaderLedController(
         green: Boolean = false,
         red: Boolean = false,
     ) {
-        if (ledDriver == null) return
+        if (ledDriver == null || !supportsSdkContactlessLights) return
         runCatching {
             ledDriver?.setLed(LightModeEnum.BLUE, blue)
             ledDriver?.setLed(LightModeEnum.YELLOW, yellow)

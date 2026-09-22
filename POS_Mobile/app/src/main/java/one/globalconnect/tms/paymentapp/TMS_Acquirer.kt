@@ -3,6 +3,7 @@ package one.globalconnect.tms.paymentapp
 import org.json.JSONArray
 import org.json.JSONObject
 import kotlin.jvm.JvmName
+import one.globalconnect.paymentapp.uicpos.pos.host.HostProtocolRegistry
 
 data class TMS_Acquirer(
     var acquirer_id: String = "",
@@ -49,7 +50,7 @@ data class TMS_Acquirer(
     val AcquirerName: String get() = acquirerName
     val MerchID: String get() = merchantId
     val AcqTermID: String get() = terminalId
-    val HostProtocol: Long get() = hostProtocol.toLongOrNull() ?: if (hostProtocol.equals("isswitch", ignoreCase = true)) 12L else 0L
+    val HostProtocol: Long get() = HostProtocolRegistry.resolveId(hostProtocol)
     val IPTabTran: String get() = hostConnectionInfoRef
     val NII: Long get() = nii
     @get:JvmName("getLegacyCountryCode")

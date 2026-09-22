@@ -175,7 +175,8 @@ class TransactionDetailsViewModel(
 data class ReturnResult(
     val isSuccess: Boolean,
     val message: String = "",
-    val transaction: Transaction = Transaction()
+    val transaction: Transaction = Transaction(),
+    val responseCode: String = "96",
 )
 
 enum class ReturnAction {
@@ -186,7 +187,7 @@ enum class ReturnAction {
 }
 
 sealed class ReturnUiState(val isSuccess: Boolean, val message: String = "") {
-    class Loading(message: String) : ReturnUiState(false, message = message)
+    class Loading(message: String, val processingStatus: ProcessingStatusUi? = null) : ReturnUiState(false, message = message)
 
     class ResultReady(isSuccess: Boolean, message: String) : ReturnUiState(isSuccess, message)
 

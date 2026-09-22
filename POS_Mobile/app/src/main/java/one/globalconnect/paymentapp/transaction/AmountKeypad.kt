@@ -42,6 +42,7 @@ import one.globalconnect.paymentapp.ui.theme.color_error
 import one.globalconnect.paymentapp.ui.theme.color_secondaryThree
 import one.globalconnect.paymentapp.ui.theme.color_success
 import one.globalconnect.paymentapp.ui.theme.color_white
+import one.globalconnect.paymentapp.utils.DeviceCapabilities
 import one.globalconnect.paymentapp.utils.HardwareFunctionKey
 import one.globalconnect.paymentapp.utils.HardwareKeyCommand
 import one.globalconnect.paymentapp.utils.HardwareKeyListener
@@ -78,6 +79,10 @@ fun AmountKeypad(
         onCancelPressed = onCancelPressed,
         onFunctionKey = onFunctionKey,
     )
+
+    if (DeviceCapabilities.hasPhysicalNumericKeypad()) {
+        return
+    }
 
     val visuals = rememberAmountKeyVisuals()
     val configuration = LocalConfiguration.current

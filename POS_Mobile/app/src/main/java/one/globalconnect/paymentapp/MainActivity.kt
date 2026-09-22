@@ -9,6 +9,10 @@ import android.graphics.Color
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
+import one.globalconnect.paymentapp.ecr.*
+import androidx.activity.compose.BackHandler
+import android.view.MotionEvent
+import androidx.core.view.ViewCompat
 import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
@@ -219,6 +223,9 @@ class MainActivity : ComponentActivity() {
         super.attachBaseContext(localizedContext)
     }
 
+    private var navigationBarHideScheduled = false
+    private val hideNavigationBarRunnable = Runnable { hideNavigationBar() }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         // installSplashScreen must be called before super.onCreate so the OS can hand off
         // the splash window. setKeepOnScreenCondition holds the branded splash until the
@@ -238,6 +245,20 @@ class MainActivity : ComponentActivity() {
         )
 
         super.onCreate(savedInstanceState)
+
+        // Observe both Cancel-triggered and edge-swipe reveals without consuming insets.
+        ViewCompat.setOnApplyWindowInsetsListener(window.decorView) { view, insets ->
+            if (insets.isVisible(WindowInsetsCompat.Type.navigationBars())) {
+                if (!navigationBarHideScheduled) {
+                    navigationBarHideScheduled = true
+                    view.postDelayed(hideNavigationBarRunnable, 4_000L)
+                }
+            } else {
+                view.removeCallbacks(hideNavigationBarRunnable)
+                navigationBarHideScheduled = false
+            }
+            insets
+        }
 
         // Keep OS splash until background init completes (~1s), then video overlay takes over.
         splashScreen.setKeepOnScreenCondition {
@@ -318,6 +339,8 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        window.decorView.removeCallbacks(hideNavigationBarRunnable)
+        ViewCompat.setOnApplyWindowInsetsListener(window.decorView, null)
         super.onDestroy()
         unregisterReceiver(paramsAppliedReceiver)
     }
@@ -327,6 +350,11 @@ class MainActivity : ComponentActivity() {
         TmsParamsUpdateNotifier.setMainActivityVisible(true)
     }
 
+    override fun onPause() {
+        EcrRuntime.foreground = false
+        super.onPause()
+    }
+
     override fun onStop() {
         TmsParamsUpdateNotifier.setMainActivityVisible(false)
         super.onStop()
@@ -334,6 +362,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        EcrRuntime.foreground = true
         hideNavigationBar()
     }
 
@@ -344,7 +373,35 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+        if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+            EcrRuntime.activity(tap = !one.globalconnect.paymentapp.utils.DeviceCapabilities.hasPhysicalNumericKeypad())
+            hideNavigationBar()
+        }
+        return super.dispatchTouchEvent(event)
+    }
+
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (one.globalconnect.paymentapp.ecr.EcrVoidInteraction.screen.value != null) {
+            if (event.action == KeyEvent.ACTION_UP) {
+                when (event.keyCode) {
+                    KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_ESCAPE ->
+                        one.globalconnect.paymentapp.ecr.EcrVoidInteraction.back()
+                    KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER ->
+                        one.globalconnect.paymentapp.ecr.EcrVoidInteraction.decide(true)
+                }
+            }
+            return true
+        }
+        if (event.action == KeyEvent.ACTION_UP) {
+            EcrRuntime.activity(clear = event.keyCode == KeyEvent.KEYCODE_CLEAR || event.keyCode == KeyEvent.KEYCODE_DEL)
+            if (EcrRuntime.locked && EcrRuntime.ready && !EcrRuntime.passwordRequested.value) return true
+        }
+
+        // Hide before dispatch so Cancel at zero can deliberately reveal it again.
+        if (event.action == KeyEvent.ACTION_DOWN) {
+            hideNavigationBar()
+        }
         if (HardwareKeyManager.handleKeyEvent(event)) {
             return true
         }
@@ -360,6 +417,8 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun hideNavigationBar() {
+        window.decorView.removeCallbacks(hideNavigationBarRunnable)
+        navigationBarHideScheduled = false
         val controller = WindowInsetsControllerCompat(window, window.decorView)
         controller.systemBarsBehavior =
             WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
@@ -837,6 +896,33 @@ fun UICApp(
     }
     val selectedTab = navigationManager.currentTab
     val navBackStackEntry by navController.currentBackStackEntryAsState()
+    val ecrSettings by EcrRuntime.settings.collectAsState()
+    val ecrUnlocked by EcrRuntime.unlocked.collectAsState()
+    val ecrPassword by EcrRuntime.passwordRequested.collectAsState()
+    val ecrSale by EcrRuntime.sale.collectAsState()
+    val ecrLocked = ecrSettings.enabled && ecrSettings.kiosk && !ecrUnlocked
+    LaunchedEffect(Unit) { EcrRuntime.configure(context) }
+    LaunchedEffect(navBackStackEntry, ecrSettings) {
+        EcrRuntime.ready = navBackStackEntry?.destination?.route == dst_Sale.route
+    }
+    LaunchedEffect(ecrSale?.id) {
+        ecrSale?.let { request ->
+            if (navController.currentDestination?.route != dst_CardTransaction.route) {
+                navController.navigate("CardTransaction/${request.transactionType.toTransactionString()}/${request.base}/?$TAX1_KEY=${request.tax1}&$TAX2_KEY=${request.tax2}&$TIP_KEY=0.00&$FOLIO_KEY=&$CHECK_IN_ID_KEY=&$ORIGINAL_TRANSACTION_ID_KEY=")
+            }
+        }
+    }
+    LaunchedEffect(ecrLocked) { EcrKioskPolicy.apply(context, ecrLocked) }
+    LaunchedEffect(ecrLocked, ecrPassword) {
+        if (ecrPassword) navController.navigate("Password/EcrUnlock") { launchSingleTop=true }
+        else if(ecrLocked && EcrRuntime.sale.value==null && !PendingUpdateManager.isOperationInProgress) {
+            navigationManager.onDestinationSelected(dst_Sale)
+        }
+    }
+    BackHandler(ecrLocked && ecrSale==null) {
+        EcrRuntime.passwordRequested.value=false
+        navigationManager.onDestinationSelected(dst_Sale)
+    }
     val paramUpdatePending by PendingUpdateManager.paramUpdatePending.collectAsState()
     val operationInProgress by PendingUpdateManager.operationInProgress.collectAsState()
     var showParamUpdateReminder by remember { mutableStateOf(paramUpdatePending) }
@@ -889,38 +975,46 @@ fun UICApp(
     }
 
     val isBottomBarVisible = navigationManager.shouldShowBottomBar(navBackStackEntry?.destination)
+    val voidSurfaceVisible by one.globalconnect.paymentapp.transaction.VoidPresentation.active.collectAsState()
+    val isTransactionSurfaceVisible = voidSurfaceVisible || navBackStackEntry?.destination?.route?.let { route ->
+        route.startsWith("CardTransaction/") || route.startsWith("TransactionFinished/")
+    } == true
 
     // Removed the ModalNavigationDrawer wrapper.
     // Using Scaffold directly for the app layout.
     Scaffold(
         topBar = {
-            // Top image banner with consistent padding so the logo is never cropped
-            val swDp = LocalConfiguration.current.smallestScreenWidthDp
-            val isCompactScreen = swDp < 360
-            val isN62Screen = swDp >= 480
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(MaterialTheme.colorScheme.background)
-                    .statusBarsPadding()
-                    .padding(
-                        top = if (isCompactScreen) 6.dp else 12.dp,
-                        bottom = if (isCompactScreen) 2.dp else 5.dp
-                    ),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                val logoResourceNames = remember { VARIANT_LOGO_RESOURCE_NAMES }
-                Image(
-                    painter = rememberVariantDrawablePainter(
-                        resourceNames = logoResourceNames,
-                        fallbackResId = R.drawable.logo_color
-                    ),
-                    contentDescription = "Logo header",
+            if (!isTransactionSurfaceVisible) {
+                // Top image banner with consistent padding so the logo is never cropped
+                val isCt20 = one.globalconnect.paymentapp.utils.DeviceCapabilities.paymentDeviceVisual() ==
+                    one.globalconnect.paymentapp.utils.PaymentDeviceVisual.CT20
+                val swDp = LocalConfiguration.current.smallestScreenWidthDp
+                val isCompactScreen = swDp < 360
+                val isN62Screen = swDp >= 480
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(when { isN62Screen -> 56.dp; isCompactScreen -> 36.dp; else -> 50.dp }),
-                    contentScale = ContentScale.Fit,
-                )
+                        .background(MaterialTheme.colorScheme.background)
+                        .statusBarsPadding()
+                        .padding(
+                            top = if (isCt20) androidx.compose.ui.res.dimensionResource(R.dimen.ct20_header_padding_top) else if (isCompactScreen) 6.dp else 12.dp,
+                            bottom = if (isCt20) androidx.compose.ui.res.dimensionResource(R.dimen.ct20_header_padding_bottom) else if (isCompactScreen) 2.dp else 5.dp
+                        ),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    val logoResourceNames = remember { VARIANT_LOGO_RESOURCE_NAMES }
+                    Image(
+                        painter = rememberVariantDrawablePainter(
+                            resourceNames = logoResourceNames,
+                            fallbackResId = R.drawable.logo_color
+                        ),
+                        contentDescription = "Logo header",
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(when { isCt20 -> androidx.compose.ui.res.dimensionResource(R.dimen.ct20_header_logo_height); isN62Screen -> 56.dp; isCompactScreen -> 36.dp; else -> 50.dp }),
+                        contentScale = ContentScale.Fit,
+                    )
+                }
             }
         },
         bottomBar = {
@@ -929,7 +1023,7 @@ fun UICApp(
                 allScreens = navBarScreens,
                 onTabSelected = navigationManager::onDestinationSelected,
                 currentTab = selectedTab,
-                visible = isBottomBarVisible,
+                visible = isBottomBarVisible && !ecrLocked && !voidSurfaceVisible,
             )
         }
     ) { innerPadding ->
@@ -948,7 +1042,9 @@ fun UICApp(
                 )
         ) {
                 composable(route = dst_Sale.route) {
-                    if (shouldUseHotelHome(tmsDatabase)) {
+                    if (ecrSettings.enabled) {
+                        EcrIdleScreen()
+                    } else if (shouldUseHotelHome(tmsDatabase)) {
                         HotelHomeScreen(
                             onDestinationSelected = navigationManager::onHotelHomeDestinationSelected,
                         )
@@ -979,11 +1075,25 @@ fun UICApp(
                     }
                 }
                 composable(route = dst_QuotaSale.route) {
+                    if (one.globalconnect.paymentapp.transaction.installments.InstallmentContracts.forTransaction(TransactionType.QUOTA_SALE) != null) {
+                        LaunchedEffect(Unit) {
+                            navController.navigate("CardTransaction/${TransactionType.QUOTA_SALE.toTransactionString()}/0.00/?$TAX1_KEY=0.00&$TAX2_KEY=0.00&$TIP_KEY=0.00&$FOLIO_KEY=&$CHECK_IN_ID_KEY=&$ORIGINAL_TRANSACTION_ID_KEY=") {
+                                popUpTo(dst_QuotaSale.route) { inclusive = true }
+                            }
+                        }
+                    } else
                     dst_QuotaSale.screen { transactionType, baseAmount, tax1Amount, tax2Amount, tipAmount, _ ->
                         navController.navigate("CardTransaction/$transactionType/$baseAmount/?$TAX1_KEY=$tax1Amount&$TAX2_KEY=$tax2Amount&$TIP_KEY=$tipAmount&$FOLIO_KEY=&$CHECK_IN_ID_KEY=&$ORIGINAL_TRANSACTION_ID_KEY=")
                     }
                 }
                 composable(route = dst_ExtrasSale.route) {
+                    if (one.globalconnect.paymentapp.transaction.installments.InstallmentContracts.forTransaction(TransactionType.EXTRAS_SALE) != null) {
+                        LaunchedEffect(Unit) {
+                            navController.navigate("CardTransaction/${TransactionType.EXTRAS_SALE.toTransactionString()}/0.00/?$TAX1_KEY=0.00&$TAX2_KEY=0.00&$TIP_KEY=0.00&$FOLIO_KEY=&$CHECK_IN_ID_KEY=&$ORIGINAL_TRANSACTION_ID_KEY=") {
+                                popUpTo(dst_ExtrasSale.route) { inclusive = true }
+                            }
+                        }
+                    } else
                     dst_ExtrasSale.screen { transactionType, baseAmount, tax1Amount, tax2Amount, tipAmount, _ ->
                         navController.navigate("CardTransaction/$transactionType/$baseAmount/?$TAX1_KEY=$tax1Amount&$TAX2_KEY=$tax2Amount&$TIP_KEY=$tipAmount&$FOLIO_KEY=&$CHECK_IN_ID_KEY=&$ORIGINAL_TRANSACTION_ID_KEY=")
                     }
@@ -1152,6 +1262,11 @@ fun UICApp(
                     })
                 ) {
                     when (val destination = it.arguments?.getString(DESTINATION_KEY) ?: "") {
+                        "EcrUnlock" -> dst_PasswordScreen.screen {
+                            EcrRuntime.unlock()
+                            navigationManager.onDestinationSelected(dst_MoreMenu)
+                        }
+
                         dst_Reports.route -> dst_PasswordScreen.screen {
                             Log.i(TAG, "Navigating to ${dst_Reports.route} after password validation")
                             navController.navigate(dst_Reports.route) {
@@ -1402,12 +1517,15 @@ fun UICApp(
                 ) {
                     dst_CardTransaction.screen(
                         { transactionId, transactionType ->
+                            val isEcr = EcrRuntime.receiptRequested(transactionId) != null
                             val navigateDirectlyToResult =
                                 transactionType == TransactionType.REFUND ||
                                     transactionType == TransactionType.LOYALTY_BALANCE ||
                                     OfflinePinChangeContract.isPinMaintenance(transactionType)
                             val postPaymentRoute =
-                                if (navigateDirectlyToResult) {
+                                if (isEcr && !navigateDirectlyToResult) {
+                                    "BrandingAnimation/$transactionId"
+                                } else if (navigateDirectlyToResult) {
                                     "TransactionFinished/$transactionId"
                                 } else if (SysParam.getInstance().transactionMode == TransactionMode.Restaurant && SysParam.getInstance().TipMethod == ONSCREEN) {
                                     "TipScreen?$TRANSACTION_ID_KEY=$transactionId"
@@ -1513,14 +1631,17 @@ fun UICApp(
                     }
                     BrandingAnimationScreen(
                         onComplete = {
-                            val captureSignature = prefs.getBoolean(PREF_CAPTURE_SIGNATURE, false)
+                            val isEcr = EcrRuntime.receiptRequested(transactionId) != null
+                            val captureSignature = !isEcr && prefs.getBoolean(PREF_CAPTURE_SIGNATURE, false)
                             if (captureSignature) {
                                 navController.navigate("Signature/$transactionId") {
                                     popUpTo("BrandingAnimation/$transactionId") { inclusive = true }
                                 }
                             } else {
                                 navController.navigate("TransactionFinished/$transactionId") {
-                                    popUpTo(dst_Sale.route) { inclusive = false }
+                                    // Special transaction flows may not have Sale in their stack.
+                                    // Always remove the completed sensory destination itself.
+                                    popUpTo("BrandingAnimation/$transactionId") { inclusive = true }
                                 }
                             }
                         }

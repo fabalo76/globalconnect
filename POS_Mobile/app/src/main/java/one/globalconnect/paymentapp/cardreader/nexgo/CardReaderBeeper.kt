@@ -20,6 +20,7 @@ class CardReaderBeeper(
     private val beepExecutor: ExecutorService = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "card-reader-beeper")
     }
+    private val ATTENTION_BEEP_DURATION_MS = 200
     private val SUCCESS_BEEP_DURATION_MS = 1_000
     private val ERROR_BEEP_DURATION_MS = 200
     private val SEE_PHONE_BEEP_DURATION_MS = 1_000
@@ -27,6 +28,11 @@ class CardReaderBeeper(
     private val SUCCESS_BEEP_DELAY_MS = 150L
     private val ERROR_PAUSE_SHORT_MS = 200L
     private val ERROR_PAUSE_LONG_MS = 300L
+
+    /** One short asynchronous tone when a new operation needs the operator's attention. */
+    fun onAttentionRequired() {
+        scheduleBeep(ATTENTION_BEEP_DURATION_MS)
+    }
 
     fun onContactlessSuccess() {
         // Let the card-reader callback return before requesting one long hardware beep.

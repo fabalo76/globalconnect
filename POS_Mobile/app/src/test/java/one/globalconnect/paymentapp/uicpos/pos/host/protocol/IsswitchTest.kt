@@ -14,15 +14,52 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.junit.runners.Parameterized
+import one.globalconnect.paymentapp.uicpos.pos.host.HostProtocolRegistry
 
-class IsswitchTest {
+@RunWith(Parameterized::class)
+class IsswitchTest(private val protocolName: String) {
+    private fun protocol() = requireNotNull(HostProtocolRegistry.protocolFor(createAcquirer().HostProtocol))
+    companion object {
+        @JvmStatic
+        @Parameterized.Parameters(name = "{0}")
+        fun protocols() = listOf(arrayOf("isswitch"), arrayOf("banpaisgl"), arrayOf("banpaisio"))
+    }
+
+    @Test
+    fun `installment query and final sale carry distinct message types and plan fields`() {
+        val factory = IsoConfigParser.fromFile(isoConfigFile())
+        for ((code, processing, tag45) in listOf(
+            Triple("InstallmentQuery", "310000", "0".repeat(22) + "S"),
+            Triple("ExtrasQuery", "310000", "0".repeat(22) + "C"),
+            Triple("QuotaSale", "000000", "06EXT1" + "0".repeat(16) + "S"),
+            Triple("ExtrasSale", "010000", "06EXT1" + "0".repeat(16) + "C"),
+        )) {
+            val query = code.endsWith("Query")
+            val message = protocol().buildIsoMessage(HostProtocolContext(
+                procInfo = ProcInfo(TransLog = TransLog(TxnType = code,
+                    TxnAmt = if (query) "0.00" else "12.25", PaymentPlan = tag45,
+                    RefNbr = if (query) "" else "613410000040")),
+                acquirer = createAcquirer(), terminal = createTerminal(onlinePinCap = false), isoFactory = factory,
+                stanSupplier = { "000001" },
+                timestampSupplier = { LocalDateTime.of(2026, 9, 21, 12, 0) },
+            ))
+            val decoded = factory.parse(message.toByteArray(), 0)
+            assertEquals(if (query) "0100" else "0200", decoded.messageType)
+            assertEquals(processing, decoded.getFieldValue(3))
+            assertEquals(if (query) "000000000000" else "000000001225", decoded.getFieldValue(4))
+            assertEquals(tag45, PrivateUseData63.parse(decoded.getFieldValue(63))["45"])
+            if (!query) assertEquals("613410000040", decoded.getFieldValue(37))
+        }
+    }
 
     @Test
     fun `field 55 sends 9F6E unchanged only when supplied by the kernel`() {
         val isoFactory = IsoConfigParser.fromFile(isoConfigFile())
         for (optionalTag in listOf("", "9F6E0401020304", "9F6E0701020304050607")) {
             val expected = "9F2608ABCDEF1234567890${optionalTag}9F3602001A"
-            val message = Isswitch().buildIsoMessage(
+            val message = protocol().buildIsoMessage(
                 HostProtocolContext(
                     procInfo = ProcInfo(TransLog = TransLog(
                         TxnType = Constants.HOST_TRANS_SALE,
@@ -56,7 +93,7 @@ class IsswitchTest {
             for (terminal in capabilities) {
                 val pinDigit = if (terminal.onlinePinCap || terminal.offlineEncrPinCap || terminal.offlineClearPinCap) "1" else "2"
                 val expected = capture + pinDigit
-                val message = Isswitch().buildIsoMessage(
+                val message = protocol().buildIsoMessage(
                     HostProtocolContext(
                         procInfo = ProcInfo(TransLog = TransLog(
                             TxnType = Constants.HOST_TRANS_SALE,
@@ -118,7 +155,7 @@ class IsswitchTest {
             timestampSupplier = { LocalDateTime.of(2024, 1, 2, 3, 4, 5) }
         )
 
-        val message = Isswitch().buildIsoMessage(context)
+        val message = protocol().buildIsoMessage(context)
 
         assertEquals("0200", message.messageType)
         assertEquals("000000", message.getFieldValue(3))
@@ -169,7 +206,7 @@ class IsswitchTest {
             Field55 = retainedTags.substringBefore("9F36") + sensitiveTags + "9F3602001A",
         )
 
-        val message = Isswitch().buildIsoMessage(
+        val message = protocol().buildIsoMessage(
             HostProtocolContext(
                 procInfo = ProcInfo(TransLog = transLog),
                 acquirer = createAcquirer(),
@@ -208,7 +245,7 @@ class IsswitchTest {
             timestampSupplier = { LocalDateTime.of(2024, 2, 3, 4, 5, 6) }
         )
 
-        val message = Isswitch().buildIsoMessage(context)
+        val message = protocol().buildIsoMessage(context)
 
         assertEquals("0320", message.messageType)
         assertEquals("0200654321", message.getFieldValue(60))
@@ -228,7 +265,7 @@ class IsswitchTest {
             ProcessingCodeOverride = "020000",
         )
 
-        val message = Isswitch().buildIsoMessage(
+        val message = protocol().buildIsoMessage(
             HostProtocolContext(
                 procInfo = ProcInfo(TransLog = transLog),
                 acquirer = acquirer,
@@ -261,7 +298,7 @@ class IsswitchTest {
             KSN = "FFFF9876543210E00008",
         )
 
-        val message = Isswitch().buildIsoMessage(
+        val message = protocol().buildIsoMessage(
             HostProtocolContext(
                 procInfo = ProcInfo(TransLog = transLog),
                 acquirer = createAcquirer(),
@@ -295,7 +332,7 @@ class IsswitchTest {
             Field55 = field55,
         )
 
-        val message = Isswitch().buildIsoMessage(
+        val message = protocol().buildIsoMessage(
             HostProtocolContext(
                 procInfo = ProcInfo(TransLog = transLog),
                 acquirer = createAcquirer(),
@@ -318,7 +355,7 @@ class IsswitchTest {
 
     @Test
     fun `loyalty sale matches A10 Banpais processing contract`() {
-        val message = Isswitch().buildIsoMessage(
+        val message = protocol().buildIsoMessage(
             HostProtocolContext(
                 procInfo = ProcInfo(
                     TransLog = TransLog(
@@ -345,7 +382,7 @@ class IsswitchTest {
 
     @Test
     fun `loyalty balance matches A10 request and omits amount`() {
-        val message = Isswitch().buildIsoMessage(
+        val message = protocol().buildIsoMessage(
             HostProtocolContext(
                 procInfo = ProcInfo(
                     TransLog = TransLog(
@@ -379,7 +416,7 @@ class IsswitchTest {
         acquirerName = "VENTAS",
         terminalId = "00000001",
         merchantId = "000000000000001",
-        hostProtocol = "isswitch",
+        hostProtocol = protocolName,
         enableSale = true,
         currencyCode = 840,
         nii = 5,

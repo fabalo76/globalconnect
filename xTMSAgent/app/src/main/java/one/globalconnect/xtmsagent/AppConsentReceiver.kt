@@ -32,6 +32,7 @@ private const val EXTRA_PROCEED               = "proceed"
 class AppConsentReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
+        if (one.globalconnect.xtmsagent.recovery.StartupRecoveryGuard.inRecovery) return
         try {
             handleResponse(context, intent)
         } catch (e: Exception) {

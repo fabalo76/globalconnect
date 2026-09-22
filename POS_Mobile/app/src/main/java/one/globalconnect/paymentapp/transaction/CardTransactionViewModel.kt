@@ -1,6 +1,8 @@
 package one.globalconnect.paymentapp.transaction
 
+import one.globalconnect.paymentapp.ecr.EcrRuntime
 import android.util.Log
+import one.globalconnect.paymentapp.transaction.installments.*
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -100,6 +102,9 @@ class CardTransactionViewModel(
     private val _events = MutableSharedFlow<CardTransactionEvent>(extraBufferCapacity = 1)
     val events: SharedFlow<CardTransactionEvent> = _events.asSharedFlow()
 
+    private val ecrRequest = EcrRuntime.sale.value
+    val isEcrTransaction: Boolean get() = ecrRequest != null
+
     private val initialBaseAmount: String = savedStateHandle[AMOUNT_KEY] ?: "0.00"
     private val initialTax1Amount: String = savedStateHandle[TAX1_KEY] ?: "0.00"
     private val initialTax2Amount: String = savedStateHandle[TAX2_KEY] ?: "0.00"
@@ -116,6 +121,19 @@ class CardTransactionViewModel(
     val transactionType: TransactionType = (savedStateHandle[TRANSACTION_TYPE_KEY]
         ?: TransactionType.ERROR.toTransactionString()).transactionStringToTransactionType()
 
+    private val installmentContract = InstallmentContracts.forTransaction(transactionType)
+    var installmentQueryPending: Boolean = installmentContract != null
+        private set
+    private var installmentSelection: InstallmentSelection? = null
+    private var installmentCardIdentity: String? = null
+    private var installmentAcquirerId: String? = null
+    private var installmentQueryResponse: String = ""
+    private var installmentQueryReference: String = ""
+
+    private fun installmentCardIdentity(card: CardReadResult): String? = extractPan(card)?.takeIf { it.isNotBlank() }?.let {
+        java.security.MessageDigest.getInstance("SHA-256").digest(it.toByteArray()).joinToString("") { byte -> "%02x".format(byte) }
+    }
+
     private var currentAmounts = PartialApprovalAmounts.fromStrings(
         base = initialBaseAmount,
         tax1 = initialTax1Discount.discountedTaxAmountText,
@@ -126,7 +144,7 @@ class CardTransactionViewModel(
 
     private val transactionInvoice = CardTransactionInvoice(InvoiceNumberProvider::nextInvoiceNumber)
 
-    fun invoiceNumberForCardRead(): String = transactionInvoice.forCardRead()
+    fun invoiceNumberForCardRead(): String = if (installmentQueryPending) "000000" else transactionInvoice.forCardRead()
 
     private var selectionJob: Job? = null
     private var activeCardData: CardReadResult? = null
@@ -198,14 +216,31 @@ class CardTransactionViewModel(
 
     fun start() {
         Log.d(TAG, "start invoked transactionType=$transactionType totalAmount=${currentAmounts.total}")
+        if (installmentQueryPending) {
+            currentAmounts = PartialApprovalAmounts.fromStrings("0.00", "0.00", "0.00", "0.00", "0.00")
+        }
+        if (installmentContract != null && terminal?.enableInstallments != true) {
+            showError(string(R.string.installment_disabled))
+            return
+        }
         if (!supportedTransactionTypes.contains(transactionType)) {
             _uiState.value = CardTransactionUiState(
                 step = CardTransactionStep.Error(string(R.string.trans_error))
             )
             return
         }
+        if (ecrRequest != null && LoyaltyContract.isLoyalty(transactionType) && terminal?.enableLoyalty != true) {
+            showError(string(R.string.trans_error), "58")
+            return
+        }
         stopWaitingForResponseCountdown()
-        val currencies = CurrencyTable.build(tmsDatabase.Acquirer)
+        val requestedCurrency = ecrRequest?.currency
+        val allCurrencies = CurrencyTable.build(tmsDatabase.Acquirer)
+        val currencies = if(requestedCurrency == null) allCurrencies else allCurrencies.filter { it.currencyCode.toString().padStart(3,'0') == requestedCurrency }
+        if(requestedCurrency != null && currencies.isEmpty()) {
+            showError("Unsupported ECR currency", "30")
+            return
+        }
         Log.d(TAG, "start currencies=${currencies.size}")
         val baseState = CardTransactionUiState(
             baseAmount = currentAmounts.base.moneyText(),
@@ -257,9 +292,18 @@ class CardTransactionViewModel(
             "onCardRead slot=${result.slotType} maskedPan=${result.maskedCardNumber} track2Length=${result.track2?.length}",
         )
         if (!supportedTransactionTypes.contains(transactionType)) return
+        if (installmentQueryPending && onlineResponseHandler != null) {
+            showError(string(R.string.installment_query_invalid))
+            return
+        }
+        if (installmentContract != null && !installmentQueryPending &&
+            (installmentSelection == null || installmentCardIdentity(result) != installmentCardIdentity)) {
+            showError(string(R.string.installment_same_card))
+            return
+        }
         pendingEmvOnlineContext = onlineResponseHandler?.let(::EmvOnlineFlowCoordinator)
         activeCardData = result
-        val resolvedOptions = resolveAcquirerOptions(result)
+        val resolvedOptions = resolveAcquirerOptions(result).filter { installmentQueryPending || installmentAcquirerId == null || it.acquirer.AcqID == installmentAcquirerId }
         val allOptions = if (transactionType == TransactionType.OFFLINE_PIN_CHANGE) {
             resolvedOptions.filter { option -> OfflinePinChangeContract.supportsAcquirer(option.acquirer) }
         } else {
@@ -423,8 +467,49 @@ class CardTransactionViewModel(
         processTransaction(option, cardData)
     }
 
+    val selectedInstallment: InstallmentSelection? get() = installmentSelection
+
+    fun installmentAmountPromptConfig(): AmountPromptConfig =
+        (TransactionConfigRegistry.amountPromptConfigFor(transactionType.toTransactionString(), terminal,
+            tmsDatabase.Acquirer.filter { it.AcqID == installmentAcquirerId })
+            ?: AmountPromptConfig(true, false, false, false)).copy(currencySymbol = _uiState.value.currencySymbol)
+
+    fun selectInstallmentPlan(code: String) {
+        val step = _uiState.value.step as? CardTransactionStep.SelectingInstallmentPlan ?: return
+        val plan = step.plans.singleOrNull { it.code == code } ?: return
+        _uiState.update { it.copy(step = CardTransactionStep.SelectingInstallmentCount(plan)) }
+        startSelectionTimer()
+    }
+
+    fun selectInstallmentCount(count: Int) {
+        val step = _uiState.value.step as? CardTransactionStep.SelectingInstallmentCount ?: return
+        if (count !in step.plan.installments) return
+        installmentSelection = InstallmentSelection(step.plan, count)
+        _uiState.update { it.copy(step = CardTransactionStep.EnteringInstallmentAmounts) }
+        startSelectionTimer()
+    }
+
+    fun submitInstallmentAmounts(base: String, tax1: String, tax2: String, tip: String) {
+        if (_uiState.value.step != CardTransactionStep.EnteringInstallmentAmounts || installmentSelection == null) return
+        val discount = Tax1DiscountCalculator.calculate(tax1, terminal?.TaxDiscount ?: 0.0)
+        val amounts = PartialApprovalAmounts.fromStrings(base, discount.discountedTaxAmountText,
+            discount.discountAmountText, tax2, tip)
+        if (amounts.total.signum() <= 0) return
+        selectionJob?.cancel()
+        prepareRemainingTransaction(amounts)
+    }
+
     fun retry() {
+        if (ecrRequest != null && EcrRuntime.sale.value == null) { cancelTransaction(); return }
         Log.d(TAG, "retry invoked")
+        if (installmentContract != null && installmentSelection == null) {
+            installmentQueryPending = true
+            installmentCardIdentity = null
+            installmentAcquirerId = null
+            currentAmounts = PartialApprovalAmounts.fromStrings("0.00", "0.00", "0.00", "0.00", "0.00")
+            start()
+            return
+        }
         selectionJob?.cancel()
         activeCardData = null
         currentOptions = emptyList()
@@ -521,6 +606,7 @@ class CardTransactionViewModel(
                 _events.emit(CardTransactionEvent.NavigateToResult(approvedId))
             } else {
                 Log.d(TAG, "Emitting CardTransactionEvent.Cancelled")
+                EcrRuntime.finish("UC", "Cancelled")
                 _events.emit(CardTransactionEvent.Cancelled)
             }
         }
@@ -528,6 +614,7 @@ class CardTransactionViewModel(
 
     fun onSelectionTimeout() {
         Log.d(TAG, "onSelectionTimeout invoked")
+        if (installmentContract != null) installmentSelection = null
         activeCardData = null
         currentOptions = emptyList()
         showError(string(R.string.sale_error_selection_timeout))
@@ -674,7 +761,7 @@ class CardTransactionViewModel(
                 }
 
                 val stan = StanProvider.nextStan()
-                val invoiceId = transactionInvoice.forHostRequest()
+                val invoiceId = if (installmentQueryPending) "000000" else transactionInvoice.forHostRequest()
                 Log.d(TAG, "processTransaction stan=$stan invoice=$invoiceId")
                 val procInfo = buildProcInfo(option, effectiveCardData, stan, invoiceId)
 
@@ -748,10 +835,43 @@ class CardTransactionViewModel(
 
                 val result = hostClient.execute(request)
                 val responseCode = result.isoMessage.getFieldValue(39)
+                if (installmentQueryPending) {
+                    if (responseCode != "00") {
+                        showError(HostResponseMessageResolver.resolveOrFallback(responseCode), responseCode ?: "96")
+                        return@launch
+                    }
+                    val plans = runCatching {
+                        requireNotNull(installmentContract).parsePlans(
+                            PrivateUseData63.parse(result.isoMessage.getFieldValue(63))["46"].orEmpty())
+                    }.getOrNull()
+                    val identity = installmentCardIdentity(cardData)
+                    val queryReference = result.isoMessage.getFieldValue(37).orEmpty().trim()
+                    if (plans.isNullOrEmpty() || identity == null || queryReference.length != 12) {
+                        showError(string(R.string.installment_query_invalid))
+                        return@launch
+                    }
+                    installmentQueryResponse = PrivateUseData63.parse(result.isoMessage.getFieldValue(63))["46"].orEmpty()
+                    installmentQueryReference = queryReference
+                    installmentCardIdentity = identity
+                    installmentAcquirerId = option.acquirer.AcqID
+                    installmentQueryPending = false
+                    activeCardData = null
+                    currentOptions = emptyList()
+                    pendingEmvOnlineContext = null
+                    stopWaitingForResponseCountdown()
+                    _uiState.update { it.copy(
+                        step = if (plans.size == 1) CardTransactionStep.SelectingInstallmentCount(plans.single())
+                            else CardTransactionStep.SelectingInstallmentPlan(plans),
+                        processingStatus = null, cardData = null,
+                        statusMessage = string(R.string.installment_select_count)) }
+                    startSelectionTimer()
+                    return@launch
+                }
+
                 Log.d(TAG, "processTransaction responseCode=$responseCode")
                 val partialAllocation = if (
                     responseCode == PartialApprovalContract.RESPONSE_CODE &&
-                    PartialApprovalContract.isSupported(transactionType)
+                    PartialApprovalContract.isSupported(transactionType) && installmentContract == null
                 ) {
                     PartialApprovalContract.parseApprovedAmount(result.isoMessage.getFieldValue(4))
                         ?.let { approvedAmount ->
@@ -945,7 +1065,7 @@ class CardTransactionViewModel(
                         TAG,
                         "Host declined transaction responseCode=$responseCode message=$responseMessage",
                     )
-                    showError(responseMessage)
+                    showError(responseMessage, responseCode ?: "96")
                 }
 
                 if (needsReversal) {
@@ -1160,7 +1280,16 @@ class CardTransactionViewModel(
             "buildProcInfo acquirer=${option.acquirer.AcqID} issuer=${option.issuer.IssuerName} maskedPan=${cardData.maskedCardNumber}",
         )
         val transLog = ProcInfo().TransLog
-        transLog.TxnType = transactionType.toTransactionString()
+        transLog.TxnType = if (installmentQueryPending) requireNotNull(installmentContract).queryCode(transactionType)
+            else transactionType.toTransactionString()
+        installmentContract?.let { contract ->
+            transLog.PaymentPlan = if (installmentQueryPending) contract.queryField45(transactionType)
+                else contract.saleField45(transactionType, requireNotNull(installmentSelection))
+            if (!installmentQueryPending) {
+                transLog.PaymentPlanQueryResponse = installmentQueryResponse
+                transLog.RefNbr = installmentQueryReference
+            }
+        }
         transLog.AccType = "Credit"
         transLog.AcquirerId = option.acquirer.AcqID
         transLog.IssuerId = option.issuer.IssuID
@@ -1181,7 +1310,6 @@ class CardTransactionViewModel(
         transLog.InvoiceId = invoiceId
         transLog.TxnId = stan
         transLog.AuthNtwkName = option.acquirer.AcquirerName
-        transLog.CardType = option.issuer.IssuerName
         transLog.FolioNumber = folioNumber
         if (transactionType == TransactionType.CHECKOUT) {
             transLog.OriginalTransactionId = originalTransactionId
@@ -1212,7 +1340,8 @@ class CardTransactionViewModel(
         transLog.CardDataSource = sourceLabel
 
         val emvTags = cardData.emvTags.associateBy { it.tag.uppercase(Locale.US) }
-        transLog.AID = emvTags["84"]?.value ?: ""
+        transLog.AID = emvTags["4F"]?.value ?: emvTags["84"]?.value ?: ""
+        transLog.CardType = CardBrandResolver.resolve(transLog.AID, pan)
         transLog.TVR = emvTags["95"]?.value ?: ""
         transLog.TSI = emvTags["9B"]?.value ?: ""
         transLog.AC = emvTags["9F26"]?.value ?: ""
@@ -1274,6 +1403,7 @@ class CardTransactionViewModel(
     private suspend fun awaitRemainingTransactionDecision(
         remaining: PartialApprovalAmounts,
     ): Boolean {
+        if (ecrRequest != null) return false
         val decision = CompletableDeferred<Boolean>()
         remainingTransactionDecision = decision
         _uiState.update { current ->
@@ -1333,7 +1463,7 @@ class CardTransactionViewModel(
         procInfo: ProcInfo,
         writesActiveRecord: Boolean,
     ): String {
-        val transaction = procInfo.toTransaction()
+        val transaction = procInfo.toTransaction().apply { posTransactionId = ecrRequest?.id.orEmpty() }
         val destinationId: String
         val reportTransaction: Transaction
         if (writesActiveRecord) {
@@ -1349,6 +1479,7 @@ class CardTransactionViewModel(
             destinationId = TransientTransactionResultStore.store(transaction)
             reportTransaction = transaction
         }
+        if (ecrRequest != null) EcrRuntime.approved(reportTransaction, procInfo.TransLog.BatchId.orEmpty(), destinationId)
         TransactionReportBridge.reportTransaction(
             context = GlobalConnectPaymentApplication.instance,
             transaction = reportTransaction,
@@ -1396,7 +1527,10 @@ class CardTransactionViewModel(
         val privateUseTags = PrivateUseData63.parse(result.isoMessage.getFieldValue(63))
         privateUseTags["22"]?.let { procInfo.TransLog.AlternateHostResponse = it }
         privateUseTags["29"]?.let { procInfo.TransLog.AdditionalHostPrintData = it }
-        privateUseTags["46"]?.let { procInfo.TransLog.PaymentPlanQueryResponse = it }
+        // Keep the plan catalogue used for selection as the durable receipt snapshot.
+        if (procInfo.TransLog.PaymentPlanQueryResponse.isNullOrBlank()) {
+            privateUseTags["46"]?.let { procInfo.TransLog.PaymentPlanQueryResponse = it }
+        }
     }
 
     private fun resolveAcquirerOptions(cardData: CardReadResult): List<CardTransactionAcquirerOption> {
@@ -1558,6 +1692,8 @@ class CardTransactionViewModel(
             TransactionType.CASH -> acquirer.EnableCash
             TransactionType.LOYALTY_SALE,
             TransactionType.LOYALTY_BALANCE -> acquirer.enableLoyalty
+            TransactionType.QUOTA_SALE, TransactionType.EXTRAS_SALE ->
+                if (installmentContract != null) acquirer.enableInstallments && (!isFallback || acquirer.AllowFallBack) else true
             else -> true
         }
         Log.d(TAG, "acquirerSupportsTransaction acquirer=${acquirer.AcqID} type=$type fallback=$isFallback supported=$supported")
@@ -1740,6 +1876,7 @@ class CardTransactionViewModel(
             transactionAmount = procInfo.TransLog.TxnAmt,
             maskedPan = maskedPan,
             cardBrand = procInfo.TransLog.CardType ?: "",
+            paymentPlanQueryResponse = procInfo.TransLog.PaymentPlanQueryResponse.orEmpty(),
         )
     }
 
@@ -1792,7 +1929,8 @@ class CardTransactionViewModel(
         }
     }
 
-    private fun showError(message: String) {
+    private fun showError(message: String, ecrCode: String = "96") {
+        EcrRuntime.finish(ecrCode, message)
         Log.w(TAG, "Transaction failed: $message")
         abortPendingEmvOnlineAuthorization()
         stopWaitingForResponseCountdown()
@@ -1888,6 +2026,9 @@ sealed class CardTransactionStep {
     object ContactlessReadRetryPrompt : CardTransactionStep()
     data class SelectingCurrency(val currencies: List<CurrencyInfo>) : CardTransactionStep()
     data class SelectingAcquirer(val options: List<CardTransactionAcquirerOption>) : CardTransactionStep()
+    data class SelectingInstallmentPlan(val plans: List<InstallmentPlan>) : CardTransactionStep()
+    data class SelectingInstallmentCount(val plan: InstallmentPlan) : CardTransactionStep()
+    object EnteringInstallmentAmounts : CardTransactionStep()
     object ProcessingHost : CardTransactionStep()
     data class PartialApproval(
         val requestedAmount: String,

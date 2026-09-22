@@ -37,18 +37,24 @@ object PinpadTraceLog {
     }
 
     fun transport(message: String) {
+        ProductionLog.record("TRANSPORT", message)
+        ConnectionLog.record("TRANSPORT $message")
         detail("TRANSPORT $message")
     }
 
     fun service(message: String) {
+        ProductionLog.record("SERVICE", message)
+        ConnectionLog.record("SERVICE $message")
         detail("SERVICE $message")
     }
 
     fun parser(message: String) {
+        ProductionLog.record("PARSER", if (message.startsWith("discarded byte")) "discarded byte before frame start" else message)
         detail("PARSER $message")
     }
 
     fun protocol(message: String) {
+        ProductionLog.record("PROTOCOL", message)
         detail("PROTOCOL $message")
     }
 

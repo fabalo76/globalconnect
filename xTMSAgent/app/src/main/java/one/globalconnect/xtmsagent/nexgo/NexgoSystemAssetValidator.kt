@@ -23,7 +23,7 @@ enum class NexgoSystemAsset(
     ;
 
     fun fixedFileName(profile: NexgoDeviceProfile): String =
-        if (this == STANDALONE_BOOT_SOUND && profile.modelKey == "CT20P") {
+        if (this == STANDALONE_BOOT_SOUND && profile.modelKey in setOf("CT20", "CT20P")) {
             "bootsound.mp3"
         } else {
             fixedFileName
@@ -244,7 +244,7 @@ object NexgoSystemAssetValidator {
     ): NexgoDisplaySpec? = when (asset) {
         NexgoSystemAsset.BOOT_ANIMATION -> profile.display
         NexgoSystemAsset.SHUTDOWN_ANIMATION -> when (profile.modelKey) {
-            "CT20P", "N6S", "N82", "N96" -> NexgoDisplaySpec(720, 1280)
+            "CT20", "CT20P", "N6S", "N82", "N96" -> NexgoDisplaySpec(720, 1280)
             else -> null
         }
         else -> null

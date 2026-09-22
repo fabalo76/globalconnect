@@ -5,7 +5,7 @@ using PinpadMediaManager.Core.Transport;
 
 namespace PinpadMediaManager;
 
-public sealed class MainForm : Form
+public sealed partial class MainForm : Form
 {
     private const int DefaultBaudRate = 9_600;
     private static readonly int[] SupportedBaudRates =
@@ -229,9 +229,12 @@ public sealed class MainForm : Form
         var tabs = new ProminentTabControl { Dock = DockStyle.Fill };
         var jpegPage = new TabPage("Images — J commands") { Padding = new Padding(8) };
         var mediaPage = new TabPage("Media — M commands") { Padding = new Padding(8) };
+        var recordingsPage = new TabPage("Audio recordings") { Padding = new Padding(8) };
+        recordingsPage.Controls.Add(BuildAudioRecordingsPage());
         var signaturePage = new TabPage("Signature — S commands") { Padding = new Padding(8) };
         var cameraQrPage = new TabPage("Camera & QR — PH/QR commands") { Padding = new Padding(8) };
         var a10DemoPage = new TabPage("Pinpad Demo") { Padding = new Padding(8) };
+        var cardOperationsPage = new TabPage("Card Operations") { Padding = new Padding(8) };
         var offlinePinChangePage = new TabPage("Offline PIN change") { Padding = new Padding(8) };
         var a10Demo = new A10DemoControl(_client, status => _statusLabel.Text = status);
         jpegPage.Controls.Add(BuildJpegPage());
@@ -240,11 +243,14 @@ public sealed class MainForm : Form
         cameraQrPage.Controls.Add(BuildCameraQrPage());
         a10DemoPage.Controls.Add(a10Demo);
         offlinePinChangePage.Controls.Add(a10Demo.OfflinePinChangeContent);
+        cardOperationsPage.Controls.Add(a10Demo.CardOperationsContent);
         tabs.TabPages.Add(jpegPage);
         tabs.TabPages.Add(mediaPage);
+        tabs.TabPages.Add(recordingsPage);
         tabs.TabPages.Add(signaturePage);
         tabs.TabPages.Add(cameraQrPage);
         tabs.TabPages.Add(a10DemoPage);
+        tabs.TabPages.Add(cardOperationsPage);
         tabs.TabPages.Add(offlinePinChangePage);
         return tabs;
     }
@@ -1515,7 +1521,7 @@ public sealed class MainForm : Form
         _connectionTypeCombo.Enabled = !connected && !_operationInProgress;
         _portCombo.Enabled = !connected && !_operationInProgress && !IsIpMode;
         _refreshPortsButton.Enabled = !connected && !_operationInProgress && !IsIpMode;
-        _baudCombo.Enabled = !connected && !_operationInProgress && !IsIpMode;
+        _baudCombo.Enabled = !_operationInProgress && !IsIpMode;
         _hostTextBox.Enabled = !connected && !_operationInProgress && IsIpMode;
         _tcpPort.Enabled = !connected && !_operationInProgress && IsIpMode;
         _discoverButton.Enabled = !connected && !_operationInProgress && IsIpMode;

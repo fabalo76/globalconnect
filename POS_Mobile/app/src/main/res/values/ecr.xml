@@ -1,0 +1,17 @@
+<resources>
+    <string name="ecr_report_in_progress">Preparing ECR report…</string>
+    <string name="ecr_disabled">ECR disabled</string>
+    <string name="ecr_waiting">Waiting for ECR on TCP port %1$d</string>
+    <string name="ecr_listen_failed">Cannot listen on TCP port %1$d. Check the ECR configuration.</string>
+    <string name="ecr_sale_in_progress">Sale in progress</string>
+    <string name="ecr_reconcile">Unable to save the ECR result. Reconciliation required.</string>
+    <string name="ecr_ready">Ready for ECR</string>
+    <string name="ecr_enable">Enable ECR</string>
+    <string name="ecr_port">TCP listening port</string>
+    <string name="ecr_kiosk">ECR kiosk mode</string>
+    <string name="ecr_serial_pending">USB and RS232 are reserved for the next phase. Use TCP/IP for this version.</string>
+    <string name="ecr_unlock_help">To unlock, press Clear 10 times consecutively, or tap the ECR screen 10 times on a device without a keypad. The configuration password is required. Kiosk mode returns after 1 minute of inactivity.</string>
+    <string name="ecr_saved">ECR configuration saved</string>
+    <string name="ecr_save_failed">Could not save ECR configuration</string>
+    <string name="ecr_save">Save ECR configuration</string>
+</resources>

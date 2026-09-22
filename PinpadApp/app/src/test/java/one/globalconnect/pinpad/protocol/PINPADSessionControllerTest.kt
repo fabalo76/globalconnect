@@ -11,6 +11,20 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class PINPADSessionControllerTest {
+    @Test
+    fun audioCommandsReturnUnsupportedOnOtherModelsWithNormalHandshake() {
+        val codec = PINPADFrameCodec()
+        for (command in (20..25).map { "M$it" }) {
+            val session = PINPADSessionController(FakeDeviceInfoProvider(), codec = codec)
+            val responses = session.onInbound(PINPADInbound.Frame(PINPADFrame(PINPADFrameType.Transaction, command)))
+            assertEquals(PINPADControl.ACK, responses[0].single())
+            val response = assertIs<PINPADFrameCodec.DecodeResult.Valid>(codec.decode(responses[1]))
+            assertEquals(command, response.frame.commandId)
+            assertEquals("U\u001cCT20P", response.frame.payloadAscii)
+            assertTrue(session.onInbound(PINPADInbound.Control(PINPADControl.ACK)).isEmpty())
+            session.shutdown()
+        }
+    }
     private val codec = PINPADFrameCodec()
     private val controller = PINPADSessionController(
         deviceInfoProvider = FakeDeviceInfoProvider(),

@@ -31,6 +31,8 @@ private const val TAG = "TmsDeviceAdmin"
 class TmsDeviceAdminReceiver : DeviceAdminReceiver() {
 
     override fun onEnabled(context: Context, intent: android.content.Intent) {
+        if (context.applicationContext is one.globalconnect.xtmsagent.recovery.RecoveryApplication ||
+            one.globalconnect.xtmsagent.recovery.StartupRecoveryGuard.inRecovery) return
         Log.i(TAG, "Device admin enabled")
         applyKioskRestrictions(context)
     }
@@ -46,6 +48,7 @@ class TmsDeviceAdminReceiver : DeviceAdminReceiver() {
          * Does nothing and logs a warning if the app is not the device owner.
          */
         fun applyKioskRestrictions(context: Context) {
+            if (one.globalconnect.xtmsagent.recovery.StartupRecoveryGuard.inRecovery) return
             val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
             val admin = componentName(context)
 
@@ -85,11 +88,12 @@ class TmsDeviceAdminReceiver : DeviceAdminReceiver() {
             dpm: DevicePolicyManager,
             admin: ComponentName,
         ) {
+            if (releaseDefaultHomeForRecovery(context)) return
             val homeFilter = IntentFilter(Intent.ACTION_MAIN).apply {
                 addCategory(Intent.CATEGORY_HOME)
                 addCategory(Intent.CATEGORY_DEFAULT)
             }
-            val homeActivity = ComponentName(context, MainActivity::class.java)
+            val homeActivity = ComponentName(context, one.globalconnect.xtmsagent.recovery.StartupActivity::class.java)
 
             try {
                 dpm.addPersistentPreferredActivity(admin, homeFilter, homeActivity)
@@ -122,6 +126,22 @@ class TmsDeviceAdminReceiver : DeviceAdminReceiver() {
                     "defaultHome success=false error=${e.message}",
                 )
             }
+        }
+
+        /** Returns true when this model must not receive forced HOME policy. */
+        fun releaseDefaultHomeForRecovery(context: Context): Boolean {
+            if (one.globalconnect.xtmsagent.nexgo.NexgoProfileResolver.resolve(
+                    null, android.os.Build.MODEL, null).modelKey != "N6ProLite") return false
+            try {
+                val dpm = context.getSystemService(DevicePolicyManager::class.java)
+                if (dpm.isDeviceOwnerApp(context.packageName)) {
+                    dpm.clearPackagePersistentPreferredActivities(componentName(context), context.packageName)
+                    NexgoDiagnosticsManager.record(context, "defaultHome policy=released model=N6ProLite")
+                }
+            } catch (error: Exception) {
+                NexgoDiagnosticsManager.recordException(context, "defaultHome.release", error)
+            }
+            return true
         }
 
         /**

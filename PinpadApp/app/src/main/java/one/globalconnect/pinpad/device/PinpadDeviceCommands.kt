@@ -1,5 +1,7 @@
 package one.globalconnect.pinpad.device
 
+import one.globalconnect.pinpad.protocol.QkDetectionRequest
+
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -156,6 +158,7 @@ class PinpadDeviceCommands(
     }
 
     fun shutdown() {
+        (applicationContext as one.globalconnect.pinpad.PinpadApplication).audioRecordings.reset()
         runCatching { applicationContext.unregisterReceiver(applicationRequirementReceiver) }
         textToSpeechHandler.removeCallbacksAndMessages(null)
         textToSpeech?.stop()
@@ -874,7 +877,7 @@ class PinpadDeviceCommands(
 
             override fun onSwipeIncorrect() {
                 PinpadTraceLog.device("dual track onSwipeIncorrect")
-                PinpadDisplayController.showPresentCard()
+                PinpadDisplayController.showPresentCard(chipEnabled = false)
             }
 
             override fun onMultipleCards() {
@@ -897,13 +900,14 @@ class PinpadDeviceCommands(
             PinpadTraceLog.device("dual track search start sdkResult=$result")
             return false
         }
-        PinpadDisplayController.showPresentCard()
+        PinpadDisplayController.showPresentCard(chipEnabled = false)
         PinpadTraceLog.device("dual track search started msrMode=$msrTrackMode pcdMode=$pcdTrackMode")
         return true
     }
 
     fun startMultiInterfaceDetection(
         transactionDisplay: PinpadTransactionDisplay? = null,
+        options: QkDetectionRequest = QkDetectionRequest(),
         onResult: (MultiInterfaceDetectionResult) -> Unit,
     ): MultiInterfaceDetectionStartResult {
         if (!multiInterfaceDetectionRunning.compareAndSet(false, true)) {
@@ -947,7 +951,11 @@ class PinpadDeviceCommands(
         }
         val result = runCatching {
             cardReader.searchCard(
-                hashSetOf(CardSlotTypeEnum.SWIPE, CardSlotTypeEnum.ICC1, CardSlotTypeEnum.RF),
+                hashSetOf<CardSlotTypeEnum>().apply {
+                    if (options.swipe) add(CardSlotTypeEnum.SWIPE)
+                    if (options.chip) add(CardSlotTypeEnum.ICC1)
+                    if (options.contactless) add(CardSlotTypeEnum.RF)
+                },
                 MULTI_INTERFACE_SEARCH_TIMEOUT_SECONDS,
                 listener,
             )
@@ -965,7 +973,7 @@ class PinpadDeviceCommands(
             return MultiInterfaceDetectionStartResult.ImmediateResponse(MultiInterfaceDetectionResult.enableMsrFail())
         }
         beepForCardPrompt("QK")
-        PinpadDisplayController.showPresentCard(transactionDisplay)
+        PinpadDisplayController.showPresentCard(transactionDisplay, options = options)
         PinpadTraceLog.device("multi-interface search started transactionDisplay=${transactionDisplay != null}")
         return MultiInterfaceDetectionStartResult.Started
     }
@@ -1174,6 +1182,13 @@ class PinpadDeviceCommands(
     }
 
     fun downloadBootLogoPacket(payload: String): Char = jpegStore.bootLogoPacket(payload)
+
+    fun audioRecordingCommand(command: String, payload: String): String =
+        (applicationContext as one.globalconnect.pinpad.PinpadApplication).audioRecordings.command(command, payload)
+
+    fun stopAudioRecordingOnReset() {
+        (applicationContext as one.globalconnect.pinpad.PinpadApplication).audioRecordings.reset()
+    }
 
     fun initializeMediaTable(): Boolean = mediaStore.initialize()
 

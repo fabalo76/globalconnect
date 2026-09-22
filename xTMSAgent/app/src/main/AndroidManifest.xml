@@ -13,6 +13,7 @@
     <uses-permission
         android:name="android.permission.MANAGE_USB"
         tools:ignore="ProtectedPermissions" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.INTERNET" /> <!-- 允許網路功能 -->
     <uses-permission
         android:name="android.permission.READ_EXTERNAL_STORAGE"
@@ -81,7 +82,8 @@
         android:requestLegacyExternalStorage="true"
         tools:targetApi="34">
         <activity
-            android:name=".MainActivity"
+            android:name=".recovery.StartupActivity"
+            android:theme="@android:style/Theme.Material.Light.NoActionBar"
             android:exported="true"
             android:launchMode="singleTask"
             android:clearTaskOnLaunch="true"
@@ -93,6 +95,13 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <activity android:name=".MainActivity" android:exported="false" android:launchMode="singleTask" />
+        <activity android:name=".recovery.RecoveryActivity" android:exported="false" android:launchMode="singleTask" android:theme="@android:style/Theme.Material.Light.NoActionBar" />
+        <!-- WorkManager must initialize only after the startup recovery gate. -->
+        <provider android:name="androidx.startup.InitializationProvider"
+            android:authorities="${applicationId}.androidx-startup" android:exported="false" tools:node="merge">
+            <meta-data android:name="androidx.work.WorkManagerInitializer" tools:node="remove" />
+        </provider>
 
         <!--
             ConfigMenuActivity — submenu opened by the "Config" launcher button (no password).

@@ -30,6 +30,7 @@ class RemoteControlService : Service() {
     private var manager: RemoteControlManager? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (one.globalconnect.xtmsagent.recovery.StartupRecoveryGuard.inRecovery) { stopSelf(); return START_NOT_STICKY }
         try {
             when (intent?.action) {
                 ACTION_START -> startRemoteSession(intent)

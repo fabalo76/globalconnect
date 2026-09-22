@@ -305,6 +305,9 @@ data class Transaction(
     val additionalHostPrintData: String = "",
     val paymentPlanQueryResponse: String = "",
 
+    /** Original ECR field 80, independent of the host/STAN and host external reference. */
+    @androidx.room.ColumnInfo(defaultValue = "''")
+    var posTransactionId: String = "",
     var orderNo: Int = 1,
     @PrimaryKey(autoGenerate = true) var id:Int = 0
 ) {

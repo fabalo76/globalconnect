@@ -115,7 +115,8 @@ fun SaleScreen_Old(
                         }
                     }
                 },
-                showReset = true // ✅ Enable Reset button
+                showReset = true, // ✅ Enable Reset button
+                hideOnPhysicalKeypad = true,
             )
 
             Box(

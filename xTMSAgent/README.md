@@ -4,9 +4,34 @@ Android launcher application for NEXGO SmartPOS devices. It serves as the device
 
 ## Unified distribution
 
+Version 2.1.2.87 applies supported profile settings and reports unsupported fields
+as `skipped_<reason>`. Skips do not fail the task; an entirely unsupported profile
+is a successful no-op with every field listed as skipped. Invalid profiles and
+actual application errors still fail.
+
+Version 2.1.2.86 recognizes CT20 and provisions device ownership using `702108171`.
+CT20 v1.2.1 and N96 v1.3.5 gain firmware-verified profile controls for time,
+location, Wi-Fi, Bluetooth and Ethernet; N96 also supports mobile data and airplane
+mode. Network commands require the inspected PSS APK hash and command family.
+Unsupported settings are skipped in 2.1.2.87. CT20/CT20P/N96 kiosk
+controls now use the firmware's disable-flag convention and verify the flags.
+See [device profile support](DEVICE_PROFILE_FIRMWARE_SUPPORT.md) for the command
+matrix, validation evidence and rollout limits.
+
+Version 2.1.2.85 enables N96 device-owner provisioning with Nexgo command
+`902108171`, retaining the existing command-family checks and Android ownership
+readback. Verified on an N96 running firmware v1.3.5: provisioning succeeded,
+the agent became the default HOME application, tethering restrictions applied,
+and remote-control accessibility remained connected. This does not change the
+N6ProLite trial or enable unvalidated extended system controls.
+
 xTMSAgent is built as one application (`one.globalconnect.xtmsagent.globalconnect`) without bank product flavors. This preserves in-place upgrades for the existing Global Connect distribution. Bank branding and launcher behavior are delivered by the launcher configuration in Global Connect ONE, including brand images, launcher colors, text size, system-password protection, app ordering, and navigation/control visibility.
 
 The first build receives a global download credential through the `XTMS_DOWNLOAD_CREDENTIAL_ID` and `XTMS_DOWNLOAD_CREDENTIAL_SECRET` Gradle properties or environment variables. Do not commit these values. After an authenticated launcher-config download, the agent adopts and persists the newest active global credential supplied by the portal, allowing credentials to overlap during rotation.
+
+Release builds require both values and fail before packaging if either is blank. Configure the active credential pair in your private user Gradle properties (`~/.gradle/gradle.properties`) or in the build environment, then run `./gradlew assembleRelease`. Debug builds remain available without credentials for local development, but cannot provision a fresh terminal without a valid download secret.
+
+If a terminal displays **TMS configuration error: device secret is missing**, its launcher configuration and the APK bootstrap credential are both empty. Rebuild with the active global download credential and update the installed app using the same application ID and compatible signing key. An update can fill the empty configuration from the APK credential; retrying the connection alone cannot supply the missing secret. Older bank-specific packages require their matching distribution/update path; the unified APK does not update a different application ID in place.
 
 ---
 
@@ -42,6 +67,49 @@ Licensed applications can also request an allow-listed managed capability throug
 ---
 
 ## Log File
+
+Version 2.1.2.65 changes the N6ProLite accessibility setup trial to the absolute
+Android settings executable for user 0. Inspection of the exported PSS APK showed
+that this selects its direct process-execution path instead of the native helper
+that discarded the underlying result. Retry logging and automatic Downloads
+exports are retained. Device-owner provisioning is unchanged. Accessibility
+compatibility still needs terminal validation; see `N6PROLITE_PSS_FINDINGS_20260911.md`.
+
+Version 2.1.2.64 adds **Config → Diagnostics → Export PSS APK to Downloads**.
+It creates `Download/xTMSAgent/xtmsagent-pss-<timestamp>.zip`, containing the
+installed `com.xgd.possystemservice` base APK, any split APKs, a manifest with
+SHA-256 checksums, and a fresh diagnostics report. APK bytes are copied unchanged;
+the archive contains no PSS private application data. Send the ZIP for offline
+firmware analysis. Export errors are recorded in the existing diagnostics log.
+
+Version 2.1.2.63 adds a bounded N96-derived owner-command trial (`902108171`) for
+N6ProLite only when both the firmware property and SDK command base are 90000000.
+Success is determined from Android's actual owner state, not the SDK return alone.
+The N6ProLite path no longer attempts vendor root commands with empty credentials.
+
+**Config → Diagnostics → Retry device setup** now persists before/after state,
+command selection, SDK return values, timing, and local exception details, then
+automatically saves the report to **Download/xTMSAgent**. The screen confirms the
+saved filename. **Export to Downloads** remains available for another snapshot.
+Each manual retry has an ID and begin/end markers. The vendor binder APIs expose
+integer/boolean results, not shell stdout/stderr; the report labels that limitation.
+A bounded, filtered logcat snapshot is also attempted with the app's existing
+permissions. It may contain earlier messages or no vendor messages at all. Setup
+events are written independently and survive normal app/process restarts even
+when system logcat cannot be read. No device-wide log permission is requested.
+
+Version 2.1.2.62 adds the N6ProLite model and tries device-owner provisioning through
+the NEXGO system service's standard `dpm set-device-owner` command interfaces. It
+does not assume that N6S numeric commands or system assets are compatible. Those
+capabilities remain pending terminal validation; the real panel size is read on device.
+
+For production-terminal testing without ADB: install the signed debug APK, open
+**Config → Diagnostics**, use **Retry device setup**, then **Export to Downloads**.
+The report is saved under `Download/xTMSAgent/xtmsagent-diagnostics-<timestamp>.txt`.
+Exports refresh the snapshot and include persistent setup results, command-base
+properties, SDK command base, physical screen dimensions, management state, and
+recent process-exit reasons. Uncaught exception class/stack frames are retained
+across restarts. This is a targeted diagnostic report, not a full system logcat.
 
 **Path:** `/storage/emulated/0/Android/data/one.globalconnect.xtmsagent/files/Log.txt`  
 **Purpose:** Records operations, errors, MQTT events, task progress, download outcomes, and remote-control session activity.
@@ -239,6 +307,102 @@ configuration. Use it only when an in-place, same-signer update is unavailable.
 
 ### Production signing
 
+Release **2.1.2.73 normal** includes automatic startup recovery. The guard records
+attempts in attachBaseContext before providers, counts uncaught startup exceptions
+and matching Android CRASH/CRASH_NATIVE/ANR exit records, and latches recovery after
+three failures within ten minutes. Android exit records are matched to the prior
+PID, package process, attempt time and build; a failure seen by both the exception
+handler and Android is counted once. Ordinary restarts, updates, low-memory kills,
+and unexplained incomplete attempts are not counted as crashes. A responsive
+60-second normal startup clears the failure history; entering the launcher
+rearms this stability timer. The guard does not kill a hung process: ANRs/native
+crashes are detected from Android records on the next process start. Android may
+require the user to reopen the app if it suppresses automatic relaunch.
+
+HOME/launcher entry now uses a minimal StartupActivity, which routes to recovery
+before loading MainActivity when the guard is latched. WorkManager initialization
+is deferred until normal bootstrap. Automatic recovery skips SDK/credential/TMS
+startup, suspends normal background components and MainActivity, preserves state
+and logs, and retains device ownership. Recovery remains latched across updates
+and reboot until the operator confirms Retry normal startup. That permits one
+normal initialization attempt; another startup failure re-enters recovery, while
+a stable start clears the retry guard. Component states are restored for the
+retry, and the existing explicit device-owner-removal opt-out is preserved.
+The dedicated `-PxtmsRecovery=true` build remains available and has no HOME entry.
+
+Release **2.1.2.72 recovery** removes all HOME intent registration from the
+recovery APK, including the normal MainActivity declaration inherited from the
+main manifest. Recovery remains accessible from its standard launcher icon.
+Startup clears this package's normal preferred-activity defaults; recovery logs
+now include actual device-admin state, resolved HOME component, and available
+HOME candidates. The 11:33 removal log and 11:36 restart confirm deviceOwner=false
+on release 71; ordinary Home selection is distinct from device ownership. The
+last immediate post-removal admin state was still true, so it is checked again.
+
+Release **2.1.2.71 recovery** adds an operator-confirmed Remove device owner
+action. It first persists an automatic-enrollment opt-out, then attempts to clear
+the agent's persistent Home preference and its own user restrictions, calls
+Android clearDeviceOwnerApp for this package, and verifies actual owner state.
+Remaining active-admin removal is requested after ownership is gone. The outcome
+and cleanup errors are recorded in log_today.txt; returning/restarting the recovery
+screen shows live owner state. This does not reset the device or erase app data.
+The normal provisioner honors the saved opt-out on subsequent normal releases;
+automatic enrollment must be explicitly restored before provisioning again.
+
+Release **2.1.2.70** adds `/sdcard/xTMSAgent/log_today.txt` for diagnostic setup,
+startup, and caught/uncaught exception events in both normal and recovery startup.
+The fixed current-day file is mirrored alongside `log_YYYY-MM-DD.txt` using the
+device's local date; on the first entry of a new day the current file starts that
+day's contents and earlier dated files remain. Private daily files retain entries
+when public storage cannot be written; granting All files access and returning
+publishes the current day's backlog. The recovery screen includes the permission
+shortcut and reports actual publication failures. Recovery exports also add a
+bounded historical evidence excerpt to the daily log; the full export remains
+available in Downloads. This is application diagnostics, not device-wide logcat.
+The 70 artifact delivered during crash investigation is the recovery build;
+normal startup remains disabled there until the cause is established.
+
+Release **2.1.2.69 recovery** is built with `-PxtmsRecovery=true`. Its release
+manifest substitutes an independent RecoveryApplication and native Android
+RecoveryActivity, disables the normal launcher, TMS/remote services and receivers,
+and removes AndroidX automatic initialization. It preserves the admin receiver
+identity and existing data. Recovery startup clears this package's persistent
+HOME preference. The recovery export reads saved diagnostics and crash events
+without running the vendor inspector, and adds Android's own app process-exit
+metadata and available bounded traces. No normal TMS operation is available in
+this temporary build. Recovery cancels this application's scheduled jobs and
+suspends WorkManager component overrides, preserving their earlier values. A
+subsequent normal release restores those component states during application
+startup. Other component disables are manifest-only.
+
+Release **2.1.2.68** is an N6ProLite recovery rollout following a reported startup
+crash loop and missing App info overflow menu. It clears this app's device-owner
+persistent HOME preference before SDK startup on N6ProLite and suppresses
+reapplying it, including after boot/update. Operators can choose a launcher through
+Android's Home app settings; device ownership is retained. Other models retain
+their existing HOME policy. The reported crash's root cause is not yet established.
+The release guards the early serial-number SDK call, contains remote-setup errors,
+defers setup dialogs until resumed, and retains exception messages/causes.
+App info guidance now offers top-level Android Settings as an alternative to the
+direct shortcut. Neither menu visibility nor firmware UI behavior is assumed.
+
+Release **2.1.2.67** guides manual remote-control setup. On Android 13+ when
+accessibility is disabled and restricted-settings approval cannot be confirmed,
+the prompt opens this app's App info page and explains the overflow-menu approval.
+Returning offers accessibility settings; the operator can revisit App info or
+defer setup. Already-enabled accessibility skips the prompt. Settings navigation
+and actual accessibility state on return are retained in diagnostics. Opening or
+returning from App info is never counted as approval. Android does not expose a
+public intent to directly open the Allow restricted settings confirmation dialog.
+
+Release **2.1.2.66** adds an Android 13 N6ProLite device-owner trial for approving
+Restricted Settings before accessibility provisioning. Retry device setup logs
+the approval state, hidden-method availability, exceptions, and verified result;
+its existing automatic Downloads export includes these events. Already-approved
+devices are detected without rewriting the approval. The trial still needs
+validation on a restricted production installation; accessibility activation and
+an actual Portal remote-control session must be verified separately.
+
 Release APKs are pre-signed with the Android debug key when no production
 keystore is configured because the Nexgo signing portal does not accept an
 unsigned APK. The APK returned by Nexgo must be signed with the same Nexgo
@@ -267,3 +431,27 @@ final production key for every upgrade of a deployed application ID.
 
 **compileSdk:** 36  
 **minSdk:** 29
+
+
+## Local firmware installation
+
+Configuration → Local Install (existing password protection) now offers Application
+(APK) and Firmware (ZIP). Firmware support accepts signed Android OTA ZIPs with
+`META-INF/com/android/metadata` and a payload or update-binary. It checks
+`pre-device` against `Build.DEVICE`, optional incremental base version/fingerprint,
+and verifies the package against the terminal’s trusted OTA certificates using
+`RecoverySystem.verifyPackage`. Unsigned ZIPs, mismatched models, APKs, missing
+metadata and unsupported vendor archive formats are rejected without dispatch.
+
+After validation, the operator confirms the target model/version and possible
+restart. At least 30% battery is required. The agent invokes Nexgo
+`Platform.updateFirmware(path)`; it does not extract or execute ZIP contents.
+The SDK has no completion callback and its implementation can swallow service
+exceptions, so the UI only reports that the update was requested. The system
+updater is responsible for installation, anti-rollback policy and reboot.
+
+Firmware is staged in the app’s external files `local-firmware` directory with a
+4 GiB input limit and storage reserve. Canceled/invalid selections are removed;
+submitted files are retained for asynchronous updater access across reboot.
+This change affects local installation only; remote firmware task handling is
+unchanged. No firmware was flashed as part of development validation.

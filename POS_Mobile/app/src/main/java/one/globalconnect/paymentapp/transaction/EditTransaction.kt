@@ -1,5 +1,6 @@
 package one.globalconnect.paymentapp.transaction
 
+import one.globalconnect.paymentapp.transaction.resolvedCardBrand
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -216,7 +217,7 @@ fun TransactionMainScreen(
                     .background(color_white, shape = RoundedCornerShape(6.dp))
             ) {
                 val returnStatus =
-                    if (transaction.returnStatus == ReturnStatus.None) "" else "(${transaction.returnStatus})"
+                    if (transaction.returnStatus == ReturnStatus.None) "" else "(${returnStatusLabel(transaction.returnStatus)})"
                 Text(
                     text = "$${transaction.totalAmount} ${transaction.type.toStringForUsers()} $returnStatus",
                     fontSize = 24.sp,
@@ -341,7 +342,7 @@ fun TransactionMainScreen(
                         .height(ROWHEIGHT.dp)
                 ) {
                     CardIcon(
-                        _paymentNetworkString = transaction.cardType,
+                        _paymentNetworkString = transaction.resolvedCardBrand(),
                         modifier = Modifier
                             .align(Alignment.CenterVertically)
                             .padding(start = 16.dp, end = 16.dp)
@@ -350,13 +351,13 @@ fun TransactionMainScreen(
                         modifier = Modifier.fillMaxHeight(1f), verticalArrangement = Arrangement.Center
                     ) {
                         Text(
-                            text = "${transaction.cardType} ${transaction.masked_cardNumber.takeLast(4)}",
+                            text = "${transaction.resolvedCardBrand()} ${transaction.masked_cardNumber.takeLast(4)}",
                             fontSize = 14.sp,
                             fontWeight = FontWeight.SemiBold,
                             color = MaterialTheme.colorScheme.outlineVariant,
                         )
                         Text(
-                            text = transaction.cardEntryMethod.CapitalizeFirstLowerRest(),
+                            text = cardEntryLabel(transaction.cardEntryMethod),
                             fontSize = 12.sp,
                             color = MaterialTheme.colorScheme.onBackground,
                         )
@@ -489,6 +490,7 @@ private fun TransactionPasswordDialog(
                     },
                     onEnterPressed = ::checkAndSubmit,
                     onCancelPressed = onDismiss,
+                    hideOnPhysicalKeypad = true,
                 )
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -528,8 +530,18 @@ fun RefundScreen(
     transaction: Transaction,
     onBackButtonPressed: () -> Unit,
     onRefundPressed: () -> Unit,
-    returnUiState: ReturnUiState
+    returnUiState: ReturnUiState,
+    ecrMode: Boolean = false,
 ) {
+    val fullScreen = returnUiState !is ReturnUiState.None
+    androidx.compose.runtime.SideEffect { VoidPresentation.active.value = fullScreen }
+    androidx.compose.runtime.DisposableEffect(Unit) {
+        onDispose { VoidPresentation.active.value = false }
+    }
+    if (fullScreen) {
+        VoidTransactionStatusScreen(transaction, returnUiState, onBackButtonPressed, ecrMode)
+        return
+    }
     Scaffold(
         topBar = {
             TopBar(title = {
@@ -567,21 +579,45 @@ fun RefundScreen(
                     .background(color_white, shape = RoundedCornerShape(6.dp))
                     .fillMaxSize()
             ){
-                when (returnUiState) {
-                    is ReturnUiState.None -> {
-                        Text(
-                            stringResource(
-                                id = R.string.void_transaction_amount, transaction.totalAmount
-                            ),
-                            modifier = Modifier
-                                .align(Alignment.CenterHorizontally)
-                                .padding(top = 128.dp),
-                            textAlign = TextAlign.Center,
-                            fontWeight = FontWeight.SemiBold
-                        )
+                run {
+                    run {
+                        Column(
+                            modifier = Modifier.weight(1f).fillMaxWidth()
+                                .verticalScroll(rememberScrollState()).padding(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            Text(
+                                text = transaction.type.toTransactionName(),
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                            Text(
+                                text = transaction.masked_cardNumber,
+                                style = MaterialTheme.typography.titleMedium,
+                                fontFamily = FontFamily.Monospace,
+                            )
+                            Text(
+                                text = stringResource(R.string.void_transaction_amount, transaction.totalAmount),
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                            HorizontalDivider()
+                            VoidConfirmationField(stringResource(R.string.invoice_label), transaction.invoiceId)
+                            VoidConfirmationField(stringResource(R.string.void_confirmation_rrn), transaction.retrievalReferenceNumber)
+                            VoidConfirmationField(stringResource(R.string.void_confirmation_auth_id),
+                                transaction.authorizationId.ifBlank { transaction.authCode })
+                            if (transaction.externalReferenceNumber.isNotBlank()) {
+                                VoidConfirmationField(stringResource(R.string.void_confirmation_external_reference),
+                                    transaction.externalReferenceNumber)
+                            }
+                        }
 
-                        Spacer(Modifier.weight(1f))
-
+                        if (ecrMode) {
+                            OutlinedButton(
+                                onClick = onBackButtonPressed,
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp).height(44.dp),
+                            ) { Text(stringResource(R.string.cancel)) }
+                        }
                         Button(
                             modifier = Modifier
                                 .fillMaxWidth(1f)
@@ -589,7 +625,7 @@ fun RefundScreen(
                                 .height(50.dp),
                             onClick = onRefundPressed,
                             shape = RoundedCornerShape(24.dp),
-                            enabled = transaction.type != TransactionType.REFUND,
+                            enabled = ecrMode || transaction.type != TransactionType.REFUND,
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = color_primaryBrand, // Color de fondo del botón
                                 contentColor = color_black, // Color del texto
@@ -597,7 +633,7 @@ fun RefundScreen(
                         ) {
                             Text(
                                 textAlign = TextAlign.Center,
-                                text = if (transaction.type == TransactionType.REFUND) stringResource(id = R.string.no_voids_on_refunds) else stringResource(
+                                text = if (!ecrMode && transaction.type == TransactionType.REFUND) stringResource(id = R.string.no_voids_on_refunds) else stringResource(
                                     id = R.string.start_void
                                 ),
                                 fontSize = 16.sp
@@ -605,57 +641,7 @@ fun RefundScreen(
                         }
                     }
 
-                    is ReturnUiState.Loading -> {
-                        Column(Modifier.fillMaxSize(1f)) {
-                            CircularProgressIndicator(
-                                modifier = Modifier
-                                    .size(80.dp)
-                                    .align(Alignment.CenterHorizontally)
-                                    .padding(top = 128.dp),
-                                color = MaterialTheme.colorScheme.onBackground
-                            )
-                            Text(
-                                modifier = Modifier
-                                    .padding(top = 256.dp)
-                                    .align(Alignment.CenterHorizontally),
-                                fontSize = 20.sp,
-                                text = returnUiState.message
-                            )
-                        }
-                    }
 
-                    is ReturnUiState.ResultReady -> {
-                        val text = if (returnUiState.isSuccess) {
-                            stringResource(id = R.string.transaction_id_voided_success, transaction.transactionId)
-                        } else {
-                            stringResource(id = R.string.void_error)
-                        }
-                        Text(
-                            text,
-                            modifier = Modifier
-                                .align(Alignment.CenterHorizontally)
-                                .padding(top = 128.dp),
-                            textAlign = TextAlign.Center,
-                            fontSize = 24.sp,
-                        )
-
-                        Spacer(Modifier.weight(1f))
-
-                        Button(
-                            modifier = Modifier
-                                .fillMaxWidth(1f)
-                                .padding(start = 8.dp, end = 8.dp, top = 12.dp, bottom = 12.dp)
-                                .height(50.dp),
-                            onClick = onBackButtonPressed,
-                            shape = RoundedCornerShape(24.dp),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = color_primaryBrand, // Color de fondo del botón
-                                contentColor = color_black, // Color del texto
-                            ),
-                        ) {
-                            Text(textAlign = TextAlign.Center, text = stringResource(id = R.string.msg_done), fontSize = 16.sp)
-                        }
-                    }
                 }
             }
         }
@@ -827,7 +813,7 @@ fun PaymentDetails(
                     )
                     Spacer(Modifier.weight(1f))
                     Text(
-                        text = transaction.cardType,
+                        text = transaction.resolvedCardBrand(),
                         fontSize = 16.sp,
                         color = MaterialTheme.colorScheme.outlineVariant
                     )
@@ -840,7 +826,7 @@ fun PaymentDetails(
                     )
                     Spacer(Modifier.weight(1f))
                     Text(
-                        text = transaction.cardEntryMethod.CapitalizeFirstLowerRest(),
+                        text = cardEntryLabel(transaction.cardEntryMethod),
                         fontSize = 16.sp,
                         color = MaterialTheme.colorScheme.outlineVariant
                     )
@@ -1025,4 +1011,18 @@ private fun PreviewN82() {
 @Composable
 private fun PreviewN62() {
     PreviewShell { TransactionMainScreen({}, {}, {}, {}, {}, previewTransaction()) }
+}
+
+@Composable
+private fun VoidConfirmationField(label: String, value: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.Top,
+    ) {
+        Text(label, modifier = Modifier.weight(0.42f), style = MaterialTheme.typography.bodyMedium)
+        Text(value.ifBlank { "—" }, modifier = Modifier.weight(0.58f),
+            style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold,
+            textAlign = TextAlign.End)
+    }
 }

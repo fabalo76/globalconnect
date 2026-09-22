@@ -32,13 +32,20 @@ object KioskModeController {
                         return
                     }
                     runCatching {
-                        val ui = SystemServiceHelper.getInstance().getSystemUIManager()
-                        val controlBar = ui?.enableControlBar(!locked)
-                        val messageBar = ui?.enableMessageBar(!locked)
-                        val home = ui?.enableHome(!locked)
-                        val recents = ui?.enableRecv(!locked)
+                        check(resultCode == SystemServiceHelper.RETURN_SUCC) { "system_service_rejected" }
+                        val ui = requireNotNull(SystemServiceHelper.getInstance().getSystemUIManager())
+                        val argument = nexgoUiArgument(android.os.Build.MODEL, locked)
+                        val controlBar = ui?.enableControlBar(argument)
+                        val messageBar = ui?.enableMessageBar(argument)
+                        val home = ui?.enableHome(argument)
+                        val recents = ui?.enableRecv(argument)
                         val platform = APIProxy.getDeviceEngine(appContext).platform
                         if (locked) platform.hideNavigationBar() else platform.showNavigationBar()
+                        if (usesNexgoDisableFlags(android.os.Build.MODEL)) {
+                            check(listOf("sys.xgd.home.disable", "sys.xgd.appswitch.disable", "sys.xgd.swipe.disable").all {
+                                one.globalconnect.xtmsagent.nexgo.AndroidSystemProperties.get(it) == locked.toString()
+                            }) { "kiosk_readback_mismatch" }
+                        }
                         Log.i(
                             TAG,
                             "Nexgo application kiosk mode locked=$locked result=$resultCode " +

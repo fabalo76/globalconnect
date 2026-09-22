@@ -116,6 +116,7 @@ fun PasswordScreen(
                     }
                 },
                 onCancelPressed = { backDispatcher?.onBackPressed() },
+                hideOnPhysicalKeypad = true,
             )
             if (showFailedDialog) {
                 PasswordFailedDialog {

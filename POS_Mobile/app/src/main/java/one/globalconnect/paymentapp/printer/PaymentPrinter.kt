@@ -30,7 +30,8 @@ interface PaymentPrinter {
         transactions: List<Transaction>,
         printTransactions: Boolean,
         profile: Profile,
-        tmsDatabase: TMSDATA
+        tmsDatabase: TMSDATA,
+        onPrintResult: ((Boolean) -> Unit)? = null,
     )
 
     fun printBatchReport(
@@ -45,6 +46,7 @@ interface PaymentPrinter {
         report: PrintableTotalsReport,
         profile: Profile?,
         tmsDatabase: TMSDATA,
+        onPrintResult: ((Boolean) -> Unit)? = null,
     )
 
     fun printReceipt(
@@ -55,6 +57,7 @@ interface PaymentPrinter {
         bitmap: ImageBitmap? = null,
         recipient: String = MERCHANT,
         onPrintResult: ((Boolean) -> Unit)? = null,
+        onPrintStatus: ((Int) -> Unit)? = null,
     )
 
     fun printReversalReceipt(

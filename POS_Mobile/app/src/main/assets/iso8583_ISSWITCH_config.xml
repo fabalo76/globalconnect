@@ -15,8 +15,8 @@
                   than the configured maximum.
     -->
 
-    <field index="0" type="N4" align="RIGHT" lenType="BCD" padding="30"/>
-    <field index="1" type="H8" align="RIGHT" lenType="BCD" padding="30"/>
+    <field index="0" type="N4" align="RIGHT" lenType="BCD" padding="00"/>
+    <field index="1" type="H8" align="RIGHT" lenType="BCD" padding="00"/>
 
     <field index="2" type="N..19" align="LEFT" lenType="BCD" padding="00"/>
     <field index="3" type="N6" align="RIGHT" lenType="BCD" padding="00"/>
@@ -65,7 +65,7 @@
     <field index="46" type="H...999" align="LEFT" lenType="BCD" padding="00"/>
     <field index="47" type="H...999" align="LEFT" lenType="BCD" padding="00"/>
     <field index="48" type="H...999" align="LEFT" lenType="BCD" padding="00"/>
-    <field index="49" type="N3" align="RIGHT" lenType="BCD" padding="30"/>
+    <field index="49" type="N3" align="RIGHT" lenType="BCD" padding="00"/>
     <field index="50" type="N3" align="LEFT" lenType="BCD" padding="00"/>
     <field index="51" type="N3" align="LEFT" lenType="BCD" padding="00"/>
     <field index="52" type="H8" align="RIGHT" lenType="BCD" padding="00"/>

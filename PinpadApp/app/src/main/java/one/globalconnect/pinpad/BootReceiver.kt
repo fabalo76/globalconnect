@@ -15,6 +15,7 @@ import one.globalconnect.pinpad.licensing.PinpadLicenseManager
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action == Intent.ACTION_BOOT_COMPLETED) {
+            PinpadTraceLog.service("boot receiver received BOOT_COMPLETED")
             val app = context.applicationContext as PinpadApplication
             if (!PinpadLicenseManager.isAuthorized(context, app.deviceInfoProvider.serialNumber())) {
                 launchMainActivity(context)
@@ -43,7 +44,7 @@ class BootReceiver : BroadcastReceiver() {
         runCatching {
             context.startActivity(launchIntent)
         }.onSuccess {
-            PinpadTraceLog.service("boot receiver launched main activity")
+            PinpadTraceLog.service("boot receiver requested main activity launch; awaiting ACTIVITY resumed log")
         }.onFailure {
             Log.w(TAG, "Unable to launch PINPAD main activity after boot", it)
             PinpadTraceLog.service("boot receiver main launch failed=${it.message}")

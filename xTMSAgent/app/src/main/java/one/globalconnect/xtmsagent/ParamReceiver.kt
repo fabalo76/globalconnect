@@ -15,6 +15,7 @@ private const val TAG = "ParamReceiver"
 class ParamReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
+        if (one.globalconnect.xtmsagent.recovery.StartupRecoveryGuard.inRecovery) return
         try {
             handleRequest(context, intent)
         } catch (e: Exception) {

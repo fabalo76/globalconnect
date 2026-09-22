@@ -277,6 +277,10 @@ class PendingReversalReceiptPrinter(
                 invoiceNumber = reversal.invoiceNumber,
                 transactionTypeLabel = transactionLabel,
                 totalAmountText = amountText,
+                installmentDetails = one.globalconnect.paymentapp.transaction.installments.InstallmentContracts
+                    .forTransaction(reversal.transactionType.transactionStringToTransactionType())
+                    ?.savedDetails(one.globalconnect.paymentapp.uicpos.pos.host.protocol.PrivateUseData63
+                        .parse(reversal.fieldValues[63])["45"].orEmpty(), reversal.paymentPlanQueryResponse),
             )
             paymentPrinter.printReversalReceipt(
                 context = context.applicationContext,

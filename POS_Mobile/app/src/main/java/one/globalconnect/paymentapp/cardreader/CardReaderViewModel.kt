@@ -139,6 +139,7 @@ class CardReaderViewModel(
             it.copy(
                 isSearching = true,
                 status = CardReaderStatus.Waiting,
+                interfaces = CardEntryInterfaces(allowContact, allowContactless, allowSwipe),
                 cardData = null,
                 onlineAuthorizationPending = false,
                 applicationSelection = null,
@@ -210,7 +211,11 @@ class CardReaderViewModel(
         activeSlot = null
         Log.d(TAG, "cancelCardSearch cleared active card data")
 
-        if (wasActive) {
+        if (shouldCancelReaderSession(
+                ownsListener = nexgoApi.transactionListener === transactionListener,
+                searchActive = wasActive,
+                sdkRunning = nexgoApi.isTransactionRunning,
+            )) {
             try {
                 nexgoApi.cancelTransaction()
                 Log.d(TAG, "cancelCardSearch requested Nexgo cancellation")
@@ -251,6 +256,7 @@ class CardReaderViewModel(
                 onlineAuthorizationPending = false,
                 applicationSelection = null,
                 mobileCvmSecondTap = true,
+                interfaces = CardEntryInterfaces(chip = false, contactless = true, swipe = false),
             )
         }
 
@@ -312,11 +318,13 @@ class CardReaderViewModel(
     override fun onCleared() {
         Log.d(TAG, "onCleared invoked")
         // A completed reader screen can be disposed after the result screen has
-        // started sensory playback. Only cancel SDK work if our search is active;
-        // otherwise this would issue a second hardware cancellation after completion.
+        // started sensory playback. Cancel only owned, unfinished SDK work;
+        // a local error may have cleared searchActive before SDK cleanup.
         cancelCardSearch()
-        nexgoApi.transactionListener = null
-        Log.d(TAG, "onCleared released Nexgo API listeners")
+        if (nexgoApi.transactionListener === transactionListener) {
+            nexgoApi.transactionListener = null
+            Log.d(TAG, "onCleared released Nexgo API listeners")
+        }
         super.onCleared()
     }
 
@@ -1002,7 +1010,14 @@ private fun getString(@StringRes resId: Int, vararg args: Any): String =
         Log.d(TAG, "getString resId=$resId resultLength=${it.length}")
     }
 
+data class CardEntryInterfaces(
+    val chip: Boolean = false,
+    val contactless: Boolean = false,
+    val swipe: Boolean = false,
+)
+
 data class CardReaderUiState(
+    val interfaces: CardEntryInterfaces = CardEntryInterfaces(),
     val isSearching: Boolean = false,
     val status: CardReaderStatus = CardReaderStatus.Idle,
     val cardData: CardReadResult? = null,

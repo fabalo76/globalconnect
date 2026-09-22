@@ -79,13 +79,15 @@ class TransactionReturnProcessor(
     ): ReturnResult = withContext(Dispatchers.IO) {
         try {
             executeIsoReturn(transaction, returnAction, onStatusUpdate)
+        } catch (error: kotlinx.coroutines.CancellationException) {
+            throw error
         } catch (error: Throwable) {
             Log.e(
                 TAG,
                 "ISO8583 ${returnAction.name.lowercase()} failed for transaction id=${transaction.id}",
                 error,
             )
-            ReturnResult(false, formatHostErrorMessage(error), transaction)
+            ReturnResult(false, formatHostErrorMessage(error), transaction, "TO")
         }
     }
 
@@ -122,6 +124,14 @@ class TransactionReturnProcessor(
             stanSupplier = { stan },
             timestampSupplier = { requestTimestamp },
         )
+        val progress = HostProcessingStateMachine(ProcessingStatusStrings(
+            context.getString(R.string.processing_status_connecting),
+            context.getString(R.string.processing_status_sending),
+            context.getString(R.string.processing_status_waiting),
+            context.getString(R.string.processing_status_processing_response),
+            context.getString(R.string.processing_status_result),
+            context.getString(R.string.processing_status_result_pending),
+        ))
         val request = HostTransactionRequest(
             acquirer = acquirer,
             ipProfile = ipProfile,
@@ -140,7 +150,7 @@ class TransactionReturnProcessor(
             sslSocketFactory = if (hostSettings.isTls) AcquirerSslCache.get(ipProfile.IPTabID) else null,
             isoFactory = isoFactory,
             onStatusChanged = { event ->
-                onStatusUpdate(ReturnUiState.Loading(statusMessage(event)))
+                onStatusUpdate(ReturnUiState.Loading(statusMessage(event), progress.onEvent(event)))
             },
         )
 
@@ -153,6 +163,7 @@ class TransactionReturnProcessor(
                 false,
                 HostResponseMessageResolver.resolveOrFallback(responseCode),
                 transaction,
+                responseCode?.takeIf { it.length == 2 } ?: "96",
             )
         }
 
@@ -164,7 +175,7 @@ class TransactionReturnProcessor(
             ReturnAction.VOID -> context.getString(R.string.successful_void)
             ReturnAction.REVERSAL -> context.getString(R.string.successful_reversal)
         }
-        return ReturnResult(true, successMessage, updatedTransaction)
+        return ReturnResult(true, successMessage, updatedTransaction, "00")
     }
 
     private fun buildProcInfo(
@@ -218,6 +229,7 @@ class TransactionReturnProcessor(
                 FolioNumber = transaction.folioNumber,
                 OriginalTransactionId = transaction.originalTransactionId,
                 PaymentPlan = transaction.paymentPlan,
+                PaymentPlanQueryResponse = transaction.paymentPlanQueryResponse,
             )
         )
     }

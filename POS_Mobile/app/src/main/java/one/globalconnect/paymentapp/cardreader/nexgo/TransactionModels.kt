@@ -27,6 +27,7 @@ data class EmvTransactionRequest(
 
 enum class EmvTransactionPurpose {
     PAYMENT,
+    CARD_DATA_QUERY,
     OFFLINE_PIN_CHANGE,
     OFFLINE_PIN_UNBLOCK,
 }

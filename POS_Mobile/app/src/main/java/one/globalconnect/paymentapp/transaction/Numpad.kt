@@ -32,6 +32,7 @@ import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import one.globalconnect.paymentapp.ui.theme.color_secondaryThree
+import one.globalconnect.paymentapp.utils.DeviceCapabilities
 import one.globalconnect.paymentapp.utils.HardwareFunctionKey
 import one.globalconnect.paymentapp.utils.HardwareKeyCommand
 import one.globalconnect.paymentapp.utils.HardwareKeyListener
@@ -53,6 +54,7 @@ fun Numpad(
     onEnterPressed: (() -> Unit)? = null,
     onCancelPressed: (() -> Unit)? = null,
     onFunctionKey: ((HardwareFunctionKey) -> Unit)? = null,
+    hideOnPhysicalKeypad: Boolean = false,
 ) {
     HardwareAwareKeypad(
         keys = if (showReset) keysWithReset else baseKeys,
@@ -62,6 +64,7 @@ fun Numpad(
         onEnterPressed = onEnterPressed,
         onCancelPressed = onCancelPressed,
         onFunctionKey = onFunctionKey,
+        hideOnPhysicalKeypad = hideOnPhysicalKeypad,
     )
 }
 
@@ -72,6 +75,7 @@ fun DialogNumpad(
     onEnterPressed: (() -> Unit)? = null,
     onCancelPressed: (() -> Unit)? = null,
     onFunctionKey: ((HardwareFunctionKey) -> Unit)? = null,
+    hideOnPhysicalKeypad: Boolean = false,
 ) {
     HardwareAwareKeypad(
         keys = if (showReset) keysWithReset else baseKeys,
@@ -81,6 +85,7 @@ fun DialogNumpad(
         onEnterPressed = onEnterPressed,
         onCancelPressed = onCancelPressed,
         onFunctionKey = onFunctionKey,
+        hideOnPhysicalKeypad = hideOnPhysicalKeypad,
     )
 }
 
@@ -93,6 +98,7 @@ private fun HardwareAwareKeypad(
     onEnterPressed: (() -> Unit)?,
     onCancelPressed: (() -> Unit)?,
     onFunctionKey: ((HardwareFunctionKey) -> Unit)?,
+    hideOnPhysicalKeypad: Boolean,
 ) {
     RegisterHardwareKeyHandler(
         showReset = showReset,
@@ -101,6 +107,10 @@ private fun HardwareAwareKeypad(
         onCancelPressed = onCancelPressed,
         onFunctionKey = onFunctionKey,
     )
+
+    if (hideOnPhysicalKeypad && DeviceCapabilities.hasPhysicalNumericKeypad()) {
+        return
+    }
 
     val visuals = rememberKeyVisuals(isDialog)
     KeypadLayout(

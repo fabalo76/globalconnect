@@ -11,6 +11,7 @@ plugins {
 }
 
 def enableSslDebugLogs = project.findProperty("enableSslDebugLogs")?.toString()?.toBoolean() ?: false
+def enableEcrDebugLogs = project.findProperty("enableEcrDebugLogs")?.toString()?.toBoolean() ?: true
 def enableIso8583DebugLogs = project.findProperty("enableIso8583DebugLogs")?.toString()?.toBoolean() ?: false
 def showRawPanLogs = project.findProperty("showRawPanLogs")?.toString()?.toBoolean() ?: false
 def showComponentsDebugBorders = project.findProperty("showComponentsDebugBorders")?.toString()?.toBoolean() ?: false
@@ -42,6 +43,7 @@ android {
         }
 
         buildConfigField "boolean", "ENABLE_SSL_DEBUG_LOGS", enableSslDebugLogs.toString()
+        buildConfigField "boolean", "ENABLE_ECR_DEBUG_LOGS", enableEcrDebugLogs.toString()
         buildConfigField "boolean", "ENABLE_ISO8583_DEBUG_LOGS", enableIso8583DebugLogs.toString()
         buildConfigField "boolean", "SHOW_RAW_PAN_LOGS", showRawPanLogs.toString()
         buildConfigField "boolean", "SHOW_COMPONENTS_DEBUG_BORDERS", showComponentsDebugBorders.toString()

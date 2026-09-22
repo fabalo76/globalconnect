@@ -1,4 +1,4 @@
-﻿using System.Globalization;
+using System.Globalization;
 using System.Text.Json;
 using PinpadMediaManager.Core;
 using PinpadMediaManager.Core.Models;
@@ -27,6 +27,7 @@ internal sealed partial class A10DemoControl : UserControl
     private bool _busy;
 
     internal Control OfflinePinChangeContent { get; }
+    internal Control CardOperationsContent { get; }
 
     public A10DemoControl(PinpadClient client, Action<string>? reportStatus = null)
     {
@@ -35,6 +36,7 @@ internal sealed partial class A10DemoControl : UserControl
         Dock = DockStyle.Fill;
         Controls.Add(BuildLayout());
         OfflinePinChangeContent = BuildOfflinePinChangePage();
+        CardOperationsContent = BuildCardOperationsPage();
     }
 
     private Control BuildLayout()
@@ -48,12 +50,72 @@ internal sealed partial class A10DemoControl : UserControl
         tabs.TabPages.Add(Page("Secret Master/Session keys", BuildSecretKeysPage()));
         tabs.TabPages.Add(Page("PIN entry", BuildPinEntryPage()));
         tabs.TabPages.Add(Page("EMV data setup", BuildConfigurationPage()));
-        tabs.TabPages.Add(Page("ICC transaction", BuildTransactionPage(contactless: false)));
-        tabs.TabPages.Add(Page("Contactless transaction", BuildTransactionPage(contactless: true)));
         tabs.TabPages.Add(Page("ICC / SAM card", BuildSmartCardPage()));
         tabs.TabPages.Add(Page("Command console", BuildRawCommandPage()));
         root.Controls.Add(tabs, 0, 0);
         return root;
+    }
+
+    private Control BuildCardOperationsPage()
+    {
+        var tabs = new ProminentTabControl { Dock = DockStyle.Fill };
+        tabs.TabPages.Add(Page("Card Detect", BuildCardDetectPage()));
+        tabs.TabPages.Add(Page("ICC transaction", BuildTransactionPage(contactless: false)));
+        tabs.TabPages.Add(Page("Contactless transaction", BuildTransactionPage(contactless: true)));
+        return tabs;
+    }
+
+    private Control BuildCardDetectPage()
+    {
+        var panel = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 4, Padding = new Padding(12) };
+        panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        panel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        panel.Controls.Add(InfoLabel("Detect a card using QK. Swipe, insert or tap a card on the terminal. This detects the reader only; it does not run a payment."));
+        var fields = FormGrid();
+        var msr = new CheckBox { Text = "MSR", Checked = true, AutoSize = true };
+        var chip = new CheckBox { Text = "CHIP", Checked = true, AutoSize = true };
+        var tap = new CheckBox { Text = "CONTACTLESS", Checked = true, AutoSize = true };
+        var readers = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true };
+        readers.Controls.AddRange([msr, chip, tap]);
+        var name = new TextBox { Dock = DockStyle.Fill, MaxLength = 64, PlaceholderText = "Optional, e.g. Venta" };
+        var amount = new TextBox { Dock = DockStyle.Fill, MaxLength = 48, PlaceholderText = "Optional, e.g. US$10.00" };
+        AddRow(fields, 0, "Readers", readers);
+        AddRow(fields, 1, "Transaction name", name);
+        AddRow(fields, 2, "Formatted amount", amount);
+        panel.Controls.Add(fields);
+        var output = OutputBox();
+        output.Text = "Ready to detect a card.";
+        var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true };
+        var cancel = new Button { Text = "Cancel detection", AutoSize = true, Enabled = false, Margin = new Padding(4) };
+        buttons.Controls.Add(ActionButton("Detect card (QK)", async () =>
+        {
+            cancel.Enabled = true;
+            output.Text = "Waiting for a card. Swipe, insert or tap on the terminal...";
+            try
+            {
+                var mask = $"{(msr.Checked ? 1 : 0)}{(chip.Checked ? 1 : 0)}{(tap.Checked ? 1 : 0)}";
+                var result = await _client.DetectA10CardAsync(mask, name.Text, amount.Text, CurrentOperationToken);
+                output.Text = $"{result.Description}{Environment.NewLine}QK response: {result.Payload}";
+            }
+            catch (OperationCanceledException)
+            {
+                output.Text = "Card detection canceled.";
+                throw;
+            }
+            catch (Exception error)
+            {
+                output.Text = "Card detection failed: " + error.Message;
+                throw;
+            }
+            finally { cancel.Enabled = false; }
+        }));
+        cancel.Click += (_, _) => _operationCancellation?.Cancel();
+        buttons.Controls.Add(cancel);
+        panel.Controls.Add(buttons);
+        panel.Controls.Add(output);
+        return panel;
     }
 
     private void SetStatus(string status) => _reportStatus?.Invoke(status);

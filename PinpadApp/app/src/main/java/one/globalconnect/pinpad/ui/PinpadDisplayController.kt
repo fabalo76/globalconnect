@@ -1,5 +1,7 @@
 package one.globalconnect.pinpad.ui
 
+import one.globalconnect.pinpad.protocol.QkDetectionRequest
+
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
@@ -19,6 +21,7 @@ import one.globalconnect.pinpad.protocol.SignatureOrientation
 
 object PinpadDisplayController {
     private val mainHandler = Handler(Looper.getMainLooper())
+    private var pendingSensoryThankYou: PinpadDisplayState.BrandSensory? = null
 
     var state: PinpadDisplayState by mutableStateOf(PinpadDisplayState.Idle)
         private set
@@ -53,9 +56,9 @@ object PinpadDisplayController {
         updateState(PinpadDisplayState.TapCard(transaction))
     }
 
-    fun showPresentCard(transaction: PinpadTransactionDisplay? = null) {
+    fun showPresentCard(transaction: PinpadTransactionDisplay? = null, chipEnabled: Boolean = true, options: QkDetectionRequest = QkDetectionRequest(if (chipEnabled) "111" else "101")) {
         clearContactlessLeds()
-        updateState(PinpadDisplayState.PresentCard(transaction))
+        updateState(PinpadDisplayState.PresentCard(transaction, options))
     }
 
     fun showMessage(text: String) {
@@ -215,6 +218,7 @@ object PinpadDisplayController {
         useOnScreenKeypad: Boolean,
         message: KeyLoadAuthenticationMessage?,
         onKey: (PinpadKeypadKey) -> Unit,
+        onSubmitPasswords: (String, String) -> Unit,
     ) {
         clearContactlessLeds()
         updateState(
@@ -226,6 +230,7 @@ object PinpadDisplayController {
                 useOnScreenKeypad = useOnScreenKeypad,
                 message = message,
                 onKey = onKey,
+                onSubmitPasswords = onSubmitPasswords,
             ),
         )
     }
@@ -568,7 +573,10 @@ object PinpadDisplayController {
                 is PinpadDisplayState.BrandSensory -> current.preserveOnTransactionComplete
                 else -> false
             }
-            if (preserve) {
+            if (current is PinpadDisplayState.BrandSensory && !preserve) {
+                pendingSensoryThankYou = current
+                PinpadTraceLog.device("display transaction completion deferred until sensory finishes brand=${current.brand}")
+            } else if (preserve) {
                 PinpadTraceLog.device("display transaction completion preserved state=${current::class.simpleName}")
             } else {
                 showThankYouThenIdle()
@@ -628,18 +636,24 @@ object PinpadDisplayController {
                 val remainingMillis = current.minimumCompletionAtMillis - SystemClock.elapsedRealtime()
                 if (remainingMillis > 0L) {
                     mainHandler.postDelayed(
-                        { completeBrandSensory(expectedBrand) },
+                        {
+                            if (state === current) completeBrandSensory(expectedBrand)
+                        },
                         remainingMillis,
                     )
                 } else {
-                    if (current.completionMessage.isNullOrBlank()) {
-                        showIdle()
-                    } else {
+                    val showDeferredThankYou = pendingSensoryThankYou === current
+                    pendingSensoryThankYou = null
+                    if (!current.completionMessage.isNullOrBlank()) {
                         showMessageThenIdle(
                             current.completionMessage,
                             current.completionMessageDurationMillis,
                             current.preserveOnTransactionComplete,
                         )
+                    } else if (showDeferredThankYou) {
+                        showThankYouThenIdle()
+                    } else {
+                        showIdle()
                     }
                     current.onComplete?.invoke()
                 }
@@ -693,7 +707,7 @@ sealed interface PinpadDisplayState {
     data class SwipeCard(val transaction: PinpadTransactionDisplay? = null) : PinpadDisplayState
     data class InsertCard(val transaction: PinpadTransactionDisplay? = null) : PinpadDisplayState
     data class TapCard(val transaction: PinpadTransactionDisplay? = null) : PinpadDisplayState
-    data class PresentCard(val transaction: PinpadTransactionDisplay? = null) : PinpadDisplayState
+    data class PresentCard(val transaction: PinpadTransactionDisplay? = null, val options: QkDetectionRequest = QkDetectionRequest()) : PinpadDisplayState
     data class Message(
         val text: String,
         val preserveOnTransactionComplete: Boolean = false,
@@ -721,6 +735,7 @@ sealed interface PinpadDisplayState {
         val useOnScreenKeypad: Boolean,
         val message: KeyLoadAuthenticationMessage?,
         val onKey: (PinpadKeypadKey) -> Unit,
+        val onSubmitPasswords: (String, String) -> Unit,
     ) : PinpadDisplayState
     data object KeyInjectionMode : PinpadDisplayState
     data class SignatureCapture(

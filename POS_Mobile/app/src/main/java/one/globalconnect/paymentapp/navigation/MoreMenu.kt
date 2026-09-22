@@ -772,6 +772,7 @@ private fun ConfigPasswordDialog(
                     },
                     onEnterPressed = { checkAndSubmit() },
                     onCancelPressed = onDismiss,
+                    hideOnPhysicalKeypad = true,
                 )
                 Row(
                     modifier = Modifier.fillMaxWidth(),

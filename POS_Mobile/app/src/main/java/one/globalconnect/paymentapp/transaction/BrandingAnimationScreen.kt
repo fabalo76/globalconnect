@@ -85,11 +85,4 @@ private fun BrandingContent(
     }
 }
 
-private fun buildBrandingCandidateText(transaction: Transaction): String =
-    listOf(
-        transaction.cardType,
-        transaction.cardRangeName,
-        transaction.applicationName,
-        transaction.applicationLabel,
-        transaction.AID,
-    ).filter { it.isNotBlank() }.joinToString(" ")
+private fun buildBrandingCandidateText(transaction: Transaction): String = transaction.resolvedCardBrand()

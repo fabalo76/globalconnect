@@ -1,5 +1,6 @@
 package one.globalconnect.paymentapp.transaction
 
+import one.globalconnect.paymentapp.transaction.resolvedCardBrand
 import android.graphics.BitmapFactory
 import android.util.Log
 import androidx.compose.ui.graphics.ImageBitmap
@@ -49,10 +50,13 @@ class FinishedPaymentViewModel(
     val subtotalPlusTip = androidx.lifecycle.MutableLiveData("0.00")
 
     private val transactionId: String = checkNotNull(savedStateHandle[TRANSACTION_ID_KEY])
+    val isEcrTransaction: Boolean get() = one.globalconnect.paymentapp.ecr.EcrRuntime.receiptRequested(transactionId) != null
     private val tmsDatabase = GlobalConnectPaymentApplication.instance.container.tmsDatabase // ✅ Get TMS Database
 
     private val _receiptPreviewState = MutableStateFlow<ReceiptPreviewState?>(null)
     val receiptPreviewState: StateFlow<ReceiptPreviewState?> = _receiptPreviewState.asStateFlow()
+    private val _printerStatusCode = MutableStateFlow<Int?>(null)
+    val printerStatusCode: StateFlow<Int?> = _printerStatusCode.asStateFlow()
     private val automaticMerchantReceipt = AutomaticMerchantReceipt(viewModelScope)
     private val merchantPrintState = MerchantReceiptPrintState(
         savedStateHandle.get<Boolean>("merchantReceiptPrinted") == true,
@@ -119,7 +123,7 @@ class FinishedPaymentViewModel(
 
     suspend fun submitAutomaticMerchantReceipt() {
         if (transaction.value?.type == TransactionType.ERROR || transaction.value == null) return
-        automaticMerchantReceipt.submit(tmsTerminal?.printReceipt == true) {
+        automaticMerchantReceipt.submit(one.globalconnect.paymentapp.ecr.EcrRuntime.receiptRequested(transactionId) ?: (tmsTerminal?.printReceipt == true)) {
             if (savedStateHandle.get<Boolean>("automaticMerchantReceiptSubmitted") == true) return@submit
             // Claim before submission: printer failures remain retryable through the manual button.
             savedStateHandle["automaticMerchantReceiptSubmitted"] = true
@@ -138,6 +142,7 @@ class FinishedPaymentViewModel(
         showPreview: Boolean = true,
         onPrintResult: ((Boolean) -> Unit)? = null,
     ) {
+        _printerStatusCode.value = null
         val id = transactionId.toIntOrNull()
         val retrievedTransaction = when {
             id != null -> transactionRepository.getTransactionFromId(id)
@@ -173,6 +178,11 @@ class FinishedPaymentViewModel(
                 recipient = recipient,
                 context = context,
                 onPrintResult = onPrintResult,
+                onPrintStatus = { status ->
+                    _printerStatusCode.value = status.takeUnless {
+                        it == com.nexgo.oaf.apiv3.SdkResult.Success
+                    }
+                },
             )
         }.onFailure { error ->
             Log.e(TAG, "Unable to print $recipient receipt", error)
@@ -182,6 +192,10 @@ class FinishedPaymentViewModel(
 
     fun dismissReceiptPreview() {
         _receiptPreviewState.value = null
+    }
+
+    fun dismissPrinterStatus() {
+        _printerStatusCode.value = null
     }
 
     private fun loadSignatureBitmap(signatureUuid: String?): androidx.compose.ui.graphics.ImageBitmap? {
@@ -293,11 +307,11 @@ class FinishedPaymentViewModel(
                 )
             }
 
-            if (transaction.masked_cardNumber.isNotBlank() || transaction.cardType.isNotBlank()) {
+            if (transaction.masked_cardNumber.isNotBlank() || transaction.resolvedCardBrand().isNotBlank()) {
                 add(
                     ReceiptPreviewLine(
                         primary = transaction.masked_cardNumber.ifBlank { "" },
-                        secondary = transaction.cardType.ifBlank { null },
+                        secondary = transaction.resolvedCardBrand().ifBlank { null },
                         fontSize = ReceiptPreviewFontSize.MEDIUM,
                     ),
                 )

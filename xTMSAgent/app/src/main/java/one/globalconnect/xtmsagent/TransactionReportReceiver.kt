@@ -11,6 +11,7 @@ private const val TAG = "TxnReportReceiver"
 
 class TransactionReportReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
+        if (one.globalconnect.xtmsagent.recovery.StartupRecoveryGuard.inRecovery) return
         try {
             handleReport(context, intent)
         } catch (e: Exception) {

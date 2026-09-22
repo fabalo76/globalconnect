@@ -201,6 +201,18 @@ class PinpadKeyLoadAuthorizer(
             useOnScreenKeypad = useOnScreenKeypad,
             message = current.message,
             onKey = ::onKeypadKey,
+            onSubmitPasswords = { first, second ->
+                synchronized(lock) {
+                    // Ignore callbacks belonging to an authorization that has ended.
+                    if (useOnScreenKeypad && pending === current &&
+                        first.length == PASSWORD_LENGTH && second.length == PASSWORD_LENGTH &&
+                        first.all { it in '0'..'9' } && second.all { it in '0'..'9' }) {
+                        current.password1 = first
+                        current.password2 = second
+                        verifyLocked(current)
+                    }
+                }
+            },
         )
     }
 

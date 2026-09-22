@@ -88,7 +88,10 @@ data class TMS_Terminal(
     val RefundUseTax: Boolean get() = false
     @get:JvmName("getLegacyTax1Mandatory")
     val Tax1Mandatory: Boolean get() = tax1Mandatory
-    val TIPProcs: Long get() = if (tipProcessingMode.equals("manual", ignoreCase = true)) 1L else 0L
+    val TIPProcs: Long get() = when (tipProcessingMode.trim().lowercase(java.util.Locale.ROOT)) {
+        "open", "manual" -> 1L
+        else -> 0L
+    }
 
     companion object {
         fun fromJson(json: JSONObject): TMS_Terminal {

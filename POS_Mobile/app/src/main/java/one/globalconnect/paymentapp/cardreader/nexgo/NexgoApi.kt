@@ -62,7 +62,8 @@ class NexgoApi(
     private var mobileCvmContinuationAvailable = false
     private var mobileCvmContinuationInProgress = false
     private var contactlessReadAcknowledged = false
-    private var transactionRunning = AtomicBoolean(false)
+    private val transactionRunning = AtomicBoolean(false)
+    val isTransactionRunning: Boolean get() = transactionRunning.get()
     private var contactlessDiscoverCard = false
     private val applicationSelectionLock = Any()
     private var pendingApplicationCount = 0
@@ -93,6 +94,12 @@ class NexgoApi(
             TAG,
             "startTransaction amount=${request.amount} cashback=${request.cashbackAmount} timeout=${request.timeoutSeconds}",
         )
+        if (!transactionRunning.compareAndSet(false, true)) {
+            Log.d(TAG, "startTransaction already running")
+            transactionListener?.onError("Transaction already running")
+            return
+        }
+
         contactlessDiscoverCard = false
         currentRequest = request
         currentEmvConfig = null
@@ -104,11 +111,6 @@ class NexgoApi(
         clearPendingApplicationSelection()
         pinData.clear()
 
-        if (!transactionRunning.compareAndSet(false, true)) {
-            Log.d(TAG, "startTransaction already running")
-            transactionListener?.onError("Transaction already running")
-            return
-        }
 
         ledController.prepareForTransaction(
             allowContactless = request.allowContactless,
@@ -131,6 +133,7 @@ class NexgoApi(
             transactionListener?.onError("Unable to start card search: $result")
         } else {
             Log.d(TAG, "startTransaction searchCard started successfully")
+            beeper.onAttentionRequired()
         }
     }
 
@@ -186,8 +189,12 @@ class NexgoApi(
     fun cancelTransaction() {
         Log.d(TAG, "cancelTransaction invoked")
         clearPendingApplicationSelection()
-        cardReader.stopSearch()
-        emvHandler?.emvProcessCancel()
+        // Try both SDK cleanup operations even if one fails. A reader error must
+        // not leave the application permanently locked out of future attempts.
+        runCatching { cardReader.stopSearch() }
+            .onFailure { Log.w(TAG, "Unable to stop card search", it) }
+        runCatching { emvHandler?.emvProcessCancel() }
+            .onFailure { Log.w(TAG, "Unable to cancel EMV processing", it) }
         mobileCvmContinuationAvailable = false
         mobileCvmContinuationInProgress = false
         transactionRunning.set(false)
@@ -199,6 +206,10 @@ class NexgoApi(
         runCatching { cardReader.isCardExist(slot) }
             .onFailure { error -> Log.w(TAG, "Unable to read card presence for slot=$slot", error) }
             .getOrDefault(false)
+    }
+
+    fun beepAttentionRequired() {
+        beeper.onAttentionRequired()
     }
 
     fun beepCardRemovalReminder() {
@@ -395,8 +406,12 @@ class NexgoApi(
         if (retCode != SdkResult.Success || cardInfo == null) {
             transactionRunning.set(false)
             ledController.onError()
-            beeper.onContactlessError()
-            transactionListener?.onError("Card read failed with code $retCode")
+            if (retCode != SdkResult.TimeOut) beeper.onContactlessError()
+            Log.w(TAG, "Card search ended with SDK result=$retCode")
+            transactionListener?.onError(context.getString(
+                if (retCode == SdkResult.TimeOut) R.string.card_search_timeout
+                else R.string.card_search_failed,
+            ))
             return
         }
 
@@ -489,7 +504,8 @@ class NexgoApi(
             } else {
                 EmvEntryModeEnum.EMV_ENTRY_MODE_CONTACT
             }
-            emvProcessFlowEnum = EmvProcessFlowEnum.EMV_PROCESS_FLOW_STANDARD
+            emvProcessFlowEnum = if (request.purpose == EmvTransactionPurpose.CARD_DATA_QUERY)
+                EmvProcessFlowEnum.EMV_PROCESS_FLOW_READ_APPDATA else EmvProcessFlowEnum.EMV_PROCESS_FLOW_STANDARD
             isContactForceOnline = request.forceOnline
             isContactlessSupportSelectApp = true
         }.also {

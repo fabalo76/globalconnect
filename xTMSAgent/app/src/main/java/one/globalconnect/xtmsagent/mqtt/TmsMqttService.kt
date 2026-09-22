@@ -55,6 +55,7 @@ class TmsMqttService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        if (one.globalconnect.xtmsagent.recovery.StartupRecoveryGuard.inRecovery) { stopSelf(); return }
         Log.i(TAG, "onCreate")
         try {
 
@@ -85,10 +86,10 @@ class TmsMqttService : Service() {
         serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Default).also { sc ->
             sc.launch {
                 combine(TmsTaskStatus.taskOverride, TmsTaskStatus.connection) { task, connection ->
-                    task ?: connection.text
-                }.collect { statusText ->
+                    Pair(task, connection)
+                }.collect { (task, connection) ->
                     try {
-                        updateNotification(statusText)
+                        updateNotification(task ?: connection.text, connection)
                     } catch (e: Exception) {
                         Log.w(TAG, "Unable to update MQTT notification", e)
                     }
@@ -104,6 +105,7 @@ class TmsMqttService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (one.globalconnect.xtmsagent.recovery.StartupRecoveryGuard.inRecovery) { stopSelf(); return START_NOT_STICKY }
         // START_STICKY: if killed, restart with null intent — service reads credentials
         // from SharedPreferences and reconnects without needing Activity context.
         return START_STICKY
@@ -111,6 +113,7 @@ class TmsMqttService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        if (one.globalconnect.xtmsagent.recovery.StartupRecoveryGuard.inRecovery) return
         Log.i(TAG, "onDestroy")
         serviceScope?.cancel()
         runCatching { TmsLocationTracker.stop() }
@@ -138,20 +141,23 @@ class TmsMqttService : Service() {
         }
     }
 
-    private fun buildNotification(contentText: String): Notification {
+    private fun buildNotification(contentText: String, connection: TmsConnectionStatus = TmsTaskStatus.connection.value): Notification {
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("TMS")
             .setContentText(contentText)
-            .setSmallIcon(R.drawable.ic_notification_tms)
+            .setSmallIcon(connection.linkIcon())
+            .setColor(connection.linkColor())
+            .setSubText(connection.linkLabel())
+            .setOnlyAlertOnce(true)
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .build()
     }
 
-    private fun updateNotification(contentText: String) {
+    private fun updateNotification(contentText: String, connection: TmsConnectionStatus) {
         (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
-            .notify(NOTIFICATION_ID, buildNotification(contentText))
+            .notify(NOTIFICATION_ID, buildNotification(contentText, connection))
     }
 
     // ── Static helpers ────────────────────────────────────────────────────────
@@ -166,6 +172,7 @@ class TmsMqttService : Service() {
          * to call startForeground() or the system throws ForegroundServiceTimeoutException.
          */
         fun start(context: Context): Boolean {
+            if (one.globalconnect.xtmsagent.recovery.StartupRecoveryGuard.inRecovery) return false
             val intent = Intent(context, TmsMqttService::class.java)
             return try {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -197,6 +204,11 @@ class TmsMqttService : Service() {
  */
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
+        if (one.globalconnect.xtmsagent.recovery.StartupRecoveryGuard.inRecovery) {
+            runCatching { context.startActivity(Intent(context, one.globalconnect.xtmsagent.recovery.StartupActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+            return
+        }
         if (intent.action == ACTION_AUTO_START_AFTER_BOOT) {
             queuePaymentApplicationLaunch(context)
             return
@@ -252,7 +264,7 @@ class BootReceiver : BroadcastReceiver() {
     private fun relaunchHomeAfterSelfUpdate(context: Context) {
         try {
             context.startActivity(
-                Intent(context, MainActivity::class.java).apply {
+                Intent(context, one.globalconnect.xtmsagent.recovery.StartupActivity::class.java).apply {
                     action = Intent.ACTION_MAIN
                     addCategory(Intent.CATEGORY_HOME)
                     flags = Intent.FLAG_ACTIVITY_NEW_TASK or

@@ -65,6 +65,8 @@
     <string name="config_wifi">Config. WiFi</string>
     <string name="config_update">Actualizar</string>
     <string name="config_diagnostics">Diagnóstico</string>
+    <string name="config_volume">Volumen</string>
+    <string name="volume_controls_unavailable">Los controles de volumen no están disponibles en este dispositivo.</string>
     <string name="config_network">Móvil / SIM</string>
     <string name="config_factory_tms">TMS Nexgo de fábrica</string>
     <string name="config_usb">Config. USB</string>
@@ -156,4 +158,34 @@
     <string name="store_download_progress">Descarga %1$d%%</string>
     <string name="store_error_generic">La tienda no está disponible.</string>
     <string name="store_install_failed">No se pudo instalar la aplicación.</string>
+    <string name="diagnostics_retry_setup">Reintentar configuración del dispositivo</string>
+    <string name="diagnostics_export_pss">Exportar APK de PSS a Descargas</string>
+    <string name="diagnostics_pss_exported">Guardado en %1$s\n\nEnvíe este archivo ZIP para analizarlo. Contiene el APK de PSS, las sumas de verificación y el diagnóstico.</string>
+    <string name="remote_setup_title">Configurar control remoto</string>
+    <string name="remote_setup_restricted_message">El control remoto no está activado. Android puede requerir primero una autorización para esta aplicación.\n\nAbra Ajustes de Android → Aplicaciones → xTMSAgent → ⋮ → Permitir ajustes restringidos, si aparece. Vuelva a xTMSAgent para continuar a Control remoto.</string>
+    <string name="remote_setup_enable_message">Abra los ajustes de accesibilidad, seleccione xTMSAgent → Remote Control y actívelo.\n\nSi Android muestra “Ajuste restringido”, abra Ajustes de Android → Aplicaciones → xTMSAgent → ⋮ → Permitir ajustes restringidos y vuelva a intentarlo.</string>
+    <string name="remote_setup_app_info">Información</string>
+    <string name="remote_setup_next">Control remoto</string>
+    <string name="remote_setup_open_accessibility">Abrir ajustes</string>
+    <string name="remote_setup_later">Más tarde</string>
+    <string name="remote_setup_settings_unavailable">No se pudieron abrir los ajustes. Abra Ajustes → Aplicaciones → xTMSAgent manualmente.</string>
+    <string name="remote_setup_app_info_routes">En Ajustes de Android, vaya a Aplicaciones → xTMSAgent → ⋮ → Permitir ajustes restringidos. Luego vuelva a xTMSAgent.\n\nUse esta ruta desde Aplicaciones para acceder al menú de tres puntos. La ausencia del menú no confirma la autorización.</string>
+    <string name="remote_setup_android_settings">Ajustes de Android</string>
+    <string name="remote_setup_direct_app_info">Acceso directo</string>
+
+    <string name="local_apk_option">Aplicación (APK)</string>
+    <string name="local_firmware_option">Firmware (ZIP)</string>
+    <string name="firmware_validating">Verificando el paquete de firmware y su firma…</string>
+    <string name="firmware_confirm">¿Instalar firmware para %1$s?\nVersión: %2$s\n\nEl terminal puede reiniciarse. Manténgalo conectado a la corriente y finalice las transacciones antes de continuar.</string>
+    <string name="firmware_version_unknown">No especificada</string>
+    <string name="firmware_install">Instalar firmware</string>
+    <string name="firmware_requested">Actualización de firmware solicitada. Siga las indicaciones del sistema. La instalación aún no está confirmada.</string>
+    <string name="firmware_metadata_missing">Este ZIP no tiene metadatos de dispositivo Android OTA. Obtenga un paquete OTA firmado para este terminal.</string>
+    <string name="firmware_wrong_device">Este firmware es para otro dispositivo.</string>
+    <string name="firmware_wrong_base">Esta actualización incremental requiere otra versión de firmware instalada.</string>
+    <string name="firmware_signature">No se pudo verificar la firma del firmware con los certificados de actualización de confianza del dispositivo.</string>
+    <string name="firmware_storage">No hay suficiente almacenamiento disponible o no se puede preparar el archivo de firmware.</string>
+    <string name="firmware_battery" formatted="false">Cargue la batería al menos al 30% antes de instalar firmware.</string>
+    <string name="firmware_request_failed">El terminal no aceptó la solicitud de actualización de firmware.</string>
+    <string name="firmware_invalid">El archivo seleccionado no es un ZIP de firmware Android OTA compatible.</string>
 </resources>

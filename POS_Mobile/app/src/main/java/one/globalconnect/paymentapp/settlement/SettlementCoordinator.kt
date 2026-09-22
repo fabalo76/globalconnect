@@ -1,5 +1,6 @@
 package one.globalconnect.paymentapp.settlement
 
+import one.globalconnect.paymentapp.transaction.resolvedCardBrand
 import android.util.Log
 import one.globalconnect.tms.paymentapp.TMS_Acquirer
 import one.globalconnect.tms.paymentapp.TMS_HostConnectionInfo
@@ -651,7 +652,7 @@ class SettlementCoordinator(
         transLog.ForceOnline = ""
         transLog.InvoiceId = transaction.invoiceId
         transLog.AuthNtwkName = transaction.authNtwkName.ifBlank { acquirer.AcquirerName }
-        transLog.CardType = transaction.cardType
+        transLog.CardType = transaction.resolvedCardBrand()
         transLog.CardhdrName = transaction.cardholderName
         transLog.FolioNumber = transaction.folioNumber
         transLog.OriginalTransactionId = transaction.originalTransactionId

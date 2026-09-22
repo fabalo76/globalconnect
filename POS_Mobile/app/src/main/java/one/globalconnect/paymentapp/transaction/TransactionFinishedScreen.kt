@@ -14,8 +14,16 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircleOutline
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.activity.compose.BackHandler
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.rememberUpdatedState
+import one.globalconnect.paymentapp.utils.HardwareKeyManager
+import one.globalconnect.paymentapp.utils.HardwareKeyListener
+import one.globalconnect.paymentapp.utils.HardwareKeyCommand
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -45,6 +53,7 @@ import one.globalconnect.paymentapp.AppViewModelProvider
 import one.globalconnect.paymentapp.GlobalConnectPaymentApplication
 import one.globalconnect.paymentapp.R
 import one.globalconnect.paymentapp.cardreader.nexgo.awaitContactCardRemoval
+import com.nexgo.oaf.apiv3.SdkResult
 import one.globalconnect.paymentapp.ui.theme.color_black
 import one.globalconnect.paymentapp.ui.theme.color_grey95
 import one.globalconnect.paymentapp.ui.theme.color_primaryBrand
@@ -64,9 +73,12 @@ fun TransactionFinishedScreen(
     val transaction by viewModel.transaction.observeAsState(Transaction())
     val receiptPreviewState by viewModel.receiptPreviewState.collectAsState(initial = null)
     val merchantPrintStatus by viewModel.merchantReceiptPrintStatus.collectAsState()
+    val printerStatusCode by viewModel.printerStatusCode.collectAsState()
     val nexgoApi = remember { GlobalConnectPaymentApplication.instance.nexgoApi }
 
     val transactionLoaded = transaction.type != TransactionType.ERROR
+    val isEcr = transactionLoaded &&
+        viewModel.isEcrTransaction
     var dismissed by remember { mutableStateOf(false) }
     var cardRemovalRequired by remember(transaction.id) { mutableStateOf(false) }
     var cardRemovalCheckComplete by remember(transaction.id) { mutableStateOf(false) }
@@ -75,6 +87,27 @@ fun TransactionFinishedScreen(
     val mustCheckContactCard = transactionLoaded &&
         requiresContactCardRemoval(transaction.cardEntryMethod)
     val canLeaveResult = transactionLoaded && cardRemovalCheckComplete && !cardRemovalRequired
+
+    val finishResult: () -> Unit = {
+        if (!dismissed && canLeaveResult) {
+            dismissed = true
+            onNewSalePress()
+        }
+    }
+    val currentFinishResult by rememberUpdatedState(finishResult)
+    // Consume Back even while waiting for card removal: completed payments must
+    // never navigate backward into authorization, sensory or automatic printing.
+    BackHandler { finishResult() }
+    DisposableEffect(Unit) {
+        val listener = HardwareKeyListener { command ->
+            if (command == HardwareKeyCommand.Cancel) {
+                currentFinishResult()
+                true
+            } else false
+        }
+        HardwareKeyManager.registerListener(listener)
+        onDispose { HardwareKeyManager.unregisterListener(listener) }
+    }
 
     LaunchedEffect(transaction.id, transactionLoaded, mustCheckContactCard) {
         if (!transactionLoaded) return@LaunchedEffect
@@ -89,12 +122,11 @@ fun TransactionFinishedScreen(
         cardRemovalCheckComplete = true
     }
 
-    LaunchedEffect(canLeaveResult, dismissed) {
+    LaunchedEffect(canLeaveResult, dismissed, isEcr) {
         if (canLeaveResult && !dismissed) {
-            delay(15_000)
+            delay(if (isEcr) 5_000 else 15_000)
             if (!dismissed && canLeaveResult) {
-                dismissed = true
-                onNewSalePress()
+                currentFinishResult()
             }
         }
     }
@@ -114,6 +146,7 @@ fun TransactionFinishedScreen(
             title = transaction.type.toTransactionName(),
             amountText = amountText,
             subtitle = subtitle,
+            attachToTop = true,
         ) {
             Icon(
                 imageVector = Icons.Filled.CheckCircleOutline,
@@ -149,6 +182,7 @@ fun TransactionFinishedScreen(
                 textAlign = TextAlign.Center,
             )
 
+            if (!isEcr) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -156,7 +190,7 @@ fun TransactionFinishedScreen(
                 Button(
                     modifier = Modifier
                         .weight(1f)
-                        .height(52.dp),
+                        .height(64.dp),
                     shape = RoundedCornerShape(24.dp),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = color_grey95,
@@ -171,13 +205,15 @@ fun TransactionFinishedScreen(
                     Text(
                         textAlign = TextAlign.Center,
                         text = stringResource(id = R.string.merchant_receipt),
+                        fontSize = 14.sp,
+                        maxLines = 2,
                     )
                 }
 
                 Button(
                     modifier = Modifier
                         .weight(1f)
-                        .height(52.dp),
+                        .height(64.dp),
                     shape = RoundedCornerShape(24.dp),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = color_grey95,
@@ -192,6 +228,8 @@ fun TransactionFinishedScreen(
                     Text(
                         textAlign = TextAlign.Center,
                         text = stringResource(id = R.string.customer_receipt),
+                        fontSize = 14.sp,
+                        maxLines = 2,
                     )
                 }
             }
@@ -206,13 +244,7 @@ fun TransactionFinishedScreen(
                     containerColor = color_primaryBrand,
                     contentColor = color_black,
                 ),
-                onClick = {
-                    if (!dismissed && canLeaveResult) {
-                        dismissed = true
-                        SoundManager.play(SoundEffect.KEY_TICK)
-                        onNewSalePress()
-                    }
-                },
+                onClick = finishResult,
             ) {
                 val label = when (transaction.type) {
                     TransactionType.REFUND -> stringResource(id = R.string.return_sale_screen)
@@ -223,6 +255,7 @@ fun TransactionFinishedScreen(
                     else -> stringResource(id = R.string.new_transaction)
                 }
                 Text(textAlign = TextAlign.Center, text = label)
+            }
             }
         }
 
@@ -253,6 +286,27 @@ fun TransactionFinishedScreen(
             ) {
                 RemoveCardContent()
             }
+        }
+
+
+        printerStatusCode?.let { status ->
+            val message = when (status) {
+                SdkResult.Printer_PaperLack -> stringResource(R.string.printer_out_of_paper_message)
+                SdkResult.Printer_Busy -> stringResource(R.string.printer_busy_message)
+                SdkResult.Printer_TooHot -> stringResource(R.string.printer_too_hot_message)
+                SdkResult.Printer_NoDevice -> stringResource(R.string.printer_unavailable_message)
+                else -> stringResource(R.string.printer_error_message)
+            }
+            AlertDialog(
+                onDismissRequest = viewModel::dismissPrinterStatus,
+                title = { Text(stringResource(R.string.printer_error_title)) },
+                text = { Text(message) },
+                confirmButton = {
+                    TextButton(onClick = viewModel::dismissPrinterStatus) {
+                        Text(stringResource(R.string.ok))
+                    }
+                },
+            )
         }
     }
 }

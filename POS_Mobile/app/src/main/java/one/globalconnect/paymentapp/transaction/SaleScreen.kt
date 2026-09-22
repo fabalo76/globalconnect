@@ -1,6 +1,8 @@
 package one.globalconnect.paymentapp.transaction
 
 import android.util.Log
+import androidx.activity.compose.BackHandler
+import androidx.core.view.WindowInsetsCompat
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -151,7 +153,6 @@ fun SaleScreen(
     var tipAmountState by rememberSaveable(stateSaver = AmountEntryStateSaver) {
         mutableStateOf(AmountEntryState())
     }
-    var tipZeroPressed by rememberSaveable { mutableStateOf(false) }
     var totalAmount by rememberSaveable { mutableStateOf(initialBaseAmount) }
 
     fun resetAmountEntries() {
@@ -163,8 +164,25 @@ fun SaleScreen(
         stepIndex = 0
         step = stepSequence.getOrNull(stepIndex) ?: "none"
         taxZeroPressed = false
-        tipZeroPressed = false
     }
+
+    val windowInsetsController = rememberWindowInsetsController()
+
+    fun handleCancel() {
+        if (saleInProgress) return
+        val hasEnteredAmounts = !baseAmountState.isZero || !taxAmountState.isZero ||
+            !tax2AmountState.isZero || !tipAmountState.isZero
+        if (hasEnteredAmounts || stepIndex > 0 || taxZeroPressed) {
+            resetAmountEntries()
+            windowInsetsController?.hide(WindowInsetsCompat.Type.navigationBars())
+        } else {
+            // Cancel at the idle sale reveals system controls without finishing the activity.
+            resetAmountEntries()
+            windowInsetsController?.show(WindowInsetsCompat.Type.navigationBars())
+        }
+    }
+
+    BackHandler { handleCancel() }
 
     LaunchedEffect(stepSequence) {
         if (stepSequence.isEmpty() && !saleInProgress) {
@@ -255,8 +273,8 @@ fun SaleScreen(
 
             // Whether the Enter/OK button should be active
             val enterEnabled = !saleInProgress && when (step) {
-                "tax1" -> (currentAmountTransaction != "0.00") || (promptConfig.tax1ZeroAmountAllowed && taxZeroPressed)
-                "tip" -> (currentAmountTransaction != "0.00") || tipZeroPressed
+                "tax1" -> promptConfig.canConfirmTax1(taxAmountState, taxZeroPressed)
+                "tip" -> true
                 else -> currentAmountTransaction != "0.00"
             }
 
@@ -427,14 +445,13 @@ fun SaleScreen(
             if (promptConfig.requiresAmountEntry) {
                 if (step == "confirmamount") {
                     AmountConfirmationActions(
-                        onCancelPressed = { resetAmountEntries() },
+                        onCancelPressed = { handleCancel() },
                         onConfirmPressed = { if (enterEnabled) handlePrimaryAction() },
                     )
                 } else {
                     AmountKeypad(
                         onDigit = { digit ->
                             if (step == "tax1" && digit == "0") taxZeroPressed = true
-                            if (step == "tip" && digit == "0") tipZeroPressed = true
                             updateCurrentEntryState(
                                 AmountEntryLogic.appendDigit(
                                     currentEntryState(),
@@ -443,6 +460,7 @@ fun SaleScreen(
                             )
                         },
                         onDoubleZero = {
+                            if (step == "tax1") taxZeroPressed = true
                             updateCurrentEntryState(
                                 AmountEntryLogic.appendDoubleZero(currentEntryState())
                             )
@@ -453,6 +471,7 @@ fun SaleScreen(
                             )
                         },
                         onBackspace = {
+                            if (step == "tax1") taxZeroPressed = false
                             updateCurrentEntryState(
                                 AmountEntryLogic.backspace(currentEntryState())
                             )
@@ -470,6 +489,7 @@ fun SaleScreen(
                                 AmountEntryLogic.fromPercentage(baseCents, percentage)
                             )
                         } else null,
+                        onCancelPressed = { handleCancel() },
                         onEnterPressed = { if (enterEnabled) handlePrimaryAction() },
                     )
                 }

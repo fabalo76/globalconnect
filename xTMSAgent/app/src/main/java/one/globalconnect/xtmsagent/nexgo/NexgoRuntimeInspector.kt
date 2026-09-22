@@ -4,6 +4,10 @@ import android.content.Context
 import android.content.pm.PackageInfo
 import android.os.Build
 import android.util.Log
+import android.hardware.display.DisplayManager
+import android.view.Display
+import com.nexgo.oaf.apiv3.SystemServiceHelper
+import one.globalconnect.xtmsagent.TmsDeviceAdminReceiver
 import org.json.JSONObject
 import java.io.File
 import java.io.FileInputStream
@@ -31,6 +35,8 @@ data class NexgoRuntimeSnapshot(
         put("modelKey", profile.modelKey)
         put("reportedModel", profile.reportedModel)
         put("commandProfileVerified", profile.commandProfileVerified)
+        put("expectedCommandBase", profile.expectedCommandBase ?: JSONObject.NULL)
+        put("detectedCommandBase", profile.detectedCommandBase ?: JSONObject.NULL)
         profile.display?.let { display ->
             put("display", JSONObject().put("width", display.width).put("height", display.height))
         }
@@ -41,6 +47,11 @@ data class NexgoRuntimeSnapshot(
                 put(capability.wireName, state.wireValue)
             }
         })
+        put("firmwareProfileSettings", org.json.JSONArray(
+            one.globalconnect.xtmsagent.profiles.NexgoProfileCommands.forFirmware(
+                profile.modelKey, profile.detectedCommandBase, pss.apkSha256,
+            ).keys.toList(),
+        ))
         put("pss", JSONObject().apply {
             put("installed", pss.installed)
             pss.versionName?.let { put("versionName", it) }
@@ -56,7 +67,8 @@ data class NexgoRuntimeSnapshot(
             }
             if (!profile.isKnownModel) put("nexgo_model_unsupported")
             if (profile.isKnownModel && !profile.commandProfileVerified) {
-                put("nexgo_command_profile_mismatch")
+                put(if (profile.expectedCommandBase == null || profile.detectedCommandBase == null)
+                    "nexgo_command_profile_unverified" else "nexgo_command_profile_mismatch")
             }
         })
     }
@@ -71,7 +83,12 @@ object NexgoRuntimeInspector {
             AndroidSystemProperties.get("ro.xgd.pss.basecmd"),
             AndroidSystemProperties.get("ro.xgd.cmd.base"),
         )
-        val profile = NexgoProfileResolver.resolve(modelProperty, Build.MODEL, commandBase)
+        val resolved = NexgoProfileResolver.resolve(modelProperty, Build.MODEL, commandBase)
+        val profile = if (resolved.modelKey == "N6ProLite") {
+            resolved.copy(display = physicalDisplay(context), capabilities = resolved.capabilities +
+                (NexgoCapability.DEVICE_OWNER to if (TmsDeviceAdminReceiver.isDeviceOwner(context))
+                    NexgoCapabilityState.SUPPORTED else NexgoCapabilityState.RUNTIME_PROBE_REQUIRED))
+        } else resolved
         val permissionGate = AndroidSystemProperties.get("sys.xgd.pss.perms")?.isNotBlank()
         val packageInfo = readPackageInfo(context)
 
@@ -90,6 +107,21 @@ object NexgoRuntimeInspector {
                 permissionGateEnabled = permissionGate,
             ),
         )
+    }
+
+    fun physicalDisplay(context: Context): NexgoDisplaySpec? = runCatching {
+        val mode = context.getSystemService(DisplayManager::class.java)
+            .getDisplay(Display.DEFAULT_DISPLAY)?.mode ?: return@runCatching null
+        NexgoDisplaySpec(minOf(mode.physicalWidth, mode.physicalHeight),
+            maxOf(mode.physicalWidth, mode.physicalHeight))
+    }.getOrNull()
+
+    fun commandDiagnostics(): JSONObject = JSONObject().apply {
+        listOf("ro.xgd.type", "ro.xgd.pss.basecmd", "ro.xgd.cmd.base").forEach {
+            put(it, AndroidSystemProperties.get(it) ?: JSONObject.NULL)
+        }
+        put("sdkCommandBase", runCatching { SystemServiceHelper.getCMDBASE() }.getOrNull()
+            ?: JSONObject.NULL)
     }
 
     @Suppress("DEPRECATION")

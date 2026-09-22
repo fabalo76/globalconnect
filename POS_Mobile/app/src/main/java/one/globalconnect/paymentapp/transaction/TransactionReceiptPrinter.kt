@@ -26,6 +26,7 @@ suspend fun printTransactionReceipt(
     signatureRepository: SignatureRepository,
     paymentPrinter: PaymentPrinter = NexGoPaymentPrinter,
     context: Context = GlobalConnectPaymentApplication.instance.applicationContext,
+    onPrintResult: ((Boolean) -> Unit)? = null,
 ) {
     withContext(Dispatchers.IO) {
         val profile = profileRepository.get() ?: Profile()
@@ -39,6 +40,7 @@ suspend fun printTransactionReceipt(
                 bitmap = null,
                 recipient = CUSTOMER,
                 context = context,
+                onPrintResult = onPrintResult,
             )
         } else {
             try {
@@ -51,6 +53,7 @@ suspend fun printTransactionReceipt(
                     bitmap = bitmap,
                     recipient = CUSTOMER,
                     context = context,
+                    onPrintResult = onPrintResult,
                 )
             } catch (error: IOException) {
                 paymentPrinter.printReceipt(
@@ -60,6 +63,7 @@ suspend fun printTransactionReceipt(
                     bitmap = null,
                     recipient = CUSTOMER,
                     context = context,
+                    onPrintResult = onPrintResult,
                 )
             }
         }

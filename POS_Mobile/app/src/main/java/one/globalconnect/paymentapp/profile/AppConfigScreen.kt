@@ -99,6 +99,7 @@ fun AppConfigScreen(
                     .background(color_white, shape = RoundedCornerShape(6.dp))
                     .fillMaxWidth()
             ) {
+                one.globalconnect.paymentapp.ecr.EcrConfiguration()
                 SettingHeader(
                     text = stringResource(R.string.setting_general),
                     modifier = Modifier.padding(top = 8.dp),

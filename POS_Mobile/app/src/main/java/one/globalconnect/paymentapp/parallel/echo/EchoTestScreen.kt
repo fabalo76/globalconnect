@@ -170,7 +170,8 @@ private fun EchoTestStatusOverlay(
     TransactionStatusContainer(
         modifier = Modifier.fillMaxSize(),
         title = stringResource(R.string.echo_test_title),
-        amountText = null
+        amountText = null,
+        attachToTop = false,
     ) {
         Column(
             modifier = Modifier.fillMaxWidth(),

@@ -11,6 +11,7 @@ private const val TAG = "AdminRequestReceiver"
 
 class AdminRequestReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
+        if (one.globalconnect.xtmsagent.recovery.StartupRecoveryGuard.inRecovery) return
         try {
             handleRequest(context, intent)
         } catch (e: Exception) {

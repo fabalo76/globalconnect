@@ -30,6 +30,7 @@
         (banpais, globalconnect, or future flavors) that registers a receiver for this action.
     -->
     <queries>
+        <intent><action android:name="one.globalconnect.xtmsagent.APPLICATION_LICENSE_SERVICE" /></intent>
         <intent>
             <action android:name="one.globalconnect.xtmsagent.ACTION_REQUEST_PARAMS" />
         </intent>

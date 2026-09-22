@@ -1,5 +1,9 @@
 package one.globalconnect.pinpad
 
+import one.globalconnect.pinpad.ui.CardEntryGuide
+import one.globalconnect.pinpad.ui.CardEntryGesture
+import one.globalconnect.pinpad.ui.entryGestures
+
 import android.annotation.SuppressLint
 import android.content.Intent
 import android.graphics.BitmapFactory
@@ -21,14 +25,12 @@ import android.view.KeyEvent
 import android.view.View
 import android.view.WindowManager
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import one.globalconnect.pinpad.logging.ConnectionLog
 import android.widget.VideoView
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -49,6 +51,7 @@ import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
@@ -162,6 +165,48 @@ private const val MAIN_MENU_TAP_COUNT = 10
 private const val MAIN_MENU_TAP_MAX_GAP_MS = 1_200L
 
 class MainActivity : ComponentActivity() {
+    private val releaseLogStoragePermission = registerForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        one.globalconnect.pinpad.logging.ProductionLog.record("STORAGE", "permissionGranted=$granted")
+        one.globalconnect.pinpad.logging.ProductionLog.sync()
+    }
+
+    fun showReleaseLogStatus() {
+        val logs = one.globalconnect.pinpad.logging.ProductionLog
+        logs.sync()
+        val dialog = android.app.AlertDialog.Builder(this)
+            .setTitle(R.string.release_log_title)
+            .setMessage(logs.status + "\n\n" + getString(R.string.release_log_description))
+            .setNegativeButton(android.R.string.ok, null)
+        if (!logs.hasPublicAccess(this)) {
+            dialog.setPositiveButton(R.string.release_log_allow_storage) { _, _ ->
+                if (Build.VERSION.SDK_INT >= 30) {
+                    runWithNexgoSystemBarsUnlocked {
+                        runCatching {
+                            startActivity(Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                                android.net.Uri.parse("package:$packageName")))
+                        }.onFailure {
+                            Toast.makeText(this, R.string.release_log_settings_unavailable, Toast.LENGTH_LONG).show()
+                        }
+                    }
+                } else releaseLogStoragePermission.launch(android.Manifest.permission.WRITE_EXTERNAL_STORAGE)
+            }
+        }
+        dialog.show()
+    }
+    private val microphonePermission = registerForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestPermission(),
+    ) { granted -> PinpadTraceLog.device("Audio recording microphone permission granted=$granted") }
+
+    private fun requestMicrophonePermission() {
+        val app = application as PinpadApplication
+        if (one.globalconnect.pinpad.audio.AudioRecordingPolicy.supports(app.deviceInfoProvider.modelName()) &&
+            androidx.core.content.ContextCompat.checkSelfPermission(this, android.Manifest.permission.RECORD_AUDIO) !=
+            android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            microphonePermission.launch(android.Manifest.permission.RECORD_AUDIO)
+        }
+    }
     private val pressedKeys = mutableSetOf<Int>()
     private var settingsMenuVisible by mutableStateOf(false)
     private var serialSetupVisible by mutableStateOf(false)
@@ -176,6 +221,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        one.globalconnect.pinpad.logging.ProductionLog.record("ACTIVITY",
+            "created entry=" + if (intent?.action == "android.intent.action.PAY_APP") "PAY_APP" else "standard")
         val deviceSerialNumber =
             (applicationContext as PinpadApplication).deviceInfoProvider.serialNumber()
         licenseAuthorized = PinpadLicenseManager.isAuthorized(
@@ -232,6 +279,7 @@ class MainActivity : ComponentActivity() {
             )
         }
         if (!licenseAuthorized) requestApplicationLicense()
+        else requestMicrophonePermission()
     }
 
     private fun requestApplicationLicense() {
@@ -246,6 +294,7 @@ class MainActivity : ComponentActivity() {
                 "application certificate provisioning success=$success error=${error ?: "none"}",
             )
             if (success) {
+                requestMicrophonePermission()
                 PinpadLicenseManager.setKioskMode(this, true)
                 startService(Intent(this, PinpadSerialService::class.java))
             } else {
@@ -265,6 +314,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        one.globalconnect.pinpad.logging.ProductionLog.record("ACTIVITY", "resumed licenseAuthorized=$licenseAuthorized")
+        one.globalconnect.pinpad.logging.ProductionLog.sync()
         if (!exitingToAndroidHome) {
             leavingPinpadUi = false
             PinpadLicenseManager.setKioskMode(this, licenseAuthorized)
@@ -289,7 +340,12 @@ class MainActivity : ComponentActivity() {
         if (!licenseAuthorized) {
             return super.dispatchKeyEvent(event)
         }
-        recordKeyEvent(event)
+        val authentication = PinpadDisplayController.state as? PinpadDisplayState.KeyLoadAuthentication
+        if (authentication?.useOnScreenKeypad == true) {
+            // Let Android fields receive IME/Enter events without forwarding or logging password keys.
+            return super.dispatchKeyEvent(event)
+        }
+        if (authentication == null && !settingsMenuVisible) recordKeyEvent(event)
         val settingsUiWasVisible = settingsMenuVisible || serialSetupVisible
         if (detectSetupShortcuts(event)) return true
         if (isCancelLikeKey(event.keyCode)) {
@@ -578,25 +634,7 @@ class MainActivity : ComponentActivity() {
 
         mainHandler.postDelayed(::complete, NEXGO_NAVIGATION_RESTORE_TIMEOUT_MS)
         Thread {
-            applyNexgoSystemBarsLocked(false, generation)
-            runCatching {
-                val helper = SystemServiceHelper.getInstance()
-                helper.init(applicationContext)
-                helper.getSystemUIManager()?.apply {
-                    enableControlBar(true)
-                    enableMessageBar(true)
-                    enableHome(true)
-                    enableRecv(true)
-                }
-                (applicationContext as PinpadApplication).deviceEngine.platform.showNavigationBar()
-            }.onSuccess {
-                PinpadTraceLog.device("Nexgo Home and Recents controls restored")
-            }.onFailure {
-                Log.w(TAG, "Unable to restore Nexgo Home and Recents controls", it)
-                PinpadTraceLog.device("Nexgo navigation restore failed error=${it.message}")
-            }.also {
-                complete()
-            }
+            applyNexgoSystemBarsLocked(false, generation, ::complete)
         }.apply {
             name = "PINPADNavigationRestore"
             isDaemon = true
@@ -617,37 +655,39 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun applyNexgoSystemBarsLocked(locked: Boolean, generation: Long? = null) {
-        val platform = (applicationContext as PinpadApplication).deviceEngine.platform
+    private fun applyNexgoSystemBarsLocked(
+        locked: Boolean,
+        generation: Long? = null,
+        onComplete: () -> Unit = {},
+    ) {
+        val app = applicationContext as PinpadApplication
         runCatching {
             val helper = SystemServiceHelper.getInstance()
             helper.init(applicationContext)
-            if (generation != null && nexgoSystemBarsGeneration.get() != generation) {
-                return@runCatching
+            // This SDK waits for the Binder here; callers run off the UI thread.
+            val ui = requireNotNull(helper.getSystemUIManager()) { "Navigation service unavailable" }
+            synchronized(nexgoSystemBarsGeneration) {
+                if (generation != null && nexgoSystemBarsGeneration.get() != generation) return
+                val argument = one.globalconnect.pinpad.config.nexgoUiArgument(app.deviceInfoProvider.modelName(), locked)
+                val controlBar = ui.enableControlBar(argument)
+                val messageBar = ui.enableMessageBar(argument)
+                val home = ui.enableHome(argument)
+                val recents = ui.enableRecv(argument)
+                ConnectionLog.record("Navigation locked=$locked argument=$argument home=$home recents=$recents controlBar=$controlBar messageBar=$messageBar")
+                val platform = app.deviceEngine.platform
+                if (locked) {
+                    platform.hideNavigationBar()
+                    platform.disableControlBar()
+                } else {
+                    platform.showNavigationBar()
+                    platform.enableControlBar()
+                }
             }
-            helper.getSystemUIManager()?.apply {
-                val controlBar = enableControlBar(!locked)
-                val messageBar = enableMessageBar(!locked)
-                val home = enableHome(!locked)
-                val recents = enableRecv(!locked)
-                PinpadTraceLog.device(
-                    "system UI requested locked=$locked controlBar=$controlBar " +
-                        "messageBar=$messageBar home=$home recents=$recents",
-                )
-            }
-            if (locked) {
-                platform.hideNavigationBar()
-                platform.disableControlBar()
-            } else {
-                platform.showNavigationBar()
-                platform.enableControlBar()
-            }
-        }.onSuccess {
-            PinpadTraceLog.device("system bars locked=$locked")
         }.onFailure {
-            Log.w(TAG, "Unable to update Nexgo system bars locked=$locked", it)
-            PinpadTraceLog.device("system bars update failed locked=$locked error=${it.message}")
+            Log.w(TAG, "Navigation update failed", it)
+            ConnectionLog.record("Navigation failed locked=$locked error=${it.message}")
         }
+        onComplete()
     }
 
     companion object {
@@ -909,9 +949,11 @@ private fun SettingsPasswordDialog(
     var password1 by remember { mutableStateOf("") }
     var password2 by remember { mutableStateOf("") }
     var activeField by remember { mutableStateOf(1) }
-    val password2FocusRequester = remember { FocusRequester() }
     val hardwareFocusRequester = remember { FocusRequester() }
+    var submitted by remember { mutableStateOf(false) }
     fun submitPasswords() {
+        if (submitted) return
+        submitted = true
         if (passwordStore.verify(passwordScope, password1, password2)) onVerified() else onRejected()
     }
     fun handleHardwarePasswordKey(event: androidx.compose.ui.input.key.KeyEvent): Boolean {
@@ -1015,54 +1057,13 @@ private fun SettingsPasswordDialog(
             onDismissRequest = onDismiss,
             title = { Text(stringResource(R.string.settings_password_title)) },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    OutlinedTextField(
-                        modifier = Modifier.onPreviewKeyEvent { event ->
-                            if (event.type == KeyEventType.KeyDown && event.isEnterKey()) {
-                                password2FocusRequester.requestFocus()
-                                true
-                            } else {
-                                false
-                            }
-                        },
-                        value = password1,
-                        onValueChange = { password1 = it.filter(Char::isDigit).take(12) },
-                        label = { Text(stringResource(R.string.settings_password_1)) },
-                        visualTransformation = PasswordVisualTransformation(),
-                        keyboardOptions = KeyboardOptions(
-                            keyboardType = KeyboardType.NumberPassword,
-                            imeAction = ImeAction.Next,
-                        ),
-                        keyboardActions = KeyboardActions(
-                            onNext = { password2FocusRequester.requestFocus() },
-                        ),
-                        singleLine = true,
-                    )
-                    OutlinedTextField(
-                        modifier = Modifier
-                            .focusRequester(password2FocusRequester)
-                            .onPreviewKeyEvent { event ->
-                                if (event.type == KeyEventType.KeyDown && event.isEnterKey()) {
-                                    submitPasswords()
-                                    true
-                                } else {
-                                    false
-                                }
-                            },
-                        value = password2,
-                        onValueChange = { password2 = it.filter(Char::isDigit).take(12) },
-                        label = { Text(stringResource(R.string.settings_password_2)) },
-                        visualTransformation = PasswordVisualTransformation(),
-                        keyboardOptions = KeyboardOptions(
-                            keyboardType = KeyboardType.NumberPassword,
-                            imeAction = ImeAction.Done,
-                        ),
-                        keyboardActions = KeyboardActions(
-                            onDone = { submitPasswords() },
-                        ),
-                        singleLine = true,
-                    )
-                }
+                AndroidPasswordFields(
+                    password1 = password1, password2 = password2,
+                    onPassword1Change = { password1 = it },
+                    onPassword2Change = { password2 = it },
+                    maxLength = 12,
+                    onSubmit = ::submitPasswords,
+                )
             },
             confirmButton = {
                 TextButton(
@@ -1076,6 +1077,60 @@ private fun SettingsPasswordDialog(
                     Text(stringResource(R.string.settings_password_cancel))
                 }
             },
+        )
+    }
+}
+
+@Composable
+private fun AndroidPasswordFields(
+    password1: String,
+    password2: String,
+    onPassword1Change: (String) -> Unit,
+    onPassword2Change: (String) -> Unit,
+    maxLength: Int,
+    onSubmit: () -> Unit,
+) {
+    val firstFocus = remember { FocusRequester() }
+    val secondFocus = remember { FocusRequester() }
+    val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
+    LaunchedEffect(Unit) {
+        androidx.compose.runtime.withFrameNanos { }
+        firstFocus.requestFocus()
+        keyboard?.show()
+    }
+    androidx.compose.runtime.DisposableEffect(Unit) {
+        onDispose { keyboard?.hide() }
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        OutlinedTextField(
+            modifier = Modifier.fillMaxWidth().focusRequester(firstFocus).onPreviewKeyEvent { event ->
+                if (event.type == KeyEventType.KeyDown && event.isEnterKey()) {
+                    secondFocus.requestFocus()
+                    true
+                } else false
+            },
+            value = password1,
+            onValueChange = { onPassword1Change(it.filter { digit -> digit in '0'..'9' }.take(maxLength)) },
+            label = { Text(stringResource(R.string.settings_password_1)) },
+            visualTransformation = PasswordVisualTransformation(),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword, imeAction = ImeAction.Next),
+            keyboardActions = KeyboardActions(onNext = { secondFocus.requestFocus() }),
+            singleLine = true,
+        )
+        OutlinedTextField(
+            modifier = Modifier.fillMaxWidth().focusRequester(secondFocus).onPreviewKeyEvent { event ->
+                if (event.type == KeyEventType.KeyDown && event.isEnterKey()) {
+                    onSubmit()
+                    true
+                } else false
+            },
+            value = password2,
+            onValueChange = { onPassword2Change(it.filter { digit -> digit in '0'..'9' }.take(maxLength)) },
+            label = { Text(stringResource(R.string.settings_password_2)) },
+            visualTransformation = PasswordVisualTransformation(),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword, imeAction = ImeAction.Done),
+            keyboardActions = KeyboardActions(onDone = { onSubmit() }),
+            singleLine = true,
         )
     }
 }
@@ -1230,29 +1285,26 @@ private fun PinpadIdleScreen(
                     .background(Color(0xFF050608)),
                 contentAlignment = Alignment.Center,
             ) {
-                Column(
-                    modifier = Modifier
-                        .align(Alignment.TopCenter)
-                        .fillMaxWidth(),
-                ) {
+                Column(modifier = Modifier.fillMaxSize()) {
                     PinpadStatusBar(serialSettingsVersion = serialSettingsVersion)
                     SoftContactlessLedBar(contactlessLedState)
-                }
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(
-                            start = if (displayState.usesFullWidth()) 0.dp else 20.dp,
-                            top = 58.dp,
-                            end = if (displayState.usesFullWidth()) 0.dp else 20.dp,
-                            bottom = 20.dp,
-                        ),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    PinpadPromptContent(
-                        state = displayState,
-                        idleMessage = idleMessage,
-                    )
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f)
+                            .padding(
+                                start = if (displayState.usesFullWidth()) 0.dp else 20.dp,
+                                top = 16.dp,
+                                end = if (displayState.usesFullWidth()) 0.dp else 20.dp,
+                                bottom = 20.dp,
+                            ),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        PinpadPromptContent(
+                            state = displayState,
+                            idleMessage = idleMessage,
+                        )
+                    }
                 }
                 if (BuildConfig.SENSORY_KITS_ENABLED) {
                     MastercardSensoryWarmupHost()
@@ -1315,7 +1367,7 @@ private fun PinpadPromptContent(
         is PinpadDisplayState.SwipeCard -> SwipeCardPrompt(state.transaction)
         is PinpadDisplayState.InsertCard -> InsertCardPrompt(state.transaction)
         is PinpadDisplayState.TapCard -> TapCardPrompt(state.transaction)
-        is PinpadDisplayState.PresentCard -> MultiInterfacePrompt(state.transaction)
+        is PinpadDisplayState.PresentCard -> MultiInterfacePrompt(state)
         is PinpadDisplayState.Message -> PromptText(state.text)
         is PinpadDisplayState.TextEntry -> TextEntryPrompt(state)
         is PinpadDisplayState.EnterPin -> PinEntryPrompt(state.digits, state.promptLines)
@@ -1356,6 +1408,10 @@ private fun PinpadPromptContent(
 
 @Composable
 private fun KeyInjectionModePrompt() {
+    val context = LocalContext.current
+    val model = (context.applicationContext as PinpadApplication).deviceInfoProvider.modelName()
+    val hasPhysicalKeypad = DeviceModelConfig.hasPhysicalKeypad(model)
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -1383,12 +1439,24 @@ private fun KeyInjectionModePrompt() {
                     lineHeight = 24.sp,
                 )
                 Text(
-                    text = stringResource(R.string.key_injection_mode_hint),
+                    text = stringResource(if (hasPhysicalKeypad) R.string.key_injection_mode_hint else R.string.key_injection_mode_touch_hint),
                     color = Color(0xFFB8C8BE),
                     fontSize = 14.sp,
                     textAlign = TextAlign.Center,
                     lineHeight = 18.sp,
                 )
+                if (!hasPhysicalKeypad) {
+                    Button(
+                        modifier = Modifier.fillMaxWidth().padding(top = 12.dp).heightIn(min = 56.dp),
+                        onClick = {
+                            context.startService(Intent(context, PinpadSerialService::class.java)
+                                .setAction(PinpadSerialService.ACTION_END_CLEAR_KEY_INJECTION_MODE)
+                                .putExtra(PinpadSerialService.EXTRA_KEY_INJECTION_END_REASON, "touch_cancel"))
+                        },
+                    ) {
+                        Text(stringResource(R.string.key_injection_mode_exit))
+                    }
+                }
             }
         }
     }
@@ -1555,6 +1623,7 @@ private fun KeyLoadAuthenticationPrompt(state: PinpadDisplayState.KeyLoadAuthent
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            .imePadding()
             .verticalScroll(rememberScrollState()),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -1571,16 +1640,10 @@ private fun KeyLoadAuthenticationPrompt(state: PinpadDisplayState.KeyLoadAuthent
             color = Color(0xFFC8CDD5),
             fontSize = 14.sp,
         )
-        KeyLoadPasswordStatus(
-            label = stringResource(R.string.settings_password_1),
-            digits = state.password1Digits,
-            active = state.activePassword == 1,
-        )
-        KeyLoadPasswordStatus(
-            label = stringResource(R.string.settings_password_2),
-            digits = state.password2Digits,
-            active = state.activePassword == 2,
-        )
+        if (!state.useOnScreenKeypad) {
+            KeyLoadPasswordStatus(stringResource(R.string.settings_password_1), state.password1Digits, state.activePassword == 1)
+            KeyLoadPasswordStatus(stringResource(R.string.settings_password_2), state.password2Digits, state.activePassword == 2)
+        }
         state.message?.let { message ->
             Text(
                 text = when (message) {
@@ -1601,31 +1664,32 @@ private fun KeyLoadAuthenticationPrompt(state: PinpadDisplayState.KeyLoadAuthent
             )
         }
         if (state.useOnScreenKeypad) {
-            listOf(
-                listOf(PinpadKeypadKey.Digit1, PinpadKeypadKey.Digit2, PinpadKeypadKey.Digit3),
-                listOf(PinpadKeypadKey.Digit4, PinpadKeypadKey.Digit5, PinpadKeypadKey.Digit6),
-                listOf(PinpadKeypadKey.Digit7, PinpadKeypadKey.Digit8, PinpadKeypadKey.Digit9),
-                listOf(PinpadKeypadKey.Clear, PinpadKeypadKey.Digit0, PinpadKeypadKey.Enter),
-            ).forEach { row ->
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    row.forEach { key ->
-                        Button(
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(52.dp),
-                            onClick = { state.onKey(key) },
-                            shape = RoundedCornerShape(6.dp),
-                        ) {
-                            Text(key.keyLoadLabel(), fontSize = 20.sp)
+            androidx.compose.runtime.key(state.message) {
+                var password1 by remember { mutableStateOf("") }
+                var password2 by remember { mutableStateOf("") }
+                var submitted by remember { mutableStateOf(false) }
+                fun submit() {
+                    if (submitted || password1.length != 7 || password2.length != 7) return
+                    submitted = true
+                    state.onSubmitPasswords(password1, password2)
+                }
+                MaterialTheme(colorScheme = androidx.compose.material3.darkColorScheme()) {
+                    AndroidPasswordFields(
+                        password1 = password1, password2 = password2,
+                        onPassword1Change = { password1 = it; submitted = false },
+                        onPassword2Change = { password2 = it; submitted = false },
+                        maxLength = 7,
+                        onSubmit = ::submit,
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        TextButton(onClick = { state.onKey(PinpadKeypadKey.Cancel) }) {
+                            Text(stringResource(R.string.settings_password_cancel))
+                        }
+                        Button(onClick = ::submit) {
+                            Text(stringResource(R.string.keyload_authentication_confirm))
                         }
                     }
                 }
-            }
-            TextButton(onClick = { state.onKey(PinpadKeypadKey.Cancel) }) {
-                Text(stringResource(R.string.settings_password_cancel))
             }
         } else {
             Text(
@@ -1653,23 +1717,6 @@ private fun KeyLoadPasswordStatus(label: String, digits: Int, active: Boolean) {
         Text(label, color = if (active) Color(0xFF8FD3FF) else Color(0xFFC8CDD5), fontSize = 13.sp)
         Text("*".repeat(digits), color = Color.White, fontSize = 22.sp, minLines = 1)
     }
-}
-
-@Composable
-private fun PinpadKeypadKey.keyLoadLabel(): String = when (this) {
-    PinpadKeypadKey.Digit0 -> "0"
-    PinpadKeypadKey.Digit1 -> "1"
-    PinpadKeypadKey.Digit2 -> "2"
-    PinpadKeypadKey.Digit3 -> "3"
-    PinpadKeypadKey.Digit4 -> "4"
-    PinpadKeypadKey.Digit5 -> "5"
-    PinpadKeypadKey.Digit6 -> "6"
-    PinpadKeypadKey.Digit7 -> "7"
-    PinpadKeypadKey.Digit8 -> "8"
-    PinpadKeypadKey.Digit9 -> "9"
-    PinpadKeypadKey.Clear -> "⌫"
-    PinpadKeypadKey.Enter -> stringResource(R.string.keyload_authentication_confirm)
-    else -> ""
 }
 
 @Composable
@@ -2330,392 +2377,54 @@ private fun ApplicationSelectionPrompt(state: PinpadDisplayState.ApplicationSele
 }
 
 @Composable
-private fun MultiInterfacePrompt(transaction: PinpadTransactionDisplay?) {
-    val transition = rememberInfiniteTransition(label = "multi-interface")
-    val tapProgress by transition.animateFloat(
-        initialValue = 0f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 1_250),
-            repeatMode = RepeatMode.Restart,
-        ),
-        label = "multi-interface-tap-progress",
-    )
-    val cardMotionProgress by transition.animateFloat(
-        initialValue = 0f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 1_500),
-            repeatMode = RepeatMode.Reverse,
-        ),
-        label = "multi-interface-card-progress",
-    )
-    Box(
+private fun MultiInterfacePrompt(state: PinpadDisplayState.PresentCard) {
+    val options = state.options
+    val prompt = when (options.interfaces) {
+        "100" -> R.string.prompt_swipe_card
+        "010" -> R.string.prompt_insert_card
+        "001" -> R.string.prompt_tap_card
+        "101" -> R.string.prompt_swipe_tap_card
+        "110" -> R.string.prompt_swipe_insert_card
+        "011" -> R.string.prompt_insert_tap_card
+        else -> R.string.prompt_present_card
+    }
+    DeviceEntryPrompt(state.transaction, entryGestures(options.chip, options.contactless, options.swipe),
+        prompt, options.transactionName, options.formattedAmount)
+}
+
+@Composable
+private fun InsertCardPrompt(transaction: PinpadTransactionDisplay?) =
+    DeviceEntryPrompt(transaction, listOf(CardEntryGesture.INSERT), R.string.prompt_insert_card)
+
+@Composable
+private fun TapCardPrompt(transaction: PinpadTransactionDisplay?) =
+    DeviceEntryPrompt(transaction, listOf(CardEntryGesture.TAP), R.string.prompt_tap_card)
+
+@Composable
+private fun SwipeCardPrompt(transaction: PinpadTransactionDisplay?) =
+    DeviceEntryPrompt(transaction, listOf(CardEntryGesture.SWIPE), R.string.prompt_swipe_card)
+
+@Composable
+private fun DeviceEntryPrompt(transaction: PinpadTransactionDisplay?, gestures: List<CardEntryGesture>, prompt: Int, transactionName: String? = null, formattedAmount: String? = null) {
+    val context = LocalContext.current
+    val modelName = remember(context) { (context.applicationContext as PinpadApplication).deviceInfoProvider.modelName() }
+    Column(
         modifier = Modifier.fillMaxSize(),
-    ) {
-        Canvas(
-            modifier = Modifier.fillMaxSize(),
-        ) {
-            val cardColor = Color(0xFFE7EDF5)
-            val detailColor = Color(0xFF172130)
-            val accentColor = Color(0xFF8FD3FF)
-
-            val tapCardWidth = 78.dp.toPx()
-            val tapCardHeight = 50.dp.toPx()
-            val tapCardLeft = (size.width - tapCardWidth) / 2f - 16.dp.toPx()
-            val tapCardTop = 2.dp.toPx() - 4.dp.toPx() * tapProgress
-            drawRoundRect(
-                color = cardColor,
-                topLeft = Offset(tapCardLeft, tapCardTop),
-                size = Size(tapCardWidth, tapCardHeight),
-                cornerRadius = CornerRadius(6.dp.toPx(), 6.dp.toPx()),
-            )
-            drawRoundRect(
-                color = detailColor,
-                topLeft = Offset(tapCardLeft + 9.dp.toPx(), tapCardTop + 10.dp.toPx()),
-                size = Size(24.dp.toPx(), 16.dp.toPx()),
-                cornerRadius = CornerRadius(3.dp.toPx(), 3.dp.toPx()),
-            )
-            val waveCenter = Offset(tapCardLeft + tapCardWidth + 18.dp.toPx(), tapCardTop + tapCardHeight / 2f)
-            repeat(3) { index ->
-                val radius = (14 + index * 13).dp.toPx() + 2.dp.toPx() * tapProgress
-                drawArc(
-                    color = accentColor,
-                    startAngle = -48f,
-                    sweepAngle = 96f,
-                    useCenter = false,
-                    topLeft = Offset(waveCenter.x - radius, waveCenter.y - radius),
-                    size = Size(radius * 2f, radius * 2f),
-                    style = Stroke(width = 4.dp.toPx(), cap = StrokeCap.Round),
-                )
-            }
-
-            val swipeCardWidth = 48.dp.toPx()
-            val swipeCardHeight = 76.dp.toPx()
-            val swipeCardLeft = size.width - swipeCardWidth - 4.dp.toPx()
-            val swipeSlotX = swipeCardLeft - 7.dp.toPx()
-            val swipeSlotTop = 84.dp.toPx()
-            val swipeSlotBottom = size.height - 118.dp.toPx()
-            drawLine(
-                color = cardColor,
-                start = Offset(swipeSlotX, swipeSlotTop),
-                end = Offset(swipeSlotX, swipeSlotBottom),
-                strokeWidth = 6.dp.toPx(),
-                cap = StrokeCap.Round,
-            )
-            val swipeCardTop = swipeSlotTop + 10.dp.toPx() +
-                (swipeSlotBottom - swipeSlotTop - swipeCardHeight - 20.dp.toPx()) * cardMotionProgress
-            drawRoundRect(
-                color = cardColor,
-                topLeft = Offset(swipeCardLeft, swipeCardTop),
-                size = Size(swipeCardWidth, swipeCardHeight),
-                cornerRadius = CornerRadius(5.dp.toPx(), 5.dp.toPx()),
-            )
-            drawRoundRect(
-                color = detailColor,
-                topLeft = Offset(swipeCardLeft + 6.dp.toPx(), swipeCardTop + 8.dp.toPx()),
-                size = Size(9.dp.toPx(), swipeCardHeight - 16.dp.toPx()),
-                cornerRadius = CornerRadius(2.dp.toPx(), 2.dp.toPx()),
-            )
-            repeat(2) { index ->
-                val y = swipeCardTop + swipeCardHeight + 10.dp.toPx() + index * 13.dp.toPx()
-                val centerX = swipeCardLeft + swipeCardWidth / 2f
-                drawLine(
-                    color = accentColor,
-                    start = Offset(centerX - 10.dp.toPx(), y),
-                    end = Offset(centerX, y + 9.dp.toPx()),
-                    strokeWidth = 4.dp.toPx(),
-                    cap = StrokeCap.Round,
-                )
-                drawLine(
-                    color = accentColor,
-                    start = Offset(centerX + 10.dp.toPx(), y),
-                    end = Offset(centerX, y + 9.dp.toPx()),
-                    strokeWidth = 4.dp.toPx(),
-                    cap = StrokeCap.Round,
-                )
-            }
-
-            val insertSlotY = size.height - 94.dp.toPx()
-            val insertSlotWidth = 118.dp.toPx()
-            val insertSlotLeft = (size.width - insertSlotWidth) / 2f
-            drawLine(
-                color = cardColor,
-                start = Offset(insertSlotLeft, insertSlotY),
-                end = Offset(insertSlotLeft + insertSlotWidth, insertSlotY),
-                strokeWidth = 7.dp.toPx(),
-                cap = StrokeCap.Round,
-            )
-            val insertCardWidth = 58.dp.toPx()
-            val insertCardHeight = 96.dp.toPx()
-            val insertCardLeft = (size.width - insertCardWidth) / 2f
-            val insertCardTop = size.height - insertCardHeight - 2.dp.toPx() - 34.dp.toPx() * cardMotionProgress
-            drawRoundRect(
-                color = cardColor,
-                topLeft = Offset(insertCardLeft, insertCardTop),
-                size = Size(insertCardWidth, insertCardHeight),
-                cornerRadius = CornerRadius(6.dp.toPx(), 6.dp.toPx()),
-            )
-            drawRoundRect(
-                color = detailColor,
-                topLeft = Offset(insertCardLeft + 12.dp.toPx(), insertCardTop + 10.dp.toPx()),
-                size = Size(34.dp.toPx(), 22.dp.toPx()),
-                cornerRadius = CornerRadius(3.dp.toPx(), 3.dp.toPx()),
-            )
-            repeat(2) { index ->
-                val y = insertCardTop - 14.dp.toPx() - index * 14.dp.toPx() - 4.dp.toPx() * cardMotionProgress
-                val centerX = size.width / 2f
-                drawLine(
-                    color = accentColor,
-                    start = Offset(centerX - 11.dp.toPx(), y),
-                    end = Offset(centerX, y - 10.dp.toPx()),
-                    strokeWidth = 4.dp.toPx(),
-                    cap = StrokeCap.Round,
-                )
-                drawLine(
-                    color = accentColor,
-                    start = Offset(centerX + 11.dp.toPx(), y),
-                    end = Offset(centerX, y - 10.dp.toPx()),
-                    strokeWidth = 4.dp.toPx(),
-                    cap = StrokeCap.Round,
-                )
-            }
-        }
-        Box(
-            modifier = Modifier
-                .align(Alignment.CenterStart)
-                .width(175.dp),
-            contentAlignment = Alignment.CenterStart,
-        ) {
-            if (transaction == null) {
-                Text(
-                    text = stringResource(R.string.prompt_present_card),
-                    color = Color.White,
-                    fontSize = 22.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    textAlign = TextAlign.Start,
-                    lineHeight = 26.sp,
-                )
-            } else {
-                TransactionSummary(transaction, centered = false)
-            }
-        }
-    }
-}
-
-@Composable
-private fun InsertCardPrompt(transaction: PinpadTransactionDisplay?) {
-    val transition = rememberInfiniteTransition(label = "insert-card")
-    val progress by transition.animateFloat(
-        initialValue = 0f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 1_500),
-            repeatMode = RepeatMode.Reverse,
-        ),
-        label = "insert-progress",
-    )
-    Box(modifier = Modifier.fillMaxSize()) {
-        Column(
-            modifier = Modifier
-                .align(Alignment.Center)
-                .offset(y = (-74).dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(20.dp),
-        ) {
-            TransactionSummary(transaction, centered = true)
-            PromptText(stringResource(R.string.prompt_insert_card))
-        }
-        Canvas(
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .width(230.dp)
-                .height(198.dp)
-                .offset(y = 18.dp),
-        ) {
-            val cardColor = Color(0xFFE7EDF5)
-            val detailColor = Color(0xFF172130)
-            val accentColor = Color(0xFF8FD3FF)
-            val slotY = size.height - 54.dp.toPx()
-            val slotWidth = 132.dp.toPx()
-            val slotLeft = (size.width - slotWidth) / 2f
-            drawLine(
-                color = cardColor,
-                start = Offset(slotLeft, slotY),
-                end = Offset(slotLeft + slotWidth, slotY),
-                strokeWidth = 7.dp.toPx(),
-                cap = StrokeCap.Round,
-            )
-
-            val cardWidth = 64.dp.toPx()
-            val cardHeight = 106.dp.toPx()
-            val cardLeft = (size.width - cardWidth) / 2f
-            val cardTop = size.height - cardHeight - 4.dp.toPx() - 34.dp.toPx() * progress
-            drawRoundRect(
-                color = cardColor,
-                topLeft = Offset(cardLeft, cardTop),
-                size = Size(cardWidth, cardHeight),
-                cornerRadius = CornerRadius(6.dp.toPx(), 6.dp.toPx()),
-            )
-            drawRoundRect(
-                color = detailColor,
-                topLeft = Offset(cardLeft + 13.dp.toPx(), cardTop + 11.dp.toPx()),
-                size = Size(38.dp.toPx(), 24.dp.toPx()),
-                cornerRadius = CornerRadius(3.dp.toPx(), 3.dp.toPx()),
-            )
-            repeat(2) { index ->
-                val y = cardTop - 16.dp.toPx() - index * 15.dp.toPx() - 4.dp.toPx() * progress
-                val centerX = size.width / 2f
-                drawLine(
-                    color = accentColor,
-                    start = Offset(centerX - 12.dp.toPx(), y),
-                    end = Offset(centerX, y - 11.dp.toPx()),
-                    strokeWidth = 5.dp.toPx(),
-                    cap = StrokeCap.Round,
-                )
-                drawLine(
-                    color = accentColor,
-                    start = Offset(centerX + 12.dp.toPx(), y),
-                    end = Offset(centerX, y - 11.dp.toPx()),
-                    strokeWidth = 5.dp.toPx(),
-                    cap = StrokeCap.Round,
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun TapCardPrompt(transaction: PinpadTransactionDisplay?) {
-    val transition = rememberInfiniteTransition(label = "tap-card")
-    val progress by transition.animateFloat(
-        initialValue = 0f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 1_150),
-            repeatMode = RepeatMode.Restart,
-        ),
-        label = "tap-progress",
-    )
-    Column(
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(22.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Canvas(
-            modifier = Modifier
-                .width(210.dp)
-                .height(128.dp),
-        ) {
-            val cardWidth = 92.dp.toPx()
-            val cardHeight = 62.dp.toPx()
-            val cardLeft = 34.dp.toPx()
-            val cardTop = 34.dp.toPx() - 8.dp.toPx() * progress
-            drawRoundRect(
-                color = Color(0xFFE7EDF5),
-                topLeft = Offset(cardLeft, cardTop),
-                size = Size(cardWidth, cardHeight),
-                cornerRadius = CornerRadius(7.dp.toPx(), 7.dp.toPx()),
-            )
-            drawRoundRect(
-                color = Color(0xFF172130),
-                topLeft = Offset(cardLeft + 10.dp.toPx(), cardTop + 12.dp.toPx()),
-                size = Size(26.dp.toPx(), 18.dp.toPx()),
-                cornerRadius = CornerRadius(3.dp.toPx(), 3.dp.toPx()),
-            )
-            drawLine(
-                color = Color(0xFF172130),
-                start = Offset(cardLeft + 12.dp.toPx(), cardTop + 42.dp.toPx()),
-                end = Offset(cardLeft + cardWidth - 12.dp.toPx(), cardTop + 42.dp.toPx()),
-                strokeWidth = 3.dp.toPx(),
-                cap = StrokeCap.Round,
-            )
-
-            val waveCenter = Offset(cardLeft + cardWidth + 24.dp.toPx(), cardTop + cardHeight / 2f)
-            repeat(3) { index ->
-                val radius = (18 + index * 16).dp.toPx() + 3.dp.toPx() * progress
-                drawArc(
-                    color = Color(0xFF8FD3FF),
-                    startAngle = -48f,
-                    sweepAngle = 96f,
-                    useCenter = false,
-                    topLeft = Offset(waveCenter.x - radius, waveCenter.y - radius),
-                    size = Size(radius * 2f, radius * 2f),
-                    style = Stroke(width = 5.dp.toPx(), cap = StrokeCap.Round),
-                )
+        if (transactionName != null || formattedAmount != null) {
+            transactionName?.let {
+                Text(it, color = Color(0xFF8FD3FF), fontSize = 28.sp,
+                    fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
             }
-        }
-        TransactionPromptText(stringResource(R.string.prompt_tap_card), transaction)
-    }
-}
-
-@Composable
-private fun SwipeCardPrompt(transaction: PinpadTransactionDisplay?) {
-    val transition = rememberInfiniteTransition(label = "swipe-card")
-    val progress by transition.animateFloat(
-        initialValue = 0f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 1_250),
-            repeatMode = RepeatMode.Restart,
-        ),
-        label = "swipe-progress",
-    )
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(22.dp),
-    ) {
-        Canvas(
-            modifier = Modifier
-                .width(210.dp)
-                .height(128.dp),
-        ) {
-            val cardWidth = 86.dp.toPx()
-            val cardHeight = 64.dp.toPx()
-            val cardLeft = (size.width - cardWidth) / 2f - 10.dp.toPx()
-            val cardTop = 10.dp.toPx()
-            drawRoundRect(
-                color = Color(0xFFE7EDF5),
-                topLeft = Offset(cardLeft, cardTop),
-                size = Size(cardWidth, cardHeight),
-                cornerRadius = CornerRadius(6.dp.toPx(), 6.dp.toPx()),
-            )
-            drawRoundRect(
-                color = Color(0xFF172130),
-                topLeft = Offset(cardLeft + 8.dp.toPx(), cardTop + 10.dp.toPx()),
-                size = Size(cardWidth - 16.dp.toPx(), 12.dp.toPx()),
-                cornerRadius = CornerRadius(2.dp.toPx(), 2.dp.toPx()),
-            )
-
-            val slotX = cardLeft + cardWidth + 14.dp.toPx()
-            drawLine(
-                color = Color(0xFFE7EDF5),
-                start = Offset(slotX, cardTop - 3.dp.toPx()),
-                end = Offset(slotX, cardTop + cardHeight + 4.dp.toPx()),
-                strokeWidth = 6.dp.toPx(),
-                cap = StrokeCap.Round,
-            )
-
-            val arrowTop = cardTop + cardHeight + 8.dp.toPx() + 12.dp.toPx() * progress
-            repeat(2) { index ->
-                val y = arrowTop + index * 14.dp.toPx()
-                val centerX = cardLeft + cardWidth / 2f
-                drawLine(
-                    color = Color(0xFF8FD3FF),
-                    start = Offset(centerX - 12.dp.toPx(), y),
-                    end = Offset(centerX, y + 10.dp.toPx()),
-                    strokeWidth = 5.dp.toPx(),
-                    cap = StrokeCap.Round,
-                )
-                drawLine(
-                    color = Color(0xFF8FD3FF),
-                    start = Offset(centerX + 12.dp.toPx(), y),
-                    end = Offset(centerX, y + 10.dp.toPx()),
-                    strokeWidth = 5.dp.toPx(),
-                    cap = StrokeCap.Round,
-                )
+            formattedAmount?.let {
+                Text(it, color = Color.White, fontSize = 30.sp,
+                    fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
             }
-        }
-        TransactionPromptText(stringResource(R.string.prompt_swipe_card), transaction)
+        } else TransactionSummary(transaction, centered = true)
+        CardEntryGuide(modelName, gestures, Modifier.fillMaxWidth().weight(1f))
+        PromptText(stringResource(prompt))
     }
 }
 
@@ -2945,6 +2654,19 @@ private fun PinpadSetupScreen(
     val modelName = remember(context) { (context.applicationContext as PinpadApplication).deviceInfoProvider.modelName() }
     val deviceSpec = remember(modelName) { DeviceModelConfig.getDeviceSpec(modelName) }
     var settings by remember(modelName) { mutableStateOf(prefs.serialSettings(modelName)) }
+    val exportLog = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/plain")) { uri ->
+        if (uri != null) {
+            val result = runCatching {
+                val snapshot = PinpadSerialDiagnostics.snapshot
+                val report = "Global Connect Pinpad ${BuildConfig.VERSION_NAME}\nModel: $modelName\n" +
+                    "Endpoint: ${snapshot.endpoint}\nState: ${snapshot.connectionState}\nError: ${snapshot.error.orEmpty()}\n" +
+                    "TX records attempted writes; RX confirms received bytes.\n\n" + ConnectionLog.exportText()
+                requireNotNull(context.contentResolver.openOutputStream(uri)).bufferedWriter().use { it.write(report) }
+            }
+            Toast.makeText(context, context.getString(if (result.isSuccess) R.string.setup_log_saved else R.string.setup_log_failed), Toast.LENGTH_LONG).show()
+        }
+    }
+
 
     MaterialTheme {
         Surface(
@@ -2974,13 +2696,27 @@ private fun PinpadSetupScreen(
                     label = stringResource(R.string.setup_transport),
                     value = settings.transportMode,
                     displayValue = when (settings.transportMode) {
-                        "SERIAL" -> stringResource(R.string.setup_usb_serial)
+                        "SERIAL" -> stringResource(if (deviceSpec.usbBaseSerialSupported) R.string.setup_usb_base else R.string.setup_usb_serial)
                         "IP" -> stringResource(R.string.setup_ip)
                         else -> settings.transportMode
                     },
                     values = TRANSPORT_MODES,
                     onChanged = { settings = settings.copy(transportMode = it) },
                 )
+                if (settings.transportMode == "SERIAL" && deviceSpec.usbBaseSerialSupported) {
+                    if (deviceSpec.fixedUsbBasePort != null) {
+                        Text(
+                            text = "${stringResource(R.string.setup_usb_base_port)}: ${deviceSpec.fixedUsbBasePort}",
+                            color = Color.White,
+                            fontSize = 18.sp,
+                        )
+                    } else SetupCycleRow(
+                        label = stringResource(R.string.setup_usb_base_port),
+                        value = settings.usbBasePort.toString(),
+                        values = deviceSpec.serialPortOptions().map(Int::toString),
+                        onChanged = { settings = settings.copy(usbBasePort = it.toInt()) },
+                    )
+                }
                 if (settings.transportMode == "RS232") {
                     SetupCycleRow(
                         label = stringResource(R.string.setup_rs232_port),
@@ -3033,6 +2769,18 @@ private fun PinpadSetupScreen(
                         values = PARITY_VALUES,
                         onChanged = { settings = settings.copy(parity = it) },
                     )
+                }
+                Text(
+                    text = "${PinpadSerialDiagnostics.snapshot.endpoint} · ${PinpadSerialDiagnostics.snapshot.connectionState}",
+                    color = Color(0xFFC8CDD5), fontSize = 13.sp,
+                )
+                TextButton(onClick = { exportLog.launch("pinpad-connection-log.txt") }) {
+                    Text(stringResource(R.string.setup_export_connection_log))
+                }
+                if (BuildConfig.TEMPORARY_PRODUCTION_LOG_ENABLED) {
+                    TextButton(onClick = { (context as? MainActivity)?.showReleaseLogStatus() }) {
+                        Text(stringResource(R.string.release_log_title))
+                    }
                 }
                 Spacer(Modifier.height(6.dp))
                 Row(

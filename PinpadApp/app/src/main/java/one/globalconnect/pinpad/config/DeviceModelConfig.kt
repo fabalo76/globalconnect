@@ -10,6 +10,8 @@ data class DeviceModelSpec(
     val alternateSerialPort: Int? = null,
     val display: DisplaySpec? = null,
     val notes: String = "",
+    val usbBaseSerialSupported: Boolean = false,
+    val fixedUsbBasePort: Int? = null,
 )
 
 data class DisplaySpec(
@@ -20,6 +22,17 @@ data class DisplaySpec(
 
 object DeviceModelConfig {
     private val deviceModels = listOf(
+        DeviceModelSpec(
+            modelName = "N6ProLite",
+            usbCdcSupported = false,
+            usbBaseSerialSupported = true,
+            fixedUsbBasePort = 0,
+            rs232SerialSupported = true,
+            defaultSerialPort = 1,
+            alternateSerialPort = 0,
+            display = DisplaySpec(720, 1440, 320),
+            notes = "PL2303GC USB base uses fixed serial port 0, confirmed on device.",
+        ),
         DeviceModelSpec(
             modelName = "UN20",
             usbCdcSupported = true,
@@ -61,7 +74,9 @@ object DeviceModelConfig {
         ),
         DeviceModelSpec(
             modelName = "N6PRO",
-            usbCdcSupported = true,
+            usbCdcSupported = false,
+            usbBaseSerialSupported = true,
+            fixedUsbBasePort = 0,
             rs232SerialSupported = true,
             defaultSerialPort = 1,
             notes = "Fixed RS232 serial port",

@@ -7,6 +7,28 @@ import org.junit.Test
 
 class NexgoProfileResolverTest {
     @Test
+    fun `N6 Pro Lite is recognized without inventing command base or screen size`() {
+        for (model in listOf("N6ProLite", "N6-Pro-Lite", "N6_PRO_LITE")) {
+            val profile = NexgoProfileResolver.resolve(null, model, null)
+            assertEquals("N6ProLite", profile.modelKey)
+            assertTrue(profile.isKnownModel)
+            assertFalse(profile.commandProfileVerified)
+            assertEquals(null, profile.detectedCommandBase)
+            assertEquals(null, profile.display)
+            assertTrue(profile.capabilities.values.all {
+                it == NexgoCapabilityState.RUNTIME_PROBE_REQUIRED
+            })
+        }
+    }
+
+    @Test
+    fun `N6 Pro Lite never assumes N6S commands when firmware reports another base`() {
+        val profile = NexgoProfileResolver.resolve("N6ProLite", "N6ProLite", "90000000")
+        assertEquals(90_000_000, profile.detectedCommandBase)
+        assertFalse(profile.commandProfileVerified)
+    }
+
+    @Test
     fun `N6 marketing model resolves to N6S firmware profile`() {
         val profile = NexgoProfileResolver.resolve(null, "N6", null)
 

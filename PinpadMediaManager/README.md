@@ -99,12 +99,40 @@ The protocol implementation uses the terminal's `STX/ETX/LRC` transaction exchan
 
 ## Build and run
 
-Open `PinpadMediaManager.sln` in Visual Studio 2022 17.12 or later, or use:
+### Audio recordings
+
+The **Audio recordings** tab supports N6 Pro microphone commands M20–M25:
+Start, Stop, Refresh list, Get recording, Delete selected, and Delete all.
+Start uses the standard microphone with no selector or command parameter.
+Pinpad 1.3.130 records AAC-LC at 24 kbps, 16 kHz mono (`.aac`), approximately
+5.4 MB plus headers for 30 minutes. The terminal returns the new filename after capture starts.
+It records in the background for at most 30 minutes and keeps at most ten audio
+files, deleting the oldest when a new recording requires space. Pinpad reset also
+stops recording; Delete all stops capture and clears the recording store.
+
+Refresh after an automatic stop or pinpad reset. Stop an active file before
+retrieving/deleting it. Get recording streams into a temporary local file and
+replaces the selected destination only after the entire download succeeds;
+cancellation or errors remove the partial download. Audio packets use explicit
+byte offsets and are validated for length/total/offset before writing. Both new
+AAC recordings and existing WAV files are supported; the save dialog preserves
+the format. Use this updated demo with Pinpad 1.3.130.
+
+N6 Pro firmware identifiers `N6Pro` and `N6ProLite` are supported. Other models
+return **Unsupported**, including their reported model in the error. On N6 Pro, allow
+microphone access in Pinpad App and keep the app visible when starting capture.
+The foreground service continues capture afterward. Use the regular USB CDC,
+RS232, or TCP connection; no ADB is involved. Full protocol details and statuses
+are documented in `../PinpadApp/README.md`.
+
+### Build
+
+Open `PinpadDemo.sln` in Visual Studio 2022 17.12 or later, or use:
 
 ```powershell
-dotnet build PinpadMediaManager.sln -c Release
-dotnet test PinpadMediaManager.sln -c Release
-dotnet run --project src/PinpadMediaManager/PinpadMediaManager.csproj
+dotnet build PinpadDemo.sln -c Release
+dotnet test PinpadDemo.sln -c Release
+dotnet run --project src/PinpadMediaManager/PinpadDemo.csproj
 ```
 
 For serial, configure PinpadApp for USB and enable USB CDC. The resulting

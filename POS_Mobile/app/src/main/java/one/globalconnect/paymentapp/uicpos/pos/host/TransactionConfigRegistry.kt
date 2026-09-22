@@ -23,6 +23,8 @@ object TransactionConfigRegistry {
         PAYMENT(code = "Payment", legacyTransaction = LegacyTransaction.PAYMENT),
         LOYALTY_SALE(code = "LoyaltySale", legacyTransaction = LegacyTransaction.POINT_SALE),
         LOYALTY_BALANCE(code = "LoyaltyBalance", legacyTransaction = LegacyTransaction.POINT_BALANCE),
+        INSTALLMENT_QUERY(code = "InstallmentQuery", legacyTransaction = LegacyTransaction.INSTALLMENT_QUERY),
+        EXTRAS_QUERY(code = "ExtrasQuery", legacyTransaction = LegacyTransaction.EXTRAS_QUERY),
         EXTRAS_SALE(code = "ExtrasSale", legacyTransaction = LegacyTransaction.EXTRAS_SALE),
         QUOTA_SALE(code = "QuotaSale", legacyTransaction = LegacyTransaction.INSTALLMENT_SALE),
         EXTRAS_BALANCE(code = "ExtrasBalance", legacyTransaction = LegacyTransaction.EXTRAS_BALANCE),
@@ -913,7 +915,11 @@ object TransactionConfigRegistry {
             LegacyTransaction.REFUND -> needTax2Amount && refundUsesTax && (terminal?.ApplyTax2 ?: false)
             else -> needTax2Amount && (terminal?.ApplyTax2 ?: false)
         }
-        val manualTipEnabled = acquirers.any { it.TIPProcs == 1L }
+        val manualTipEnabled = if (terminal != null && terminal.tipProcessingMode.isNotBlank()) {
+            terminal.TIPProcs == 1L
+        } else {
+            acquirers.any { it.TIPProcs == 1L }
+        }
         val currencies = CurrencyTable.build(acquirers)
         val currencySymbol = if (currencies.size == 1) currencies.first().symbol else null
 

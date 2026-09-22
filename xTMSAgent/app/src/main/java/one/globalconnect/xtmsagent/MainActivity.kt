@@ -60,7 +60,8 @@ import one.globalconnect.xtmsagent.nexgo.NexgoSystemServiceInitializer
 import one.globalconnect.xtmsagent.nexgo.PhysicalKeypadInputPolicy
 import one.globalconnect.xtmsagent.remote.RemoteControlAccessibilityProvisioner
 import one.globalconnect.xtmsagent.diagnostics.NexgoDiagnosticsManager
-import one.globalconnect.xtmsagent.mqtt.TmsStatusSeverity
+import one.globalconnect.xtmsagent.mqtt.linkIcon
+import one.globalconnect.xtmsagent.mqtt.linkColor
 import kotlin.io.path.Path
 import kotlin.io.path.listDirectoryEntries
 import kotlin.io.path.name
@@ -81,6 +82,27 @@ import one.globalconnect.xtmsagent.mqtt.notifications.EXTRA_MESSAGE_TEXT
 import one.globalconnect.xtmsagent.mqtt.persistence.TmsCredentialStore
 
 class MainActivity : AppCompatActivity() {
+    private var remoteSetupDialog: AlertDialog? = null
+    private var remoteSettingsInFlight = false
+    private var pendingRemoteSetup: Boolean? = null
+    private val restrictedSettingsLauncher = registerForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
+    ) {
+        remoteSettingsInFlight = false
+        NexgoDiagnosticsManager.recordSetupState(this, "remoteSetup.appInfoReturned")
+        // Returning from App info is not proof of approval. Offer the next step
+        // and retain a route back to App info if accessibility is still blocked.
+        checkRemoteControlSetup(showRestrictedStep = false)
+    }
+
+    private val remoteAccessibilityLauncher = registerForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
+    ) {
+        remoteSettingsInFlight = false
+        NexgoDiagnosticsManager.recordSetupState(this, "remoteSetup.accessibilityReturned")
+        checkRemoteControlSetup(showRestrictedStep = false)
+    }
+
     companion object {
 
         const val APP_HEAD: String = "DL_APP_"
@@ -304,11 +326,21 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         Logd(Exception(""))
         super.onCreate(savedInstanceState)
+        if (one.globalconnect.xtmsagent.recovery.StartupRecoveryGuard.inRecovery) {
+            startActivity(Intent(this, one.globalconnect.xtmsagent.recovery.RecoveryActivity::class.java))
+            finish()
+            return
+        }
         instance = this
         setContentView(R.layout.activity_main)
         observeTmsTaskStatus()
 
-        vg_sSN = APIProxy.getDeviceEngine(this).deviceInfo.sn
+        try {
+            vg_sSN = APIProxy.getDeviceEngine(this).deviceInfo.sn
+        } catch (error: Exception) {
+            NexgoDiagnosticsManager.recordException(this, "startup.serialNumber", error)
+            vg_sSN = TmsCredentialStore(this).loadTermId().orEmpty()
+        }
         Logd(Exception("S/N=${vg_sSN}"))
 
         initSystemService()
@@ -347,6 +379,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        remoteSetupDialog?.dismiss()
         Logd(Exception(""))
         timerTaskChkParam?.cancel()
         timerTaskChkParam = null
@@ -360,6 +393,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        one.globalconnect.xtmsagent.diagnostics.DailyFileLog.record(this, "Launcher resumed")
         Logd(Exception(""))
 
         // Register MQTT broadcast receivers while the Activity is visible.
@@ -400,6 +434,15 @@ class MainActivity : AppCompatActivity() {
             })
         } else if (!store.isBlocked()) {
             launchPaymentAppAfterBootIfPending()
+        }
+    }
+
+    override fun onPostResume() {
+        super.onPostResume()
+        one.globalconnect.xtmsagent.recovery.StartupRecoveryGuard.monitorHealthyStartup(applicationContext)
+        pendingRemoteSetup?.let { showRestricted ->
+            pendingRemoteSetup = null
+            window.decorView.post { checkRemoteControlSetup(showRestricted) }
         }
     }
 
@@ -804,6 +847,9 @@ class MainActivity : AppCompatActivity() {
                 dialog.dismiss()  // Dismisses the dialog
             }
         val dialog: AlertDialog = builder.create()
+        PasswordDialogInput.bind(edit1, edit2) {
+            dialog.getButton(Dialog.BUTTON_POSITIVE).performClick()
+        }
         dialog.setCancelable(false);
         dialog.setCanceledOnTouchOutside(false);
         dialog.setOnShowListener() {
@@ -1174,31 +1220,92 @@ class MainActivity : AppCompatActivity() {
         LoadBtn()
     }
 
-    private fun checkRemoteControlSetup() {
+    private fun checkRemoteControlSetup(showRestrictedStep: Boolean = true) {
+        if (isFinishing || isDestroyed || remoteSettingsInFlight || remoteSetupDialog?.isShowing == true) return
+        if (!lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
+            pendingRemoteSetup = showRestrictedStep
+            return
+        }
         if (one.globalconnect.xtmsagent.remote.RemoteControlAccessibilityService.isEnabled(this)) return
-        AlertDialog.Builder(this)
-            .setTitle("Remote Control Setup")
-            .setMessage(
-                "The Remote Control accessibility service is not enabled.\n\n" +
-                "Tap \"Open Settings\", find xTMSAgent → Remote Control, and turn the switch on " +
-                "to allow unattended screen sharing from the TMS."
-            )
-            .setPositiveButton("Open Settings") { _, _ ->
-                val component = android.content.ComponentName(
-                    this,
-                    one.globalconnect.xtmsagent.remote.RemoteControlAccessibilityService::class.java
-                ).flattenToString()
-                val intent = android.content.Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
-                    val args = android.os.Bundle().apply {
-                        putString(":settings:fragment_args_key", component)
-                    }
-                    putExtra(":settings:show_fragment_args", args)
-                    addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-                startActivity(intent)
+        val needsApprovalGuide = showRestrictedStep && Build.VERSION.SDK_INT >= 33 &&
+            one.globalconnect.xtmsagent.remote.RestrictedSettingsProvisioner.state(this) != "allowed"
+        val builder = AlertDialog.Builder(this)
+            .setTitle(R.string.remote_setup_title)
+            .setMessage(if (needsApprovalGuide) R.string.remote_setup_restricted_message else R.string.remote_setup_enable_message)
+            .setNegativeButton(R.string.remote_setup_later, null)
+        if (needsApprovalGuide) {
+            builder.setPositiveButton(R.string.remote_setup_android_settings) { _, _ -> openRemoteControlApprovalSettings() }
+                .setNeutralButton(R.string.remote_setup_next) { _, _ -> openRemoteControlAccessibility() }
+        } else {
+            builder.setPositiveButton(R.string.remote_setup_open_accessibility) { _, _ -> openRemoteControlAccessibility() }
+            if (Build.VERSION.SDK_INT >= 33) {
+                builder.setNeutralButton(R.string.remote_setup_android_settings) { _, _ -> openRemoteControlApprovalSettings() }
             }
-            .setNegativeButton("Later", null)
-            .show()
+        }
+        val dialog = builder.create()
+        remoteSetupDialog = dialog
+        dialog.setOnDismissListener { if (remoteSetupDialog === dialog) remoteSetupDialog = null }
+        try {
+            dialog.show()
+        } catch (error: Exception) {
+            remoteSetupDialog = null
+            NexgoDiagnosticsManager.recordException(this, "remoteSetup.showDialog", error)
+        }
+    }
+
+    private fun openRemoteControlApprovalSettings() {
+        // Some OEM App info entry points omit the overflow menu. Keep a route
+        // through the top-level Settings UI without treating a missing menu as approval.
+        val dialog = AlertDialog.Builder(this)
+            .setTitle(R.string.remote_setup_android_settings)
+            .setMessage(R.string.remote_setup_app_info_routes)
+            .setPositiveButton(R.string.remote_setup_android_settings) { _, _ ->
+                launchRemoteAppSettings(Intent(Settings.ACTION_SETTINGS), "androidSettings")
+            }
+
+            .setNegativeButton(R.string.remote_setup_later, null)
+            .create()
+        remoteSetupDialog = dialog
+        dialog.setOnDismissListener { if (remoteSetupDialog === dialog) remoteSetupDialog = null }
+        try {
+            dialog.show()
+        } catch (error: Exception) {
+            remoteSetupDialog = null
+            NexgoDiagnosticsManager.recordException(this, "remoteSetup.showRoutes", error)
+        }
+    }
+
+    private fun launchRemoteAppSettings(intent: Intent, route: String) {
+        try {
+            NexgoDiagnosticsManager.record(this, "remoteSetup.open route=$route approvalNotVerified=true")
+            remoteSettingsInFlight = true
+            restrictedSettingsLauncher.launch(intent)
+        } catch (error: Exception) {
+            remoteSettingsInFlight = false
+            NexgoDiagnosticsManager.recordException(this, "remoteSetup.open route=$route", error)
+            android.widget.Toast.makeText(this, R.string.remote_setup_settings_unavailable,
+                android.widget.Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun openRemoteControlAccessibility() {
+        try {
+            val component = android.content.ComponentName(this,
+                one.globalconnect.xtmsagent.remote.RemoteControlAccessibilityService::class.java).flattenToString()
+            val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
+                putExtra(":settings:show_fragment_args", Bundle().apply {
+                    putString(":settings:fragment_args_key", component)
+                })
+            }
+            NexgoDiagnosticsManager.record(this, "remoteSetup.openAccessibility")
+            remoteSettingsInFlight = true
+            remoteAccessibilityLauncher.launch(intent)
+        } catch (error: Exception) {
+            remoteSettingsInFlight = false
+            NexgoDiagnosticsManager.recordException(this, "remoteSetup.openAccessibility", error)
+            android.widget.Toast.makeText(this, R.string.remote_setup_settings_unavailable,
+                android.widget.Toast.LENGTH_LONG).show()
+        }
     }
 
     private fun observeTmsTaskStatus() {
@@ -1215,7 +1322,9 @@ class MainActivity : AppCompatActivity() {
                             LauncherConfigManager.isConfigApplied(this@MainActivity),
                         )
                     ) {
-                        showTmsStrip(strip, connection.text, connectionStatusColor(connection.severity))
+                        showTmsStrip(strip, connection.text, connection.linkColor())
+                        strip.setCompoundDrawablesWithIntrinsicBounds(connection.linkIcon(), 0, 0, 0)
+                        strip.compoundDrawablePadding = (8 * resources.displayMetrics.density).toInt()
                     } else {
                         hideTmsStrip(strip)
                     }
@@ -1241,15 +1350,8 @@ class MainActivity : AppCompatActivity() {
             else -> 0xFF424242.toInt()
         }
 
-    private fun connectionStatusColor(severity: TmsStatusSeverity): Int =
-        when (severity) {
-            TmsStatusSeverity.CONNECTED -> 0xFF2E7D32.toInt()
-            TmsStatusSeverity.CONNECTING -> 0xFF1565C0.toInt()
-            TmsStatusSeverity.WARNING -> 0xFFE65100.toInt()
-            TmsStatusSeverity.ERROR -> 0xFFB71C1C.toInt()
-        }
-
     private fun showTmsStrip(strip: TextView, msg: String, bg: Int) {
+        strip.setCompoundDrawablesWithIntrinsicBounds(0, 0, 0, 0)
         strip.setBackgroundColor(bg)
         strip.text = msg
         if (strip.visibility != View.VISIBLE) {
@@ -1380,8 +1482,14 @@ class MainActivity : AppCompatActivity() {
                 Logd(Exception("SystemServiceHelper.init failed: ${e.message}"))
             }
 
-            val remoteControlSetup =
+            val remoteControlSetup = try {
                 RemoteControlAccessibilityProvisioner.ensureEnabled(this@MainActivity)
+            } catch (error: kotlinx.coroutines.CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                NexgoDiagnosticsManager.recordException(this@MainActivity, "startup.remoteControlSetup", error)
+                one.globalconnect.xtmsagent.remote.RemoteControlAccessibilitySetupResult(false, "setup_exception")
+            }
             Log.i(
                 "RemoteControlSetup",
                 "Accessibility setup success=${remoteControlSetup.success} " +

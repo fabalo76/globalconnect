@@ -7,6 +7,11 @@ class NexgoDeviceInfoProvider(
     private val deviceEngine: DeviceEngine,
 ) : PinpadDeviceInfoProvider {
     override fun modelName(): String {
+        // Older SDKs may report a generic family name for newer terminal hardware.
+        val androidModel = android.os.Build.MODEL
+        if (one.globalconnect.pinpad.config.DeviceModelConfig.getDeviceSpec(androidModel).usbBaseSerialSupported) {
+            return androidModel
+        }
         return runCatching { deviceEngine.deviceInfo.model }
             .getOrDefault("")
             .ifBlank { "UNKNOWN" }

@@ -32,7 +32,32 @@ val downloadCredentialSecret = providers.gradleProperty("XTMS_DOWNLOAD_CREDENTIA
     .orElse("")
     .get()
 
+val validateReleaseDownloadCredentials = tasks.register("validateReleaseDownloadCredentials") {
+    group = "verification"
+    description = "Checks that release APKs can authenticate initial TMS provisioning."
+    val missing = listOf(
+        "XTMS_DOWNLOAD_CREDENTIAL_ID" to downloadCredentialId,
+        "XTMS_DOWNLOAD_CREDENTIAL_SECRET" to downloadCredentialSecret,
+    ).filter { (_, value) -> value.isBlank() }.map { (name, _) -> name }
+    doLast {
+        check(missing.isEmpty()) {
+            "Cannot build an xTMSAgent release without bootstrap download credentials. " +
+                "Missing: ${missing.joinToString()}. Set these Gradle properties in your private " +
+                "user Gradle configuration or supply environment variables. " +
+                "Obtain the active global download credential from Global Connect ONE; " +
+                "do not commit credential values."
+        }
+    }
+}
+
+tasks.matching { it.name == "preReleaseBuild" }.configureEach {
+    dependsOn(validateReleaseDownloadCredentials)
+}
+
 android {
+    if (providers.gradleProperty("xtmsRecovery").orNull == "true") {
+        sourceSets.getByName("release").manifest.srcFile("src/recovery/AndroidManifest.xml")
+    }
     namespace = "one.globalconnect.xtmsagent"
     //noinspection GradleDependency
     compileSdk = 36
@@ -44,8 +69,8 @@ android {
         minSdk = 29
         //noinspection OldTargetApi
         targetSdk = 35
-        versionCode = 61
-        versionName = "2.1.2.61"
+        versionCode = 87
+        versionName = "2.1.2.87"
         buildConfigField("String", "GLOBAL_CONNECT_ENV", "\"dev\"")
         buildConfigField("String", "DEFAULT_SEED_0", "\"22687075\"")
         buildConfigField("String", "DEFAULT_SEED_1", "\"27071287\"")
@@ -126,6 +151,7 @@ android {
 }
 
 dependencies {
+    testImplementation("org.json:json:20250517")
 
     implementation("androidx.core:core-ktx:1.18.0")
     implementation("com.google.android.material:material:1.13.0")

@@ -9,6 +9,18 @@ import one.globalconnect.pinpad.logging.PinpadTraceLog
 import one.globalconnect.pinpad.config.PinpadTmsConfigClient
 
 class PinpadApplication : Application() {
+    @Volatile var audioForeground: ((Boolean) -> Unit)? = null
+    val audioRecordings by lazy {
+        one.globalconnect.pinpad.audio.AudioRecordingController(
+            supported = { one.globalconnect.pinpad.audio.AudioRecordingPolicy.supports(deviceInfoProvider.modelName()) },
+            permissionGranted = { androidx.core.content.ContextCompat.checkSelfPermission(this,
+                android.Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED },
+            storeFactory = { one.globalconnect.pinpad.audio.AudioRecordingStore(java.io.File(filesDir, "audio-recordings")) },
+            capture = { file -> one.globalconnect.pinpad.audio.AndroidAudioCapture(this, file) { enabled ->
+                (audioForeground ?: error("Pinpad service is unavailable"))(enabled)
+            } },
+        )
+    }
     val deviceEngine: DeviceEngine by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
         APIProxy.getDeviceEngine(this)
     }
@@ -20,6 +32,8 @@ class PinpadApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         instance = this
+        one.globalconnect.pinpad.logging.ProductionLog.initialize(this)
+        one.globalconnect.pinpad.logging.ConnectionLog.initialize(this)
         PinpadTraceLog.device(
             "app start versionName=${BuildConfig.VERSION_NAME} versionCode=${BuildConfig.VERSION_CODE} " +
                 "buildType=${BuildConfig.BUILD_TYPE}",

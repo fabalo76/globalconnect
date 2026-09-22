@@ -33,7 +33,7 @@ data class NexgoDeviceProfile(
     val capabilities: Map<NexgoCapability, NexgoCapabilityState>,
 ) {
     val isKnownModel: Boolean
-        get() = expectedCommandBase != null
+        get() = modelKey != "UNKNOWN"
 
     val commandProfileVerified: Boolean
         get() = expectedCommandBase != null && detectedCommandBase == expectedCommandBase
@@ -55,7 +55,20 @@ object NexgoProfileResolver {
         val detectedBase = commandBaseProperty?.trim()?.toIntOrNull()
 
         return when (canonicalModel(reportedModel)) {
+            "N6PROLITE" -> NexgoDeviceProfile(
+                modelKey = "N6ProLite",
+                reportedModel = reportedModel,
+                // Read the real panel dimensions at runtime; do not assume N6 Pro dimensions.
+                display = null,
+                expectedCommandBase = null,
+                detectedCommandBase = detectedBase,
+                capabilities = NexgoCapability.entries.associateWith {
+                    NexgoCapabilityState.RUNTIME_PROBE_REQUIRED
+                },
+            )
+
             "CT20P" -> ct20pProfile(reportedModel, detectedBase ?: COMMAND_BASE_70)
+            "CT20" -> ct20pProfile(reportedModel, detectedBase ?: COMMAND_BASE_70).copy(modelKey = "CT20")
 
             "N6S" -> profile(
                 modelKey = "N6S",
@@ -166,6 +179,7 @@ object NexgoProfileResolver {
         val normalized = value.uppercase().replace("-", "").replace("_", "")
         return when {
             normalized.startsWith("CT20P") -> "CT20P"
+            normalized == "CT20" -> "CT20"
             normalized == "N6" || normalized.startsWith("N6S") -> "N6S"
             normalized.startsWith("N82") -> "N82"
             normalized.startsWith("N96") -> "N96"

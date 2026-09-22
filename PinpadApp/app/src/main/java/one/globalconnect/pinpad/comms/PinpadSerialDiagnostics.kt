@@ -62,6 +62,8 @@ object PinpadSerialDiagnostics {
     }
 
     fun failed(endpoint: String, error: Throwable) {
+        one.globalconnect.pinpad.logging.ProductionLog.record("TRANSPORT_ERROR", "$endpoint ${error.javaClass.simpleName}: ${error.message}")
+        one.globalconnect.pinpad.logging.ConnectionLog.record("ERROR $endpoint ${error.javaClass.simpleName}: ${error.message}")
         val message = error.message
             ?.replace(Regex("\\s+"), " ")
             ?.take(MAX_ERROR_CHARS)
@@ -85,6 +87,9 @@ object PinpadSerialDiagnostics {
     }
 
     private fun traffic(direction: String, bytes: ByteArray) {
+        one.globalconnect.pinpad.logging.ProductionLog.record(direction,
+            "${PinpadTraceLog.diagnosticWireSummary(direction, bytes)} bytes=${bytes.size} (TX is attempted write)")
+        one.globalconnect.pinpad.logging.ConnectionLog.record("$direction bytes=${bytes.size}")
         val event = SerialDiagnosticEvent(
             timestampMs = System.currentTimeMillis(),
             direction = direction,

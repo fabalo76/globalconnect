@@ -32,12 +32,36 @@ private const val TAG = "XtmsAgentApplication"
  * Registered in AndroidManifest.xml via android:name=".XtmsAgentApplication".
  */
 class XtmsAgentApplication : Application() {
-    private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val applicationScope by lazy { CoroutineScope(SupervisorJob() + Dispatchers.IO) }
+    private var normalStarted = false
+
+    override fun attachBaseContext(base: android.content.Context) {
+        super.attachBaseContext(base)
+        one.globalconnect.xtmsagent.recovery.StartupRecoveryGuard.install(this)
+    }
 
     override fun onCreate() {
         super.onCreate()
-        Log.i(TAG, "Application started")
+        if (one.globalconnect.xtmsagent.recovery.StartupRecoveryGuard.inRecovery) {
+            one.globalconnect.xtmsagent.recovery.RecoveryApplication.enterRecovery(this, true)
+            return
+        }
+        startNormalStartup()
+    }
 
+    fun startNormalStartup() {
+        if (normalStarted || one.globalconnect.xtmsagent.recovery.StartupRecoveryGuard.inRecovery) return
+        normalStarted = true
+        one.globalconnect.xtmsagent.recovery.RecoveryApplication.restoreBackgroundComponents(this)
+        androidx.work.WorkManager.initialize(this, androidx.work.Configuration.Builder().build())
+        Log.i(TAG, "Application started")
+        runSafely("diagnostic startup") {
+            NexgoDiagnosticsManager.record(this,
+                "applicationStart version=${BuildConfig.VERSION_NAME} build=${BuildConfig.BUILD_TYPE} model=${android.os.Build.MODEL}")
+        }
+
+        // Release an older forced-HOME policy before SDK/UI initialization can fail.
+        runSafely("recovery home policy") { TmsDeviceAdminReceiver.releaseDefaultHomeForRecovery(this) }
         PhysicalKeypadInputPolicy.install(this)
 
         runSafely("credential provisioning") { provisionCredentials() }
@@ -58,7 +82,7 @@ class XtmsAgentApplication : Application() {
                 Log.e(TAG, "Nexgo device owner provisioning failed", exception)
                 NexgoDiagnosticsManager.record(
                     this@XtmsAgentApplication,
-                    "deviceOwner success=false code=provisioning_exception",
+                    "deviceOwner success=false code=provisioning_exception type=${exception.javaClass.simpleName}",
                 )
             }
             runSafely("Nexgo diagnostics refresh") {
@@ -85,6 +109,7 @@ class XtmsAgentApplication : Application() {
         } catch (e: Exception) {
             Log.e(TAG, "Application MQTT service bootstrap failed; startup will continue", e)
         }
+        one.globalconnect.xtmsagent.recovery.StartupRecoveryGuard.monitorHealthyStartup(this)
     }
 
     private inline fun runSafely(operation: String, block: () -> Unit) {

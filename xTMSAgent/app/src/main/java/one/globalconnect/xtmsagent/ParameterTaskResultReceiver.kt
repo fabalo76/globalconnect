@@ -12,6 +12,7 @@ private const val TAG = "ParameterTaskResult"
 class ParameterTaskResultReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
+        if (one.globalconnect.xtmsagent.recovery.StartupRecoveryGuard.inRecovery) return
         if (intent.action != ParamConstants.ACTION_PARAMS_RESULT) return
 
         val taskId = intent.getStringExtra(ParamConstants.EXTRA_TASK_ID)

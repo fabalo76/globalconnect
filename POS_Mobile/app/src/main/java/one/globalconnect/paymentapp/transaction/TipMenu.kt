@@ -305,7 +305,8 @@ fun TipScreen(
                                 viewModel.updateTip(_tip)
                             },
                             showReset = true, // ✅ Enable Reset button
-                            onEnterPressed = { handleCompletePayment() }
+                            onEnterPressed = { handleCompletePayment() },
+                            hideOnPhysicalKeypad = true,
                         )
                     }
                 }

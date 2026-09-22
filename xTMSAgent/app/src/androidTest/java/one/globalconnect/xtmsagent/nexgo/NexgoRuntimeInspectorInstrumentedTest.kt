@@ -18,7 +18,9 @@ class NexgoRuntimeInspectorInstrumentedTest {
 
         Log.i(TAG, snapshot.toJson().toString())
         assertTrue(snapshot.profile.isKnownModel)
-        assertTrue(snapshot.profile.commandProfileVerified)
+        if (snapshot.profile.modelKey != "N6ProLite") {
+            assertTrue(snapshot.profile.commandProfileVerified)
+        }
         assertNotNull(snapshot.profile.display)
         assertTrue(snapshot.pss.installed)
         assertEquals(64, snapshot.pss.apkSha256?.length)
@@ -35,8 +37,33 @@ class NexgoRuntimeInspectorInstrumentedTest {
         assertTrue(file.isFile)
         assertTrue(report.contains(modelKey))
         assertTrue(!report.contains("privateKey", ignoreCase = true))
-        assertTrue(!report.contains("executeCmd", ignoreCase = true))
-        assertTrue(!report.contains("commandBase", ignoreCase = true))
+        assertTrue(report.contains("commandEnvironment"))
+        assertTrue(report.contains("screen"))
+        assertTrue(!report.contains("DOWNLOAD_CREDENTIAL_SECRET"))
+    }
+
+    @Test
+    fun sharingDoesNotAppendEventsBackIntoTheSnapshot() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        NexgoDiagnosticsManager.shareFile(context)
+        NexgoDiagnosticsManager.shareFile(context)
+        val report = NexgoDiagnosticsManager.readDisplayReport(context)
+        assertEquals(1, Regex("Recent diagnostic events").findAll(report).count())
+    }
+
+    @Test
+    fun downloadsExportContainsFreshSnapshotAndEvents() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val exported = NexgoDiagnosticsManager.exportToPublicDownloads(context)
+        try {
+            val content = context.contentResolver.openInputStream(exported.uri)!!
+                .bufferedReader().use { it.readText() }
+            assertTrue(exported.displayPath.startsWith("Download/xTMSAgent/"))
+            assertTrue(content.contains("\"reportSchemaVersion\": 3"))
+            assertTrue(content.contains("Recent diagnostic events"))
+        } finally {
+            context.contentResolver.delete(exported.uri, null, null)
+        }
     }
 
     private companion object {

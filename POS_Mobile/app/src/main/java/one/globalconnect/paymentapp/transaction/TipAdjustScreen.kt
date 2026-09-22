@@ -1,5 +1,6 @@
 package one.globalconnect.paymentapp.transaction
 
+import one.globalconnect.paymentapp.transaction.resolvedCardBrand
 import android.util.Log
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -169,7 +170,7 @@ fun TipAdjustScreen(
                         .height(ROWHEIGHT.dp)
                 ) {
                     CardIcon(
-                        _paymentNetworkString = transaction.cardType,
+                        _paymentNetworkString = transaction.resolvedCardBrand(),
                         modifier = Modifier
                             .align(CenterVertically)
                             .padding(start = 16.dp, end = 16.dp)
@@ -179,7 +180,7 @@ fun TipAdjustScreen(
                             .fillMaxHeight(1f), verticalArrangement = Arrangement.Center
                     ) {
                         Text(
-                            text = "${transaction.cardType} ${transaction.masked_cardNumber.takeLast(4)}",
+                            text = "${transaction.resolvedCardBrand()} ${transaction.masked_cardNumber.takeLast(4)}",
                             fontSize = 16.sp,
                             fontWeight = FontWeight.SemiBold,
                             color = MaterialTheme.colorScheme.onBackground,
@@ -221,7 +222,8 @@ fun TipAdjustScreen(
                     newTipAmount = adjustTip(newTipAmount, keyPressed)
                 },
                 showReset = false, // ✅ Disable Reset button (Set to false if not needed)
-                onEnterPressed = { handleSetTip() }
+                onEnterPressed = { handleSetTip() },
+                hideOnPhysicalKeypad = true,
             )
             Button(
                 modifier = Modifier

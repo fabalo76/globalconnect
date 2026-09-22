@@ -1,0 +1,43 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">
+    <application android:name=".recovery.RecoveryApplication" tools:replace="android:name">
+        <activity android:name=".MainActivity" tools:node="remove" />
+        <activity android:name=".recovery.StartupActivity" tools:node="remove" />
+        <activity android:name=".ConfigMenuActivity" android:enabled="false" />
+        <activity android:name=".TmsConfigActivity" android:enabled="false" />
+        <activity android:name=".DiagnosticsActivity" android:enabled="false" />
+        <activity android:name=".GlobalConnectStoreActivity" android:enabled="false" />
+        <activity android:name=".OperatorMessageActivity" android:enabled="false" />
+        <activity android:name=".BlockedActivity" android:enabled="false" />
+        <activity android:name=".remote.RemoteControlPermissionActivity" android:enabled="false" />
+        <activity android:name=".recovery.RecoveryActivity" android:exported="true" tools:replace="android:exported" android:theme="@android:style/Theme.Material.Light.NoActionBar">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+        <service android:name=".mqtt.TmsMqttService" android:enabled="false" />
+        <service android:name=".licensing.ApplicationLicensingService" android:enabled="false" />
+        <service android:name=".remote.RemoteControlService" android:enabled="false" />
+        <service android:name=".remote.RemoteControlAccessibilityService" android:enabled="false" />
+        <receiver android:name=".mqtt.BootReceiver" android:enabled="false" />
+        <receiver android:name=".mqtt.housekeeping.TmsHkAlarmReceiver" android:enabled="false" />
+        <receiver android:name=".ParamReceiver" android:enabled="false" />
+        <receiver android:name=".ParameterTaskResultReceiver" android:enabled="false" />
+        <receiver android:name=".TransactionReportReceiver" android:enabled="false" />
+        <receiver android:name=".AdminRequestReceiver" android:enabled="false" />
+        <receiver android:name=".AppConsentReceiver" android:enabled="false" />
+        <receiver android:name=".mqtt.downloads.PackageInstallStatusReceiver" android:enabled="false" />
+        <provider android:name="androidx.startup.InitializationProvider" tools:node="remove" />
+        <receiver android:name="androidx.work.impl.diagnostics.DiagnosticsReceiver" android:enabled="false" tools:replace="android:enabled" />
+        <service android:name="androidx.work.impl.background.systemjob.SystemJobService" android:enabled="false" tools:replace="android:enabled" />
+        <service android:name="androidx.work.impl.background.systemalarm.SystemAlarmService" android:enabled="false" tools:replace="android:enabled" />
+        <service android:name="androidx.work.impl.foreground.SystemForegroundService" android:enabled="false" tools:replace="android:enabled" />
+        <receiver android:name="androidx.work.impl.utils.ForceStopRunnable$BroadcastReceiver" android:enabled="false" tools:replace="android:enabled" />
+        <receiver android:name="androidx.work.impl.background.systemalarm.RescheduleReceiver" android:enabled="false" tools:replace="android:enabled" />
+        <receiver android:name="androidx.work.impl.background.systemalarm.ConstraintProxy$BatteryChargingProxy" android:enabled="false" tools:replace="android:enabled" />
+        <receiver android:name="androidx.work.impl.background.systemalarm.ConstraintProxy$BatteryNotLowProxy" android:enabled="false" tools:replace="android:enabled" />
+        <receiver android:name="androidx.work.impl.background.systemalarm.ConstraintProxy$StorageNotLowProxy" android:enabled="false" tools:replace="android:enabled" />
+        <receiver android:name="androidx.work.impl.background.systemalarm.ConstraintProxy$NetworkStateProxy" android:enabled="false" tools:replace="android:enabled" />
+        <receiver android:name="androidx.work.impl.background.systemalarm.ConstraintProxyUpdateReceiver" android:enabled="false" tools:replace="android:enabled" />
+    </application>
+</manifest>

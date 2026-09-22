@@ -162,6 +162,7 @@ object TmsMqttManager {
         Log.i(TAG, "Global Connect task received: id=$taskId type=$taskType")
         try {
             when (taskType.lowercase()) {
+                "deviceprofileapply" -> one.globalconnect.xtmsagent.profiles.DeviceProfileWorker.enqueue(appContext, taskId, payload)
                 "refreshconfig", "parametersdownload" -> {
                     val applicationId = readPayloadString(
                         payload,
@@ -195,7 +196,9 @@ object TmsMqttManager {
                 }
                 "canceltask" -> {
                     val originalTaskId = readPayloadString(payload, "originalTaskId", "OriginalTaskId") ?: taskId
-                    val cancelled = AwsDeviceDownloadManager.cancelTask(appContext, originalTaskId)
+                    val cancelled = if (readPayloadString(payload, "originalTaskType", "OriginalTaskType").equals("DeviceProfileApply", ignoreCase = true))
+                        one.globalconnect.xtmsagent.profiles.DeviceProfileWorker.cancel(appContext, originalTaskId)
+                    else AwsDeviceDownloadManager.cancelTask(appContext, originalTaskId)
                     publishTaskAck(
                         originalTaskId,
                         cancelled,
@@ -726,6 +729,7 @@ object TmsMqttManager {
             TmsTaskStatus.connected(termId)
             subscribeToTopics(client)
             flushPendingTaskAcks()
+            TmsStatusWorker.publishOnConnection(appContext)
 
             // If an offline self-unlock was performed while disconnected, publish blk=0
             // immediately — before the server has a chance to re-deliver its persistent
@@ -1196,20 +1200,21 @@ object TmsMqttManager {
     // ── Heartbeat publish (called by TmsStatusWorker) ─────────────────────────
 
     /** Publishes a lightweight JSON heartbeat payload. QoS 0 — fire and forget. */
-    fun publishStatus(payload: ByteArray) {
+    fun publishStatus(payload: ByteArray): java.util.concurrent.CompletableFuture<Boolean> {
         val client = mqttClient
         if (client == null || !isConnected) {
             Log.w(TAG, "publishStatus: not connected - heartbeat skipped")
-            return
+            return java.util.concurrent.CompletableFuture.completedFuture(false)
         }
-        client.publishWith()
+        return client.publishWith()
             .topic(termHeartbeatTopic(termId))
             .qos(MqttQos.AT_MOST_ONCE)
             .payload(payload)
             .send()
-            .whenComplete { _, err ->
+            .handle { _, err ->
                 if (err != null) Log.w(TAG, "Heartbeat publish failed: ${err.message}")
                 else Log.d(TAG, "Heartbeat published -> ${termHeartbeatTopic(termId)}")
+                err == null
             }
     }
 
@@ -1428,6 +1433,21 @@ object TmsMqttManager {
      * scheduled refresh cycle.
      */
     fun publishFullStatusReport(onComplete: ((Boolean, String?) -> Unit)? = null) {
+        managerScope.launch {
+            try {
+                publishFullStatusReportInBackground(onComplete)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                pendingStatusPublish = true
+                if (::credentialStore.isInitialized) credentialStore.saveStatusReportPending(true)
+                Log.e(TAG, "Full status report preparation failed", error)
+                onComplete?.invoke(false, error.message ?: "Status report preparation failed")
+            }
+        }
+    }
+
+    private fun publishFullStatusReportInBackground(onComplete: ((Boolean, String?) -> Unit)?) {
         val client = mqttClient
         if (client == null || !isConnected) {
             Log.w(TAG, "publishFullStatusReport: not connected — flagging for retry on reconnect")
@@ -1438,7 +1458,10 @@ object TmsMqttManager {
             onComplete?.invoke(false, "MQTT client is not connected")
             return
         }
+        val started = android.os.SystemClock.elapsedRealtime()
+        one.globalconnect.xtmsagent.diagnostics.DailyFileLog.record(appContext, "Status report preparation started thread=${Thread.currentThread().name}")
         val payload = TmsStatusWorker.buildFullPayload(appContext)
+        one.globalconnect.xtmsagent.diagnostics.DailyFileLog.record(appContext, "Status report preparation finished elapsedMs=${android.os.SystemClock.elapsedRealtime() - started}")
         client.publishWith()
             .topic(termStatusTopic(termId))
             .qos(MqttQos.AT_MOST_ONCE)
@@ -1460,11 +1483,14 @@ object TmsMqttManager {
     }
 
     fun queueFullStatusReport(context: Context, reason: String) {
-        TmsCredentialStore(context.applicationContext).saveStatusReportPending(true)
-        pendingStatusPublish = true
-        Log.i(TAG, "Full status report queued: $reason")
-        if (::appContext.isInitialized && isConnected) {
-            publishFullStatusReport()
+        val contextForReport = context.applicationContext
+        managerScope.launch {
+            TmsCredentialStore(contextForReport).saveStatusReportPending(true)
+            pendingStatusPublish = true
+            Log.i(TAG, "Full status report queued: $reason")
+            if (::appContext.isInitialized && isConnected) {
+                publishFullStatusReport()
+            }
         }
     }
 

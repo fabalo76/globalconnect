@@ -57,7 +57,9 @@ class PendingReversalProcessorTest {
 
     @Test
     fun `approved reversal is sent as 0400 and removed from queue`() = runBlocking {
-        val reversal = pendingReversal().copy(fieldValues = mapOf(11 to "000123", 37 to "654321"))
+        val planField = one.globalconnect.paymentapp.uicpos.pos.host.protocol.PrivateUseData63.encode(listOf(
+            one.globalconnect.paymentapp.uicpos.pos.host.protocol.PrivateUseData63.Tag("45", "06INT10000000000000000S")))!!
+        val reversal = pendingReversal().copy(fieldValues = mapOf(11 to "000123", 37 to "654321", 63 to planField))
         var deleted: PendingReversal? = null
         val repository = repositoryWith(listOf(reversal), onDelete = { deleted = it })
         val factory = IsoConfigParser.fromFile(isoConfigFile())
@@ -67,11 +69,13 @@ class PendingReversalProcessorTest {
         }
         var requestMessageType: String? = null
         var requestProcessingCode: String? = null
+        var requestPlanField: String? = null
         val processor = PendingReversalProcessor(
             transactionRepository = repository,
             hostExecutor = { request ->
                 requestMessageType = request.message.messageType
                 requestProcessingCode = request.message.getFieldValue(3)
+                requestPlanField = request.message.getFieldValue(63)
                 HostTransactionResult(
                     isoMessage = response,
                     rawRequest = byteArrayOf(),
@@ -95,6 +99,7 @@ class PendingReversalProcessorTest {
 
         assertEquals("0400", requestMessageType)
         assertEquals("000000", requestProcessingCode)
+        assertEquals(planField, requestPlanField)
         assertEquals(reversal, deleted)
         assertEquals(1, result.sent)
         assertEquals(0, result.remaining)

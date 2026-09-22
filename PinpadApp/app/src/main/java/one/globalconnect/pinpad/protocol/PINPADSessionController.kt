@@ -650,8 +650,14 @@ class PINPADSessionController(
                     "QK",
                     "start multiple interface detection transactionDisplay=${transactionDisplayContext != null}",
                 )
-                val result = commandDevice?.startMultiInterfaceDetection(
+                val options = QkDetectionRequest.parse(frame.payload.toString(StandardCharsets.UTF_8))
+                val result = if (options == null) {
+                    PinpadDeviceCommands.MultiInterfaceDetectionStartResult.ImmediateResponse(
+                        PinpadDeviceCommands.MultiInterfaceDetectionResult.enableMsrFail(),
+                    )
+                } else commandDevice?.startMultiInterfaceDetection(
                     transactionDisplay = transactionDisplayContext,
+                    options = options,
                     onResult = ::sendMultiInterfaceDetectionAsync,
                 )
                     ?: PinpadDeviceCommands.MultiInterfaceDetectionStartResult.ImmediateResponse(
@@ -795,6 +801,7 @@ class PINPADSessionController(
             }
             "Z1",
             "72" -> {
+                commandDevice?.stopAudioRecordingOnReset()
                 PinpadTraceLog.command(request.commandId, "reset/cancel display state")
                 transactionDisplayContext = null
                 cancelActiveDataEntry(showCancelMessage = false)
@@ -1032,6 +1039,19 @@ class PINPADSessionController(
                     "M16",
                     statuses.joinToString(FS_CHAR.toString()),
                 )
+                pendingFinalEot = true
+            }
+            "M20", "M21", "M22", "M23", "M24", "M25" -> {
+                if (one.globalconnect.pinpad.audio.AudioRecordingPolicy.supports(deviceInfoProvider.modelName())) {
+                    responses.sendAckBeforeSlowProcessing(request.commandId)
+                }
+                val result = if (!one.globalconnect.pinpad.audio.AudioRecordingPolicy.supports(deviceInfoProvider.modelName())) {
+                    "U$FS_CHAR${deviceInfoProvider.modelName().filter { it.code in 32..126 }.take(64)}"
+                } else commandDevice?.audioRecordingCommand(request.commandId, request.payloadAscii) ?: "6"
+                one.globalconnect.pinpad.logging.ProductionLog.record("AUDIO_COMMAND",
+                    "command=${request.commandId} model=${deviceInfoProvider.modelName()} " +
+                    "requestChars=${request.payloadAscii.length} status=${result.firstOrNull()} responseChars=${result.length}")
+                responses += responseFrame(PINPADFrameType.Transaction, request.commandId, result)
                 pendingFinalEot = true
             }
             "M17" -> {
@@ -2892,6 +2912,7 @@ class PINPADSessionController(
             "M15",
             "M16",
             "M17",
+            "M20", "M21", "M22", "M23", "M24", "M25",
             "S1",
             "PH1",
             "QR1",

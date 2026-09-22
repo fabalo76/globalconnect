@@ -53,6 +53,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.res.dimensionResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -71,6 +72,8 @@ import one.globalconnect.paymentapp.ui.theme.color_secondaryFive
 import one.globalconnect.paymentapp.ui.theme.menuButtonShape
 import one.globalconnect.paymentapp.utils.SoundEffect
 import one.globalconnect.paymentapp.utils.SoundManager
+import one.globalconnect.paymentapp.utils.DeviceCapabilities
+import one.globalconnect.paymentapp.utils.PaymentDeviceVisual
 
 @Composable
 fun NewTransactionMenuScreen(
@@ -81,6 +84,7 @@ fun NewTransactionMenuScreen(
     val swDp = LocalConfiguration.current.smallestScreenWidthDp
     val isCompactScreen = swDp < 360   // N82/N6: ~314dp SW
     val isN62Screen = swDp >= 480      // N62: 480dp SW
+    val isCt20 = DeviceCapabilities.paymentDeviceVisual() == PaymentDeviceVisual.CT20
     var currentMenuId by rememberSaveable(initialMenuId) { mutableStateOf(initialMenuId) }
     var showNotAllowed by rememberSaveable(initialShowNotAllowed) { mutableStateOf(initialShowNotAllowed) }
     val paymentApplication = GlobalConnectPaymentApplication.instance
@@ -164,8 +168,8 @@ fun NewTransactionMenuScreen(
     val menuConfig = menus[currentMenuId] ?: menus["main"]!!
 
     Scaffold(
-        topBar = { Box(Modifier.height(if (isCompactScreen) 12.dp else 24.dp).background(color_white).fillMaxSize()) },
-        bottomBar = { Box(Modifier.height(if (isCompactScreen) 32.dp else 64.dp).background(color_secondaryThree).fillMaxSize()) }
+        topBar = { Box(Modifier.height(if (isCt20) dimensionResource(R.dimen.ct20_menu_top_gap) else if (isCompactScreen) 12.dp else 24.dp).background(color_white).fillMaxSize()) },
+        bottomBar = { Box(Modifier.height(if (isCt20) dimensionResource(R.dimen.ct20_menu_bottom_gap) else if (isCompactScreen) 32.dp else 64.dp).background(color_secondaryThree).fillMaxSize()) }
     ) { contentPadding ->
         Column(
             modifier = Modifier
@@ -174,9 +178,9 @@ fun NewTransactionMenuScreen(
                 .fillMaxHeight()
                 .fillMaxWidth()
         ) {
-            Row(Modifier.padding(horizontal = 8.dp, vertical = if (isCompactScreen) 12.dp else 24.dp)) {
+            Row(Modifier.padding(horizontal = 8.dp, vertical = if (isCt20) dimensionResource(R.dimen.ct20_menu_title_padding) else if (isCompactScreen) 12.dp else 24.dp)) {
                 Button(
-                    modifier = Modifier.fillMaxWidth().height(when { isN62Screen -> 64.dp; isCompactScreen -> 44.dp; else -> 56.dp }),
+                    modifier = Modifier.fillMaxWidth().height(when { isCt20 -> dimensionResource(R.dimen.ct20_menu_title_height); isN62Screen -> 64.dp; isCompactScreen -> 44.dp; else -> 56.dp }),
                     onClick = {
                         SoundManager.play(SoundEffect.KEY_DELETE) // 🔊 Play Click Sound
                         currentMenuId = "main"
@@ -197,7 +201,7 @@ fun NewTransactionMenuScreen(
                         }
                         Text(
                             text = menuConfig.title,
-                            fontSize = when { isN62Screen -> 40.sp; isCompactScreen -> 28.sp; else -> 36.sp },
+                            fontSize = when { isCt20 -> 28.sp; isN62Screen -> 40.sp; isCompactScreen -> 28.sp; else -> 36.sp },
                             textAlign = TextAlign.Center,
                             modifier = Modifier.weight(1f)
                         )
@@ -219,10 +223,8 @@ fun NewTransactionMenuScreen(
                 val requiresPaging = menuConfig.buttons.size > provisionalRowsPerPage * 2
                 val indicatorHeight = if (requiresPaging) 24.dp else 0.dp
                 val rowsPerPage = provisionalRowsPerPage
-                val rowHeight = minOf(
-                    desiredRowHeight,
-                    (availableHeight - indicatorHeight) / rowsPerPage,
-                )
+                val availableRowHeight = (availableHeight - indicatorHeight) / rowsPerPage
+                val rowHeight = if (isCt20) availableRowHeight else minOf(desiredRowHeight, availableRowHeight)
                 val pages = menuConfig.buttons.chunked(rowsPerPage * 2)
                 val pagerState = rememberPagerState(pageCount = { pages.size })
 

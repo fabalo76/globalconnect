@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="config_volume">音量</string>
+    <string name="volume_controls_unavailable">此裝置無法使用音量控制。</string>
     <string name="store_title">Global Connect 商店</string>
     <string name="store_back">返回</string>
     <string name="store_bank_scope">銀行商店</string>
@@ -20,4 +22,33 @@
     <string name="tms_reset_registration_confirm">重設註冊</string>
     <string name="tms_reset_registration_started">TMS 註冊已重設，正在重新連線…</string>
     <string name="tms_reset_registration_failed">無法重設 TMS 註冊。</string>
+    <string name="diagnostics_retry_setup">重試裝置設定</string>
+    <string name="diagnostics_export_pss">將 PSS APK 匯出至下載資料夾</string>
+    <string name="diagnostics_pss_exported">已儲存至 %1$s\n\n請傳送此 ZIP 檔案進行分析。內含 PSS APK、校驗碼及診斷資訊。</string>
+    <string name="remote_setup_title">遠端控制設定</string>
+    <string name="remote_setup_restricted_message">遠端控制尚未啟用。Android 可能需要先核准此應用程式。\n\n開啟 Android 設定 → 應用程式 → xTMSAgent → ⋮ → 允許受限制的設定（若有顯示）。返回 xTMSAgent 繼續設定遠端控制。</string>
+    <string name="remote_setup_enable_message">開啟無障礙設定，選擇 xTMSAgent → Remote Control 並啟用。\n\n若 Android 顯示「受限制的設定」，請開啟 Android 設定 → 應用程式 → xTMSAgent → ⋮ → 允許受限制的設定後再試一次。</string>
+    <string name="remote_setup_app_info">應用程式資訊</string>
+    <string name="remote_setup_next">遠端控制</string>
+    <string name="remote_setup_open_accessibility">開啟設定</string>
+    <string name="remote_setup_later">稍後</string>
+    <string name="remote_setup_settings_unavailable">無法開啟設定。請手動開啟「設定 → 應用程式 → xTMSAgent」。</string>
+    <string name="remote_setup_app_info_routes">在 Android 設定中，前往應用程式 → xTMSAgent → ⋮ → 允許受限制的設定。然後返回 xTMSAgent。\n\n請從應用程式清單進入，以顯示三點選單。沒有選單不代表已核准。</string>
+    <string name="remote_setup_android_settings">Android 設定</string>
+    <string name="remote_setup_direct_app_info">應用程式捷徑</string>
+    <string name="local_apk_option">應用程式（APK）</string>
+    <string name="local_firmware_option">韌體（ZIP）</string>
+    <string name="firmware_validating">正在驗證韌體套件及簽章…</string>
+    <string name="firmware_confirm">是否為 %1$s 安裝韌體？\n版本：%2$s\n\n終端可能重新啟動。請保持電源連接，並在繼續之前完成所有交易。</string>
+    <string name="firmware_version_unknown">未指定</string>
+    <string name="firmware_install">安裝韌體</string>
+    <string name="firmware_requested">已請求更新韌體。請依照系統更新程式的指示操作。安裝尚未確認完成。</string>
+    <string name="firmware_metadata_missing">此 ZIP 缺少 Android OTA 裝置中繼資料。請取得適用於此終端的已簽署 OTA 套件。</string>
+    <string name="firmware_wrong_device">此韌體適用於其他裝置。</string>
+    <string name="firmware_wrong_base">此增量更新需要其他已安裝韌體版本。</string>
+    <string name="firmware_signature">無法使用裝置信任的更新憑證驗證韌體簽章。</string>
+    <string name="firmware_storage">可用儲存空間不足，或無法準備韌體檔案。</string>
+    <string name="firmware_battery">安裝韌體之前，請將電池充至至少百分之三十。</string>
+    <string name="firmware_request_failed">終端未接受韌體更新請求。</string>
+    <string name="firmware_invalid">所選檔案不是受支援的 Android OTA 韌體 ZIP。</string>
 </resources>

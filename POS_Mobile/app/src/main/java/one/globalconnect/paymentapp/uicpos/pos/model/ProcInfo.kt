@@ -97,7 +97,7 @@ fun ProcInfo.toTransaction(): Transaction {
         cardRangeName = this.TransLog.CardRangeName,
         type = this.TransLog.TxnType.transactionStringToTransactionType(),
         localDateTime = LocalDateTime.now().format(dateTimeFormatter),
-        cardType = this.TransLog.CardType ?: "Err",
+        cardType = one.globalconnect.paymentapp.transaction.CardBrandResolver.resolve(this.TransLog.AID, this.TransLog.PAN),
         authNtwkName = this.TransLog.AuthNtwkName,
         cardEntryMethod = cardEntryMethod,
         CVM = this.TransLog.CVMText.CVMStringtoCvmType(),

@@ -1,5 +1,6 @@
 package one.globalconnect.paymentapp.records
 
+import one.globalconnect.paymentapp.transaction.resolvedCardBrand
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -25,6 +26,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import one.globalconnect.paymentapp.R
 import one.globalconnect.paymentapp.transaction.Transaction
+import one.globalconnect.paymentapp.transaction.shortReportLabel
 import one.globalconnect.paymentapp.transaction.TransactionType
 import java.util.Locale
 
@@ -45,7 +47,7 @@ fun TransactionRow(
 
     ) {
         Text(
-            text = "#${transaction.orderNo}",
+            text = transaction.shortReportLabel(),
             fontSize = 16.sp,
             fontWeight = FontWeight.SemiBold,
             textAlign = TextAlign.Start,
@@ -55,13 +57,13 @@ fun TransactionRow(
         )
 
         CardIcon(
-            _paymentNetworkString = transaction.cardType,
+            _paymentNetworkString = transaction.resolvedCardBrand(),
             modifier = Modifier
                 .align(CenterVertically)
-                .padding(start = 16.dp, end = 16.dp)
+                .padding(start = 8.dp, end = 12.dp)
         )
         Column(
-            modifier = Modifier.padding(top = 8.dp)
+            modifier = Modifier.weight(1f).padding(vertical = 8.dp)
         ) {
             val amt = if (transaction.type == TransactionType.REFUND) {
                 "-$${transaction.totalAmount}"
@@ -80,13 +82,12 @@ fun TransactionRow(
                 color = color,
             )
             Text(
-                text = "${transaction.cardType} ${transaction.masked_cardNumber.takeLast(4)}",
+                text = "${transaction.resolvedCardBrand()} ${transaction.masked_cardNumber.takeLast(4)}",
                 fontSize = 12.sp,
                 color = MaterialTheme.colorScheme.outlineVariant
 
             )
         }
-        Spacer(Modifier.weight(1f))
 
         if (transaction.errorOnCapture) {
             Icon(
@@ -101,15 +102,21 @@ fun TransactionRow(
             )
         }
 
-        Text(
-            text = transaction.formattedTime.ifBlank { defaultFormattedTime },
-            fontSize = 16.sp,
-            fontWeight = FontWeight.Normal,
-            modifier = Modifier.align(
-                CenterVertically
-            ),
-            color = MaterialTheme.colorScheme.onBackground
-        )
+        Column(
+            modifier = Modifier.align(CenterVertically).padding(start = 8.dp),
+            horizontalAlignment = Alignment.End,
+        ) {
+            Text(
+                text = transaction.formattedTime.ifBlank { defaultFormattedTime },
+                fontSize = 14.sp,
+                color = MaterialTheme.colorScheme.onBackground,
+            )
+            Text(
+                text = stringResource(R.string.batch_invoice_number, transaction.invoiceId),
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }
 
@@ -132,7 +139,7 @@ fun QuickTipTransactionRow(
         )
 
         CardIcon(
-            _paymentNetworkString = transaction.cardType,
+            _paymentNetworkString = transaction.resolvedCardBrand(),
             modifier = Modifier
                 .align(CenterVertically)
                 .padding(start = 16.dp, end = 16.dp)
@@ -189,7 +196,7 @@ fun CardIcon(_paymentNetworkString: String,
              modifier: Modifier = Modifier) {
     val paymentNetworkString =
         _paymentNetworkString.uppercase(Locale.ENGLISH).filter { !it.isWhitespace() }
-    if (paymentNetworkString.contains("MASTERCARD")) {
+    if (paymentNetworkString.contains("MASTERCARD") || paymentNetworkString in setOf("MASTER", "MC")) {
         Image(
             painter = painterResource(id = R.drawable.mastercard_icon),
             contentDescription = "Mastercard icon",

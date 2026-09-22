@@ -1,10 +1,15 @@
 <resources>
+    <string name="release_log_title">Log de diagnóstico release</string>
+    <string name="release_log_allow_storage">Permitir acceso al almacenamiento</string>
+    <string name="release_log_description">Hoy: /sdcard/Logs/Pinpad/log_today.txt. Se conservan hasta 9 logs diarios anteriores. Android requiere acceso a todos los archivos para escribir en esa carpeta; hasta autorizarlo, los logs permanecen dentro de la app. Después de autorizar, regrese aquí para verificar la ruta.</string>
+    <string name="release_log_settings_unavailable">La configuración de almacenamiento no está disponible. Los logs permanecen dentro de la app.</string>
+    <string name="audio_recording_notification">Grabando audio · máximo 30 minutos</string>
     <string name="keyload_authentication_title">Autorización de carga de llaves</string>
     <string name="keyload_authentication_command">Comando protegido %1$s</string>
     <string name="keyload_authentication_hardware_hint">Ingrese ambas contraseñas de siete dígitos usando el teclado físico.</string>
     <string name="keyload_authentication_invalid">Contraseña incorrecta. Quedan %1$d intento(s).</string>
     <string name="keyload_authentication_cooldown">La carga de llaves está bloqueada. Intente de nuevo en %1$d segundos.</string>
-    <string name="keyload_authentication_confirm">Aceptar</string>
+    <string name="keyload_authentication_confirm">OK</string>
     <string name="key_injection_mode_active">Modo de inyección de llaves activo</string>
     <string name="key_injection_mode_hint">Llaves en claro habilitadas • Presione CANCELAR para salir</string>
     <string name="app_name">PINPAD</string>
@@ -112,4 +117,14 @@
     <string name="camera_permission_required">Se requiere permiso de cámara para esta operación.</string>
     <string name="action_done">Listo</string>
     <string name="action_cancel">Cancelar</string>
+    <string name="setup_usb_base">USB</string>
+    <string name="setup_usb_base_port">Puerto USB</string>
+    <string name="setup_export_connection_log">Exportar registro de conexión</string>
+    <string name="setup_log_saved">Registro de conexión guardado</string>
+    <string name="setup_log_failed">No se pudo guardar el registro de conexión</string>
+    <string name="key_injection_mode_touch_hint">Llaves en claro habilitadas</string>
+    <string name="key_injection_mode_exit">Salir de inyección de llaves</string>
+    <string name="prompt_swipe_tap_card">DESLICE O ACERQUE TARJETA</string>
+    <string name="prompt_swipe_insert_card">DESLICE O INSERTE TARJETA</string>
+    <string name="prompt_insert_tap_card">INSERTE O ACERQUE TARJETA</string>
 </resources>

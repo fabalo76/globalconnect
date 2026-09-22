@@ -37,6 +37,7 @@ fun TransactionStatusContainer(
     amountText: String?,
     subtitle: String? = null,
     fullBleedContent: Boolean = false,
+    attachToTop: Boolean = false,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     BoxWithConstraints(
@@ -49,9 +50,13 @@ fun TransactionStatusContainer(
         val minimumGap = 24.dp
         val maximumGap = maxHeight * 0.12f
         val desiredGap = maxHeight * gapFraction
-        val topGap = desiredGap
-            .coerceAtLeast(minimumGap)
-            .coerceAtMost(if (maximumGap > minimumGap) maximumGap else minimumGap)
+        val topGap = if (attachToTop) {
+            0.dp
+        } else {
+            desiredGap
+                .coerceAtLeast(minimumGap)
+                .coerceAtMost(if (maximumGap > minimumGap) maximumGap else minimumGap)
+        }
 
         Surface(
             modifier = Modifier
@@ -59,7 +64,10 @@ fun TransactionStatusContainer(
                 .fillMaxWidth()
                 .fillMaxHeight()
                 .padding(top = topGap)
-                .clip(RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)),
+                .clip(
+                    if (attachToTop) RoundedCornerShape(0.dp)
+                    else RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
+                ),
             color = color_white,
             contentColor = color_secondaryFive,
         ) {
@@ -76,13 +84,15 @@ fun TransactionStatusContainer(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(16.dp),
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .width(48.dp)
-                            .height(4.dp)
-                            .clip(RoundedCornerShape(2.dp))
-                            .background(color_grey90.copy(alpha = 0.6f)),
-                    )
+                    if (!attachToTop) {
+                        Box(
+                            modifier = Modifier
+                                .width(48.dp)
+                                .height(4.dp)
+                                .clip(RoundedCornerShape(2.dp))
+                                .background(color_grey90.copy(alpha = 0.6f)),
+                        )
+                    }
                     title?.takeIf { it.isNotBlank() }?.let { value ->
                         Text(
                             text = value,

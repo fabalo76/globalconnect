@@ -14,6 +14,8 @@ import android.os.BatteryManager
 import android.os.Build
 import android.os.Bundle
 import android.os.HandlerThread
+import android.content.Intent
+import android.content.IntentFilter
 import android.net.TrafficStats
 import android.telephony.SubscriptionManager
 import android.telephony.TelephonyManager
@@ -28,19 +30,34 @@ import one.globalconnect.xtmsagent.nexgo.NexgoRuntimeInspector
 import org.json.JSONObject
 import java.net.Inet4Address
 import java.net.NetworkInterface
+import java.util.Locale
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 private const val TAG = "TmsStatusWorker"
 
+private data class NetworkTelemetry(
+    val activeTechnology: String,
+    val activeSignalPercent: Int?,
+    val wifiMacAddress: String?,
+    val ethernetMacAddress: String?,
+    val wifiSsid: String?,
+    val wifiRssi: Int?,
+    val wifiSignalPercent: Int?,
+    val cellOperator: String?,
+    val cellNetworkType: String?,
+    val cellSignalDbm: Int?,
+    val cellSignalPercent: Int?,
+)
+
 /**
  * WorkManager Worker that publishes a JSON alive report to the TMS MQTT broker
  * every ~20 minutes (within the 15-30 min window specified in the integration contract).
  *
- * JSON format: {"s":1,"sig":75,"bat":90,"ver":"xTMSAgent"}
+ * JSON format: {"s":1,"sig":75,"bat":90,"ver":"xTMSAgent","net":"wifi"}
  *   s   : 1 = operational, 0 = degraded
- *   sig : signal strength 0-100
+ *   sig : active WiFi or cellular signal strength 0-100
  *   bat : battery 0-100, or -1 = wired/AC power
  *   ver : application version string
  *
@@ -55,9 +72,13 @@ class TmsStatusWorker(
     override fun doWork(): Result {
         return try {
             val payload = buildStatusPayload()
-            TmsMqttManager.publishStatus(payload)
-            Log.d(TAG, "Status published: ${String(payload)}")
-            Result.success()
+            if (TmsMqttManager.publishStatus(payload).get(30, TimeUnit.SECONDS)) {
+                Log.d(TAG, "Heartbeat sent")
+                Result.success()
+            } else {
+                Log.w(TAG, "Heartbeat was not sent; retrying")
+                Result.retry()
+            }
         } catch (e: Exception) {
             Log.w(TAG, "Status publish failed: ${e.message}")
             Result.retry()
@@ -67,15 +88,16 @@ class TmsStatusWorker(
     // Periodic heartbeat — lightweight, no apps/os/mdl to keep radio overhead low.
     private fun buildStatusPayload(): ByteArray {
         val json = JSONObject().apply {
+            val network = readNetworkTelemetry(applicationContext)
             put("s",   1)
-            put("sig", readSignalStrength(applicationContext))
+            put("sig", network.activeSignalPercent ?: 0)
             put("bat", readBatteryLevel(applicationContext))
             put("ver", BuildConfig.VERSION_NAME)
             // blk=1  while blocked (server records acknowledgment timestamp).
             // blk=0  exactly once after a self-unlock (clears block on server DB).
             // Omit   entirely otherwise.
             readLocalIpAddress()?.let { put("pip", it) }
-            put("net", readNetworkMedia(applicationContext))
+            putNetworkTelemetry(this, network)
             putTrafficCounters(this)
             val store = TmsCredentialStore(applicationContext)
             when {
@@ -91,6 +113,19 @@ class TmsStatusWorker(
 
     companion object {
         private const val WORK_NAME = "TmsStatusReport"
+
+        fun publishOnConnection(context: Context) {
+            // The periodic worker can run before MQTT connects during boot.
+            val request = OneTimeWorkRequestBuilder<TmsStatusWorker>()
+                .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+                .setBackoffCriteria(BackoffPolicy.LINEAR, 30, TimeUnit.SECONDS)
+                .build()
+            WorkManager.getInstance(context).enqueueUniqueWork(
+                "${WORK_NAME}OnConnection",
+                ExistingWorkPolicy.REPLACE,
+                request,
+            )
+        }
 
         /**
          * Schedules the periodic status report with WorkManager.
@@ -133,8 +168,9 @@ class TmsStatusWorker(
          */
         fun buildFullPayload(context: Context): ByteArray {
             val json = JSONObject().apply {
+                val network = readNetworkTelemetry(context)
                 put("s",   1)
-                put("sig", readSignalStrength(context))
+                put("sig", network.activeSignalPercent ?: 0)
                 put("bat", readBatteryLevel(context))
                 put("ver", BuildConfig.VERSION_NAME)
                 put("os",  "Android ${Build.VERSION.RELEASE}")
@@ -153,7 +189,7 @@ class TmsStatusWorker(
                     put("lng", lng)
                 }
                 readLocalIpAddress()?.let { put("pip", it) }
-                put("net", readNetworkMedia(context))
+                putNetworkTelemetry(this, network)
                 putTrafficCounters(this)
                 val store = TmsCredentialStore(context)
                 when {
@@ -231,36 +267,23 @@ class TmsStatusWorker(
             }
         }
 
-        /** Normalises WiFi RSSI to 0-100. Returns 0 on cellular or if unreadable. */
-        fun readSignalStrength(context: Context): Int {
-            return try {
-                @Suppress("DEPRECATION")
-                val wm = context.getSystemService(Context.WIFI_SERVICE) as WifiManager
-                @Suppress("DEPRECATION")
-                val rssi = wm.connectionInfo.rssi
-                @Suppress("DEPRECATION")
-                WifiManager.calculateSignalLevel(rssi, 101)
-            } catch (e: Exception) {
-                Log.w(TAG, "Signal strength unavailable: ${e.message}")
-                0
-            }
-        }
-
-        /** Returns battery percentage 0-100, or -1 if the device is on wired/AC power. */
+        /** Returns battery percentage 0-100, or -1 when the hardware has no readable battery. */
         fun readBatteryLevel(context: Context): Int {
             return try {
+                if (isBatterylessModel(Build.MODEL)) return -1
                 val bm = context.getSystemService(Context.BATTERY_SERVICE) as BatteryManager
-                val status = bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_STATUS)
-                if (status == BatteryManager.BATTERY_STATUS_CHARGING ||
-                    status == BatteryManager.BATTERY_STATUS_FULL) {
-                    -1
-                } else {
-                    bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY).coerceIn(0, 100)
-                }
+                val batteryIntent = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+                if (batteryIntent?.getBooleanExtra(BatteryManager.EXTRA_PRESENT, true) == false) return -1
+                bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY).takeIf { it in 0..100 } ?: -1
             } catch (e: Exception) {
                 Log.w(TAG, "Battery level unavailable: ${e.message}")
                 -1
             }
+        }
+
+        internal fun isBatterylessModel(model: String?): Boolean {
+            val normalized = model?.trim()?.uppercase(Locale.ROOT).orEmpty()
+            return normalized == "CT20" || normalized.endsWith(" CT20")
         }
 
         private fun putTrafficCounters(json: JSONObject) {
@@ -303,44 +326,175 @@ class TmsStatusWorker(
          * "cellular" (slot undetermined), "none".
          * Requires ACCESS_NETWORK_STATE (normal permission, no runtime grant needed).
          */
-        @SuppressLint("MissingPermission")
-        private fun readNetworkMedia(context: Context): String {
-            return try {
-                val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                    val caps = cm.getNetworkCapabilities(cm.activeNetwork ?: return "none")
-                        ?: return "none"
-                    when {
-                        caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)     -> "wifi"
-                        caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "ethernet"
-                        caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> {
-                            try {
-                                val sm = context.getSystemService(Context.TELEPHONY_SUBSCRIPTION_SERVICE)
-                                        as SubscriptionManager
-                                val subId = SubscriptionManager.getDefaultDataSubscriptionId()
-                                if (subId == SubscriptionManager.INVALID_SUBSCRIPTION_ID) return "cellular"
-                                when (sm.getActiveSubscriptionInfo(subId)?.simSlotIndex) {
-                                    0 -> "cellular1"
-                                    1 -> "cellular2"
-                                    else -> "cellular"
-                                }
-                            } catch (_: Exception) { "cellular" }
-                        }
-                        else -> "none"
-                    }
-                } else {
+        @SuppressLint("MissingPermission", "HardwareIds")
+        private fun readNetworkTelemetry(context: Context): NetworkTelemetry {
+            val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            val capabilities = runCatching { cm.getNetworkCapabilities(cm.activeNetwork) }.getOrNull()
+            val wifiActive = capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
+            val ethernetActive = capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) == true
+            val cellularActive = capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) == true
+            val interfaceMacAddresses = readInterfaceMacAddresses()
+            var wifiMacAddress = interfaceMacAddresses.first
+            var ethernetMacAddress = interfaceMacAddresses.second
+
+            var wifiSsid: String? = null
+            var wifiRssi: Int? = null
+            var wifiSignalPercent: Int? = null
+            try {
+                @Suppress("DEPRECATION")
+                val info = (context.getSystemService(Context.WIFI_SERVICE) as WifiManager).connectionInfo
+                wifiMacAddress = wifiMacAddress ?: normalizeMacAddress(info.macAddress)
+                if (wifiActive) {
+                    wifiSsid = info.ssid
+                        ?.trim('"')
+                        ?.takeIf { it.isNotBlank() && !it.equals("<unknown ssid>", ignoreCase = true) }
+                    wifiRssi = info.rssi.takeIf { it in -127..0 }
                     @Suppress("DEPRECATION")
-                    when (cm.activeNetworkInfo?.type) {
-                        ConnectivityManager.TYPE_WIFI     -> "wifi"
-                        ConnectivityManager.TYPE_ETHERNET -> "ethernet"
-                        ConnectivityManager.TYPE_MOBILE   -> "cellular"
-                        else -> "none"
+                    wifiSignalPercent = wifiRssi?.let { WifiManager.calculateSignalLevel(it, 101) }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "WiFi telemetry unavailable: ${e.message}")
+            }
+
+            val vendorMacAddresses = parseNexgoNetworkMacProperty(readSystemProperty("ro.xgd.wifibt.mac"))
+            wifiMacAddress = wifiMacAddress ?: vendorMacAddresses.first
+            ethernetMacAddress = ethernetMacAddress ?: vendorMacAddresses.second
+
+            var cellOperator: String? = null
+            var cellNetworkType: String? = null
+            var cellSignalDbm: Int? = null
+            var cellSignalPercent: Int? = null
+            try {
+                val baseManager = context.getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
+                val subscriptionId = SubscriptionManager.getDefaultDataSubscriptionId()
+                val manager = if (subscriptionId != SubscriptionManager.INVALID_SUBSCRIPTION_ID) {
+                    baseManager.createForSubscriptionId(subscriptionId)
+                } else {
+                    baseManager
+                }
+                cellOperator = manager.networkOperatorName?.trim()?.takeIf { it.isNotBlank() }
+                cellNetworkType = cellularGeneration(manager.dataNetworkType)
+                manager.signalStrength?.let { strength ->
+                    cellSignalPercent = (strength.level.coerceIn(0, 4) * 25)
+                    cellSignalDbm = strength.cellSignalStrengths
+                        .map { it.dbm }
+                        .firstOrNull { it != android.telephony.CellInfo.UNAVAILABLE }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Cellular telemetry unavailable: ${e.message}")
+            }
+
+            val activeTechnology = when {
+                wifiActive -> "wifi"
+                ethernetActive -> "ethernet"
+                cellularActive -> cellNetworkType ?: "cellular"
+                else -> "none"
+            }
+            val activeSignal = when {
+                wifiActive -> wifiSignalPercent
+                cellularActive -> cellSignalPercent
+                else -> null
+            }
+            return NetworkTelemetry(
+                activeTechnology,
+                activeSignal,
+                wifiMacAddress,
+                ethernetMacAddress,
+                wifiSsid,
+                wifiRssi,
+                wifiSignalPercent,
+                cellOperator,
+                cellNetworkType,
+                cellSignalDbm,
+                cellSignalPercent,
+            )
+        }
+
+        private fun putNetworkTelemetry(json: JSONObject, telemetry: NetworkTelemetry) {
+            json.put("net", telemetry.activeTechnology)
+            telemetry.wifiMacAddress?.let { json.put("wmac", it) }
+            telemetry.ethernetMacAddress?.let { json.put("emac", it) }
+            telemetry.wifiSsid?.let { json.put("wssid", it) }
+            telemetry.wifiRssi?.let { json.put("wrssi", it) }
+            telemetry.wifiSignalPercent?.let { json.put("wsig", it) }
+            telemetry.cellOperator?.let { json.put("cop", it) }
+            telemetry.cellNetworkType?.let { json.put("cnet", it) }
+            telemetry.cellSignalDbm?.let { json.put("cdbm", it) }
+            telemetry.cellSignalPercent?.let { json.put("csig", it) }
+        }
+
+        /** Returns Wi-Fi and Ethernet hardware addresses from the kernel network interfaces. */
+        private fun readInterfaceMacAddresses(): Pair<String?, String?> {
+            var wifiMacAddress: String? = null
+            var ethernetMacAddress: String? = null
+            try {
+                NetworkInterface.getNetworkInterfaces()?.asSequence()?.forEach { networkInterface ->
+                    val name = networkInterface.name?.lowercase(Locale.ROOT).orEmpty()
+                    val address = formatMacAddress(networkInterface.hardwareAddress) ?: return@forEach
+                    when {
+                        wifiMacAddress == null && (name.startsWith("wlan") || name.startsWith("wifi")) ->
+                            wifiMacAddress = address
+                        ethernetMacAddress == null && name.startsWith("eth") ->
+                            ethernetMacAddress = address
                     }
                 }
             } catch (e: Exception) {
-                Log.w(TAG, "Network media unavailable: ${e.message}")
-                "none"
+                Log.w(TAG, "Network interface MAC addresses unavailable: ${e.message}")
             }
+            return wifiMacAddress to ethernetMacAddress
+        }
+
+        internal fun formatMacAddress(address: ByteArray?): String? {
+            if (address == null || address.size != 6 || address.all { it == 0.toByte() }) return null
+            val formatted = address.joinToString(":") { byte -> "%02X".format(Locale.ROOT, byte.toInt() and 0xFF) }
+            return formatted.takeUnless { it == "02:00:00:00:00:00" }
+        }
+
+        internal fun parseNexgoNetworkMacProperty(value: String?): Pair<String?, String?> {
+            val compact = value?.filter(Char::isLetterOrDigit)?.uppercase(Locale.ROOT).orEmpty()
+            if (compact.length < 36 || compact.any { it !in '0'..'9' && it !in 'A'..'F' }) return null to null
+            return normalizeMacAddress(compact.substring(0, 12)) to normalizeMacAddress(compact.substring(24, 36))
+        }
+
+        private fun normalizeMacAddress(value: String?): String? {
+            val compact = value?.filter(Char::isLetterOrDigit)?.uppercase(Locale.ROOT).orEmpty()
+            if (compact.length != 12 || compact.any { it !in '0'..'9' && it !in 'A'..'F' }) return null
+            val formatted = compact.chunked(2).joinToString(":")
+            return formatted.takeUnless { it == "00:00:00:00:00:00" || it == "02:00:00:00:00:00" }
+        }
+
+        private fun readSystemProperty(name: String): String? = try {
+            ProcessBuilder("/system/bin/getprop", name)
+                .redirectErrorStream(true)
+                .start()
+                .inputStream
+                .bufferedReader()
+                .use { it.readText().trim().takeIf(String::isNotBlank) }
+        } catch (e: Exception) {
+            Log.w(TAG, "System property $name unavailable: ${e.message}")
+            null
+        }
+
+        internal fun cellularGeneration(networkType: Int): String? = when (networkType) {
+            TelephonyManager.NETWORK_TYPE_GPRS,
+            TelephonyManager.NETWORK_TYPE_EDGE,
+            TelephonyManager.NETWORK_TYPE_CDMA,
+            TelephonyManager.NETWORK_TYPE_1xRTT,
+            TelephonyManager.NETWORK_TYPE_IDEN,
+            TelephonyManager.NETWORK_TYPE_GSM -> "2G"
+            TelephonyManager.NETWORK_TYPE_UMTS,
+            TelephonyManager.NETWORK_TYPE_EVDO_0,
+            TelephonyManager.NETWORK_TYPE_EVDO_A,
+            TelephonyManager.NETWORK_TYPE_HSDPA,
+            TelephonyManager.NETWORK_TYPE_HSUPA,
+            TelephonyManager.NETWORK_TYPE_HSPA,
+            TelephonyManager.NETWORK_TYPE_EVDO_B,
+            TelephonyManager.NETWORK_TYPE_EHRPD,
+            TelephonyManager.NETWORK_TYPE_HSPAP,
+            TelephonyManager.NETWORK_TYPE_TD_SCDMA -> "3G"
+            TelephonyManager.NETWORK_TYPE_LTE -> "LTE"
+            TelephonyManager.NETWORK_TYPE_NR -> "5G"
+            else -> null
         }
 
         // GPS cold-start indoors can take >60 s; network provider fixes in 1-2 s.

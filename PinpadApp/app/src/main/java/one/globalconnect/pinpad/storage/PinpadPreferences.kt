@@ -42,6 +42,8 @@ class PinpadPreferences(context: Context) {
     fun serialSettings(modelName: String? = null): SerialSettings {
         val modelDefaultPort = DeviceModelConfig.getSerialPort(modelName)
         return SerialSettings(
+            usbBasePort = DeviceModelConfig.getDeviceSpec(modelName).fixedUsbBasePort
+                ?: prefs.getInt("usb_base_port", modelDefaultPort),
             transportMode = normalizeTransportMode(
                 prefs.getString(KEY_TRANSPORT_MODE, null) ?: BuildConfig.SERIAL_TRANSPORT,
             ),
@@ -62,6 +64,7 @@ class PinpadPreferences(context: Context) {
 
     fun setSerialSettings(settings: SerialSettings) {
         prefs.edit()
+            .putInt("usb_base_port", settings.usbBasePort)
             .putString(KEY_TRANSPORT_MODE, normalizeTransportMode(settings.transportMode))
             .putInt(KEY_RS232_PORT, settings.rs232Port)
             .putInt(KEY_USB_VID, settings.usbVid)
@@ -252,6 +255,7 @@ data class SerialSettings(
     val dataBits: Int,
     val stopBits: Int,
     val parity: String,
+    val usbBasePort: Int = 1,
 )
 
 data class MifareKeySlot(

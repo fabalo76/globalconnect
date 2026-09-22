@@ -16,6 +16,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import one.globalconnect.xtmsagent.diagnostics.NexgoDiagnosticsManager
+import one.globalconnect.xtmsagent.diagnostics.DeviceSetupRetry
+import one.globalconnect.xtmsagent.diagnostics.PssPackageExporter
+import kotlinx.coroutines.CancellationException
 
 class DiagnosticsActivity : AppCompatActivity() {
     private lateinit var reportView: TextView
@@ -59,8 +62,58 @@ class DiagnosticsActivity : AppCompatActivity() {
             setPadding(padding, padding, padding, padding)
             addView(buttons)
             addView(Button(this@DiagnosticsActivity).apply {
+                text = getString(R.string.diagnostics_retry_setup)
+                setOnClickListener {
+                    val button = this
+                    button.isEnabled = false
+                    lifecycleScope.launch {
+                        try {
+                            val export = DeviceSetupRetry.run(this@DiagnosticsActivity)
+                            Toast.makeText(this@DiagnosticsActivity,
+                                getString(R.string.diagnostics_exported, export.displayPath), Toast.LENGTH_LONG).show()
+                        } catch (error: CancellationException) {
+                            throw error
+                        } catch (error: Exception) {
+                            Toast.makeText(this@DiagnosticsActivity,
+                                getString(R.string.diagnostics_export_failed, error.message.orEmpty()), Toast.LENGTH_LONG).show()
+                        } finally {
+                            button.isEnabled = true
+                            refreshReport()
+                        }
+                    }
+                }
+            })
+            addView(Button(this@DiagnosticsActivity).apply {
                 text = getString(R.string.diagnostics_export)
                 setOnClickListener { exportReport() }
+            })
+            addView(Button(this@DiagnosticsActivity).apply {
+                text = getString(R.string.diagnostics_export_pss)
+                setOnClickListener {
+                    val button = this
+                    button.isEnabled = false
+                    lifecycleScope.launch {
+                        try {
+                            val export = withContext(Dispatchers.IO) {
+                                PssPackageExporter.export(applicationContext)
+                            }
+                            androidx.appcompat.app.AlertDialog.Builder(this@DiagnosticsActivity)
+                                .setMessage(getString(R.string.diagnostics_pss_exported, export.displayPath))
+                                .setPositiveButton(android.R.string.ok, null).show()
+                        } catch (error: CancellationException) {
+                            throw error
+                        } catch (error: Exception) {
+                            withContext(Dispatchers.IO) {
+                                NexgoDiagnosticsManager.recordException(applicationContext, "pssExport", error)
+                            }
+                            Toast.makeText(this@DiagnosticsActivity,
+                                getString(R.string.diagnostics_export_failed, error.message.orEmpty()), Toast.LENGTH_LONG).show()
+                        } finally {
+                            button.isEnabled = true
+                            refreshReport()
+                        }
+                    }
+                }
             })
             addView(reportView)
         }

@@ -50,6 +50,16 @@ class PinpadSerialService : Service(), PINPADTransport.Listener {
             return
         }
         appRef = app
+        app.audioForeground = { recording ->
+            val notification = buildNotification(recording)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val types = ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE or
+                    if (recording && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE else 0
+                startForeground(NOTIFICATION_ID, notification, types)
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
+            }
+        }
         protocolHandler = PinpadProtocolFactory.create(app) { response ->
             PinpadTraceLog.service("TX async len=${response.size}")
             sendTransport(response)
@@ -74,6 +84,8 @@ class PinpadSerialService : Service(), PINPADTransport.Listener {
     }
 
     override fun onDestroy() {
+        appRef?.audioRecordings?.reset()
+        appRef?.audioForeground = null
         pendingSerialPortChangeTask?.let(mainHandler::removeCallbacks)
         pendingSerialPortChangeTask = null
         transport?.stop()
@@ -131,7 +143,7 @@ class PinpadSerialService : Service(), PINPADTransport.Listener {
     }
 
     private fun disableUsbCdcWhenUnused(app: PinpadApplication, mode: String) {
-        if (!shouldDisableUsbCdc(mode)) return
+        if (!shouldDisableUsbCdc(mode, app.deviceInfoProvider.modelName())) return
 
         val platform = app.deviceEngine.platform
         val enabled = runCatching { platform.usbCdcStatus }
@@ -173,12 +185,8 @@ class PinpadSerialService : Service(), PINPADTransport.Listener {
         if (mode == "IP") {
             return "IP • TCP ${settings.tcpPort} • discovery UDP ${TcpPinpadTransport.DISCOVERY_PORT}"
         }
-        val port = if (mode == "RS232") {
-            settings.rs232Port
-        } else {
-            DeviceModelConfig.getUsbCdcSerialPort(app.deviceInfoProvider.modelName())
-        }
-        val label = if (mode == "RS232") "RS232" else "USB Serial"
+        val port = selectedSerialPort(settings, app.deviceInfoProvider.modelName())
+        val label = if (mode == "RS232") "RS232" else if (DeviceModelConfig.getDeviceSpec(app.deviceInfoProvider.modelName()).usbBaseSerialSupported) "USB" else "USB Serial"
         return "$label • port $port • ${settings.baudRate} ${settings.dataBits}${settings.parity}${settings.stopBits}"
     }
 
@@ -209,31 +217,28 @@ class PinpadSerialService : Service(), PINPADTransport.Listener {
     private fun createTransport(app: PinpadApplication): PINPADTransport {
         val modelName = app.deviceInfoProvider.modelName()
         val settings = PinpadPreferences(app).serialSettings(modelName)
-        val rs232 = NexgoRs232Transport(
-            deviceEngine = app.deviceEngine,
-            portNo = settings.rs232Port,
-            baudRate = settings.baudRate,
-            dataBits = settings.dataBits,
-            stopBits = settings.stopBits,
-            parity = settings.parity,
+        val mode = effectiveTransportMode(settings).uppercase()
+        // Construct only the selected transport: IP must not acquire serial drivers.
+        if (mode == "IP") return TcpPinpadTransport(
+            context = app,
+            tcpPort = settings.tcpPort,
+            serialNumber = app.deviceInfoProvider.serialNumber(),
+            modelName = modelName,
         )
-        val usbCdc = NexgoUsbCdcTransport(
-            deviceEngine = app.deviceEngine,
-            portNo = DeviceModelConfig.getUsbCdcSerialPort(modelName),
-            baudRate = settings.baudRate,
-            dataBits = settings.dataBits,
-            stopBits = settings.stopBits,
-            parity = settings.parity,
-        )
-        return when (effectiveTransportMode(settings).uppercase()) {
-            "IP" -> TcpPinpadTransport(
-                context = app,
-                tcpPort = settings.tcpPort,
-                serialNumber = app.deviceInfoProvider.serialNumber(),
-                modelName = modelName,
+        val port = selectedSerialPort(settings, modelName)
+        return if (usesUartTransport(mode, modelName)) {
+            NexgoRs232Transport(
+                deviceEngine = app.deviceEngine, portNo = port,
+                baudRate = settings.baudRate, dataBits = settings.dataBits,
+                stopBits = settings.stopBits, parity = settings.parity,
+                transportLabel = if (mode == "RS232") "RS232" else "USB_BASE_PL2303GC",
             )
-            "RS232" -> rs232
-            else -> usbCdc
+        } else {
+            NexgoUsbCdcTransport(
+                deviceEngine = app.deviceEngine, portNo = port,
+                baudRate = settings.baudRate, dataBits = settings.dataBits,
+                stopBits = settings.stopBits, parity = settings.parity,
+            )
         }
     }
 
@@ -266,7 +271,7 @@ class PinpadSerialService : Service(), PINPADTransport.Listener {
         manager.createNotificationChannel(channel)
     }
 
-    private fun buildNotification(): Notification {
+    private fun buildNotification(recording: Boolean = false): Notification {
         val launchIntent = Intent(this, MainActivity::class.java)
         val pendingIntent = PendingIntent.getActivity(
             this,
@@ -277,7 +282,7 @@ class PinpadSerialService : Service(), PINPADTransport.Listener {
         return Notification.Builder(this, NOTIFICATION_CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setContentTitle(getString(R.string.serial_service_notification_title))
-            .setContentText(getString(R.string.serial_service_notification_text))
+            .setContentText(if (recording) getString(R.string.audio_recording_notification) else getString(R.string.serial_service_notification_text))
             .setContentIntent(pendingIntent)
             .setOngoing(true)
             .setShowWhen(false)
@@ -303,5 +308,16 @@ class PinpadSerialService : Service(), PINPADTransport.Listener {
     }
 }
 
-internal fun shouldDisableUsbCdc(transportMode: String): Boolean =
-    transportMode.uppercase() != "SERIAL"
+internal fun shouldDisableUsbCdc(transportMode: String, modelName: String? = null): Boolean =
+    DeviceModelConfig.supportsUsbCdc(modelName) && transportMode.uppercase() != "SERIAL"
+
+internal fun usesUartTransport(mode: String, modelName: String?): Boolean =
+    mode.uppercase() == "RS232" ||
+        (mode.uppercase() == "SERIAL" && DeviceModelConfig.getDeviceSpec(modelName).usbBaseSerialSupported)
+
+internal fun selectedSerialPort(settings: SerialSettings, modelName: String?): Int = when {
+    settings.transportMode.uppercase() == "RS232" -> settings.rs232Port
+    DeviceModelConfig.getDeviceSpec(modelName).usbBaseSerialSupported ->
+        DeviceModelConfig.getDeviceSpec(modelName).fixedUsbBasePort ?: settings.usbBasePort
+    else -> DeviceModelConfig.getUsbCdcSerialPort(modelName)
+}

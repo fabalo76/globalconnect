@@ -1,5 +1,5 @@
 <resources>
-    <string name="ecr_report_in_progress">Preparing ECR report…</string>
+    <string name="ecr_report_in_progress">Preparing ECR report...</string>
     <string name="ecr_disabled">ECR disabled</string>
     <string name="ecr_waiting">Waiting for ECR on TCP port %1$d</string>
     <string name="ecr_listen_failed">Cannot listen on TCP port %1$d. Check the ECR configuration.</string>
@@ -9,9 +9,21 @@
     <string name="ecr_enable">Enable ECR</string>
     <string name="ecr_port">TCP listening port</string>
     <string name="ecr_kiosk">ECR kiosk mode</string>
-    <string name="ecr_serial_pending">USB and RS232 are reserved for the next phase. Use TCP/IP for this version.</string>
     <string name="ecr_unlock_help">To unlock, press Clear 10 times consecutively, or tap the ECR screen 10 times on a device without a keypad. The configuration password is required. Kiosk mode returns after 1 minute of inactivity.</string>
     <string name="ecr_saved">ECR configuration saved</string>
     <string name="ecr_save_failed">Could not save ECR configuration</string>
-    <string name="ecr_save">Save ECR configuration</string>
+    <string name="ecr_save">Save ECR</string>
+    <string name="ecr_waiting_endpoint">Waiting for ECR on TCP\n%1$s</string>
+    <string name="ecr_waiting_no_address">Waiting for network Â· TCP port %1$d</string>
+    <string name="ecr_settlement_success">Settlement completed</string>
+    <string name="ecr_settlement_failed">Settlement failed</string>
+    <string name="ecr_settlement_unknown">Settlement outcome unknown. Reconcile the terminal before retrying.</string>
+    <string name="ecr_settlement_print_failed">Settlement completed, but the receipt could not be printed.</string>
+    <string name="ecr_serial_waiting">Waiting for ECR on %1$s port %2$d @ %3$d</string>
+    <string name="ecr_serial_port">Device serial port</string>
+    <string name="ecr_baud_rate">Baud rate (8N1)</string>
+    <string name="ecr_hotel_reference_invalid">No matching check-in for this folio and card.</string>
+    <string name="ecr_serial_failed">Cannot open %1$s port %2$d. Check the port and cable; retrying.</string>
+    <string name="ecr_connection_type">Connection type</string>
+    <string name="ecr_fixed_usb_port">USB CDC port: %1$d (fixed)</string>
 </resources>

@@ -3,6 +3,7 @@ package one.globalconnect.paymentapp.transaction.installments
 import one.globalconnect.paymentapp.transaction.TransactionType
 
 object InstallmentContracts {
+    val extrasBalanceRequest: String? = "0100000000000000000000B"
     fun forTransaction(type: TransactionType): InstallmentContract? = when (type) {
         TransactionType.QUOTA_SALE, TransactionType.EXTRAS_SALE -> BanpaisInstallmentContract
         else -> null

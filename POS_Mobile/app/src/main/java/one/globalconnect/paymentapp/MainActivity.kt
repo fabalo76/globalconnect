@@ -382,6 +382,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (one.globalconnect.paymentapp.ecr.EcrSettlementInteraction.active.value) return true
         if (one.globalconnect.paymentapp.ecr.EcrVoidInteraction.screen.value != null) {
             if (event.action == KeyEvent.ACTION_UP) {
                 when (event.keyCode) {
@@ -908,7 +909,7 @@ fun UICApp(
     LaunchedEffect(ecrSale?.id) {
         ecrSale?.let { request ->
             if (navController.currentDestination?.route != dst_CardTransaction.route) {
-                navController.navigate("CardTransaction/${request.transactionType.toTransactionString()}/${request.base}/?$TAX1_KEY=${request.tax1}&$TAX2_KEY=${request.tax2}&$TIP_KEY=0.00&$FOLIO_KEY=&$CHECK_IN_ID_KEY=&$ORIGINAL_TRANSACTION_ID_KEY=")
+                navController.navigate("CardTransaction/${request.transactionType.toTransactionString()}/${request.base}/?$TAX1_KEY=${request.tax1}&$TAX2_KEY=${request.tax2}&$TIP_KEY=${request.tip}&$FOLIO_KEY=${android.net.Uri.encode(request.folio)}&$CHECK_IN_ID_KEY=&$ORIGINAL_TRANSACTION_ID_KEY=")
             }
         }
     }
@@ -975,6 +976,7 @@ fun UICApp(
     }
 
     val isBottomBarVisible = navigationManager.shouldShowBottomBar(navBackStackEntry?.destination)
+    val settlementActive by one.globalconnect.paymentapp.ecr.EcrSettlementInteraction.active.collectAsState()
     val voidSurfaceVisible by one.globalconnect.paymentapp.transaction.VoidPresentation.active.collectAsState()
     val isTransactionSurfaceVisible = voidSurfaceVisible || navBackStackEntry?.destination?.route?.let { route ->
         route.startsWith("CardTransaction/") || route.startsWith("TransactionFinished/")
@@ -1023,7 +1025,7 @@ fun UICApp(
                 allScreens = navBarScreens,
                 onTabSelected = navigationManager::onDestinationSelected,
                 currentTab = selectedTab,
-                visible = isBottomBarVisible && !ecrLocked && !voidSurfaceVisible,
+                visible = isBottomBarVisible && !ecrLocked && !voidSurfaceVisible && !settlementActive,
             )
         }
     ) { innerPadding ->
@@ -1521,6 +1523,7 @@ fun UICApp(
                             val navigateDirectlyToResult =
                                 transactionType == TransactionType.REFUND ||
                                     transactionType == TransactionType.LOYALTY_BALANCE ||
+                                    transactionType in setOf(TransactionType.EXTRAS_BALANCE, TransactionType.BALANCE) ||
                                     OfflinePinChangeContract.isPinMaintenance(transactionType)
                             val postPaymentRoute =
                                 if (isEcr && !navigateDirectlyToResult) {

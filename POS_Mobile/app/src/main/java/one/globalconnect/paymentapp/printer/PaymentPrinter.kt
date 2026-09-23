@@ -71,6 +71,8 @@ interface PaymentPrinter {
         context: Context,
         snapshot: SettlementSnapshot,
         tmsDatabase: TMSDATA,
+        includeAudit: Boolean = true,
+        onPrintResult: ((Boolean) -> Unit)? = null,
     )
 
     fun printConfigReport(

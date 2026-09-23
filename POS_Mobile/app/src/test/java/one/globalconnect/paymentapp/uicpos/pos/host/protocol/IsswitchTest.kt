@@ -33,10 +33,11 @@ class IsswitchTest(private val protocolName: String) {
         for ((code, processing, tag45) in listOf(
             Triple("InstallmentQuery", "310000", "0".repeat(22) + "S"),
             Triple("ExtrasQuery", "310000", "0".repeat(22) + "C"),
+            Triple("ExtrasBalance", "300000", "0100000000000000000000B"),
             Triple("QuotaSale", "000000", "06EXT1" + "0".repeat(16) + "S"),
             Triple("ExtrasSale", "010000", "06EXT1" + "0".repeat(16) + "C"),
         )) {
-            val query = code.endsWith("Query")
+            val query = code.endsWith("Query") || code == "ExtrasBalance"
             val message = protocol().buildIsoMessage(HostProtocolContext(
                 procInfo = ProcInfo(TransLog = TransLog(TxnType = code,
                     TxnAmt = if (query) "0.00" else "12.25", PaymentPlan = tag45,

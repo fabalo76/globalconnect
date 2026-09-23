@@ -60,7 +60,8 @@ fun ProcInfo.toTransaction(): Transaction {
     val tax2Amount = this.TransLog.Tax2Amt.replace(",", "").ifBlank { "0.00" }
     val baseAmount = this.TransLog.BaseAmt.replace(",", "").ifBlank { "0.00" }
 
-    val subTotal = BigDecimal(totalAmount)
+    // Non-financial inquiries may have no numeric host balance.
+    val subTotal = BigDecimal(totalAmount.ifBlank { "0.00" })
         .minus(BigDecimal(tipAmount.ifBlank { "0.00" }))
         .setScale(2, RoundingMode.HALF_DOWN)
         .toPlainString()
@@ -83,6 +84,7 @@ fun ProcInfo.toTransaction(): Transaction {
         partialApprovalOriginalAmount = this.TransLog.PartialApprovalOriginalAmount,
         baseAmount = baseAmount,
         tipAmount = tipAmount,
+        cashbackAmount = this.TransLog.CashbackAmt,
         tax1Amount = tax1Amount,
         tax1DiscountAmount = tax1DiscountAmount,
         tax2Amount = tax2Amount,

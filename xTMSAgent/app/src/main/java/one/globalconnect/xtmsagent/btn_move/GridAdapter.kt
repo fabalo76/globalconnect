@@ -1,5 +1,7 @@
 package one.globalconnect.xtmsagent.btn_move
 
+import android.os.Build
+import androidx.constraintlayout.widget.ConstraintLayout
 import android.graphics.Color
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
@@ -76,6 +78,12 @@ class GridAdapter(
         init{
             button = itemView.findViewById(R.id.button)
             iconView = itemView.findViewById(R.id.button_icon)
+            if (Build.MODEL.trim().uppercase().startsWith("CT20")) {
+                // Short CT20/CT20P tiles need a gap above their bottom-aligned label.
+                val iconLayout = iconView.layoutParams as ConstraintLayout.LayoutParams
+                iconLayout.verticalBias = 0.35f
+                iconView.layoutParams = iconLayout
+            }
         }
 
         @Suppress("UNUSED_PARAMETER")

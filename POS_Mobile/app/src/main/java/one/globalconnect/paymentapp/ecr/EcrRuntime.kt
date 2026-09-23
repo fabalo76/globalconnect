@@ -27,11 +27,14 @@ object EcrRuntime {
     @Volatile var ready = false
     @Volatile var foreground = false
     @Volatile private var lastActivity = 0L
+    private val resetRequests = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     private var clearCount = 0
     private var tapCount = 0
     private var lastGesture = 0L
     private lateinit var app: Context
     private var server: ServerSocket? = null
+    @Volatile private var serial: EcrConnection? = null
+    @Volatile private var transportGeneration = 0L
     private val workers = Executors.newCachedThreadPool()
     private val clients = Semaphore(2)
     private val sessions = java.util.concurrent.ConcurrentHashMap.newKeySet<Socket>()
@@ -50,17 +53,40 @@ object EcrRuntime {
             }
         }
     }
-    @Synchronized fun configure(context: Context, config: EcrSettings = EcrSettings.read(context)) {
+    @Synchronized fun configure(context: Context, requestedConfig: EcrSettings = EcrSettings.read(context)) {
+        val config = requestedConfig.forDevice(android.os.Build.MODEL)
         app = context.applicationContext
         EcrDebugLog.event { "Configure enabled=${config.enabled} transport=${config.transport} port=${config.port} kiosk=${config.kiosk}" }
-        if (settings.value == config && server != null) return
+        if (settings.value == config && (server != null || serial != null)) return
         check(!busy) { "Finish the active ECR operation before changing settings" }
+        transportGeneration++
+        serial?.close(); serial = null
         server?.close(); server = null
         sessions.forEach { runCatching { it.close() } }
         settings.value = config
         unlocked.value = false
         if (!config.enabled) { status.value = app.getString(R.string.ecr_disabled); return }
-        if (config.transport != "TCP/IP") { status.value = app.getString(R.string.ecr_serial_pending); return }
+        if (config.transport != "TCP/IP") {
+            val generation = transportGeneration
+            status.value = app.getString(R.string.ecr_serial_waiting, config.transport, config.serialPort, config.baudRate)
+            workers.execute {
+                while (generation == transportGeneration && settings.value.enabled) {
+                    try {
+                        val connection = synchronized(this@EcrRuntime) {
+                            if (generation != transportGeneration) null else
+                                EcrSerialConnection(com.nexgo.oaf.apiv3.APIProxy.getDeviceEngine(app), config).also { serial = it }
+                        } ?: break
+                        if (!busy) status.value = app.getString(R.string.ecr_serial_waiting, config.transport, config.serialPort, config.baudRate)
+                        serve(connection)
+                    } catch (e: Exception) {
+                        EcrDebugLog.event { "Serial connection failed type=${e.javaClass.simpleName}" }
+                        if (generation == transportGeneration && !busy) status.value = app.getString(R.string.ecr_serial_failed, config.transport, config.serialPort)
+                    }
+                    if (generation == transportGeneration) Thread.sleep(1000)
+                }
+            }
+            return
+        }
         try {
             val listener = ServerSocket().apply { reuseAddress = true; bind(java.net.InetSocketAddress(config.port)) }
             server = listener
@@ -71,7 +97,7 @@ object EcrRuntime {
                     val socket = try { listener.accept() } catch (_: Exception) { break }
                     if (!clients.tryAcquire()) { EcrDebugLog.event { "Connection rejected: client limit" }; socket.close(); continue }
                     sessions.add(socket)
-                    workers.execute { try { serve(socket) } finally { sessions.remove(socket); clients.release() } }
+                    workers.execute { try { serve(EcrTcpConnection(socket)) } finally { sessions.remove(socket); clients.release() } }
                 }
             }
         } catch (e: Exception) { EcrDebugLog.event { "Listen failed type=${e.javaClass.simpleName}" }; status.value = app.getString(R.string.ecr_listen_failed, config.port) }
@@ -96,14 +122,19 @@ object EcrRuntime {
         EcrDebugLog.message("RX request", msg)
         EcrDebugLog.event { "State busy=$busy ready=$ready foreground=$foreground kioskUnlocked=${unlocked.value} operationInProgress=${one.globalconnect.paymentapp.PendingUpdateManager.isOperationInProgress}" }
         try { msg.validateRequestId() } catch (_: IllegalArgumentException) { return response(msg, "30", "Invalid RequestID") }
+        if (msg.command == "D0" && msg.indicator == 0 && msg.response == "00" && !msg.more &&
+            msg.fields.keys.all { it in setOf("80", "RQ") }) return response(msg, "00", "Communications OK")
         if (msg.command == "D1" && msg.indicator == 0 && msg.fields.isEmpty()) return EcrMessage("D1",indicator=1,fields=mapOf(
             "50" to Build.MODEL.take(60),
             "51" to one.globalconnect.paymentapp.GlobalConnectPaymentApplication.serialNumber.take(60),
             "52" to if(Regex("^(CT20P|N6([ _-]?PRO)?([ _-]?LITE)?)$", RegexOption.IGNORE_CASE).matches(Build.MODEL.trim())) "0" else "1"))
-        if (!settings.value.enabled || settings.value.transport != "TCP/IP") return response(msg,"91","ECR disabled")
-        if (msg.command in setOf("P1", "P2", "P3", "42")) return acceptReport(msg)
-        if (msg.command !in setOf("20", "31", "33")) return response(msg,"30","Unsupported command")
+        if (!settings.value.enabled) return response(msg,"91","ECR disabled")
+        if (msg.command in setOf("P1", "P2", "P3", "P4", "P5", "42", "61", "F2", "00")) return acceptReport(msg)
+        if (msg.command !in setOf("20", "31", "33", "32", "35", "36", "34", "26", "38", "E7", "E6", "10", "CI", "CO")) return response(msg,"30","Unsupported command")
         val request = try { EcrSale.from(msg) } catch (_: Exception) { return response(msg,"30","Invalid transaction request") }
+        val contracts = one.globalconnect.paymentapp.transaction.installments.InstallmentContracts
+        if ((msg.command in setOf("32", "35") && contracts.forTransaction(request.transactionType) == null) ||
+            (msg.command in setOf("34", "36") && contracts.extrasBalanceRequest == null)) return response(msg, "58", "Operation unavailable for this flavor")
         val idKey = journalKey(msg)
         val prior = journal.getString(idKey,null)
         if (prior != null) {
@@ -122,7 +153,7 @@ object EcrRuntime {
         return null
     }
     private fun acceptReport(msg: EcrMessage): EcrMessage? {
-        try { if (msg.command == "42") EcrVoid.validate(msg) else EcrReportData.validate(msg) } catch (_: IllegalArgumentException) {
+        try { when (msg.command) { "42" -> EcrVoid.validate(msg); "61" -> EcrSettlement.validate(msg); "00", "F2" -> EcrMaintenance.validate(msg); else -> EcrReportData.validate(msg) } } catch (_: IllegalArgumentException) {
             return response(msg, "30", "Invalid operation request")
         }
         val id = journalKey(msg)
@@ -137,18 +168,22 @@ object EcrRuntime {
         if (!journal.edit().putString(id, fingerprint(msg) + "|PENDING").commit()) return response(msg, "96", "Unable to record request")
         EcrDebugLog.message("Starting operation", msg)
         reportKey = id
+        if (msg.command == "61") EcrSettlementInteraction.active.value = true
         reporting.value = true
-        status.value = app.getString(if (msg.command == "42") R.string.trans_void else R.string.ecr_report_in_progress)
+        status.value = app.getString(when (msg.command) { "42" -> R.string.trans_void; "61" -> R.string.settlement_processing_title; else -> R.string.ecr_report_in_progress })
         one.globalconnect.paymentapp.PendingUpdateManager.isOperationInProgress = true
         scope.launch(Dispatchers.IO) {
             try {
-                val operationReplies = try { if (msg.command == "42") EcrVoid.execute(app, msg) { status.value = it } else EcrReports.execute(app, msg) }
+                var settlementResults = emptyList<one.globalconnect.paymentapp.settlement.SettlementResult>()
+                val operationReplies = try { when (msg.command) { "42" -> EcrVoid.execute(app, msg) { status.value = it }; "61" -> EcrSettlement.execute(app, msg, onResults = { settlementResults = it }) { status.value = it }; "00", "F2" -> EcrMaintenance.execute(app, msg); else -> EcrReports.execute(app, msg) } }
                     catch (e: CancellationException) { throw e }
-                    catch (e: Exception) { EcrDebugLog.event { "Operation failed type=${e.javaClass.simpleName}" }; if (msg.command == "42") listOf(response(msg, "TO", "Void outcome unknown; reconcile terminal")) else EcrReportData.frames(msg, emptyList(), false, "96", "Report could not be completed") }
+                    catch (e: Exception) { EcrDebugLog.event { "Operation failed type=${e.javaClass.simpleName}" }; if (msg.command == "42") listOf(response(msg, "TO", "Void outcome unknown; reconcile terminal")) else EcrReportData.frames(msg, emptyList(), false, if (msg.command == "61") "TO" else "96", if (msg.command == "61") "Settlement outcome unknown; reconcile terminal before retrying" else "Report could not be completed") }
                 val replies = operationReplies.map { it.withRequestIdFrom(msg) }
                 replies.forEach { EcrDebugLog.message("Operation completed", it) }
                 val stored = replies.joinToString(",") { Base64.getEncoder().encodeToString(it.encode()) }
+                if (msg.command == "00") resetRequests.add(id)
                 val saved = journal.edit().putString(id, fingerprint(msg) + "|" + stored).commit()
+                if (!saved && msg.command == "00") resetRequests.remove(id)
                 if (msg.command == "42") {
                     status.value = if (saved && replies.single().response == "00") app.getString(R.string.successful_void)
                         else app.getString(R.string.trans_error)
@@ -163,9 +198,21 @@ object EcrRuntime {
                             else -> R.string.void_failed_title
                         }))
                 }
+                if (msg.command == "61") {
+                    val finalReply = replies.last()
+                    val success = saved && finalReply.response == "00"
+                    val detail = when {
+                        !saved || finalReply.response == "TO" -> app.getString(R.string.ecr_settlement_unknown)
+                        finalReply.response == "ND" -> app.getString(R.string.settlement_no_acquirers)
+                        success && finalReply.fields["02"]?.contains("printing failed") == true -> app.getString(R.string.ecr_settlement_print_failed)
+                        else -> null
+                    }
+                    EcrSettlementInteraction.show(EcrSettlementResultState(success, settlementResults, detail))
+                }
                 status.value = app.getString(if (saved) R.string.ecr_waiting else R.string.ecr_reconcile, settings.value.port)
             } finally {
                 if (msg.command == "42") EcrVoidInteraction.clear()
+                if (msg.command == "61") EcrSettlementInteraction.clear()
                 reportKey = null
                 reporting.value = false
                 one.globalconnect.paymentapp.PendingUpdateManager.isOperationInProgress = false
@@ -212,7 +259,12 @@ object EcrRuntime {
             "03" to timestamp?.format(java.time.format.DateTimeFormatter.ofPattern("yyMMdd")).orEmpty(),
             "04" to timestamp?.format(java.time.format.DateTimeFormatter.ofPattern("HHmmss")).orEmpty(),
             "67" to batch,
-            "40" to cents(transaction.totalAmount),"41" to cents(transaction.tipAmount),
+            "47" to (one.globalconnect.paymentapp.transaction.installments.InstallmentContracts.forTransaction(transaction.type)
+                ?.savedDetails(transaction.paymentPlan, transaction.paymentPlanQueryResponse)?.count?.toString()?.padStart(2, '0') ?: "00"),
+            "PN" to (one.globalconnect.paymentapp.transaction.installments.InstallmentContracts.forTransaction(transaction.type)
+                ?.savedDetails(transaction.paymentPlan, transaction.paymentPlanQueryResponse)?.planName.orEmpty()),
+            "PD" to transaction.additionalHostPrintData,
+            "40" to if (transaction.type in setOf(one.globalconnect.paymentapp.transaction.TransactionType.EXTRAS_BALANCE, one.globalconnect.paymentapp.transaction.TransactionType.BALANCE) && transaction.totalAmount.isBlank()) "" else cents(transaction.totalAmount),"41" to cents(transaction.tipAmount), "42" to cents(transaction.cashbackAmount),
             "44" to cents(transaction.tax1Amount),"45" to cents(transaction.tax2Amount),
             "46" to cents(transaction.tax1DiscountAmount),
             "48" to cents(transaction.loyaltyBalancePoints),
@@ -222,7 +274,7 @@ object EcrRuntime {
             "65" to transaction.invoiceId,"78" to transaction.stan,"79" to transaction.retrievalReferenceNumber,
             "70" to active.message.command,"90" to transaction.AID,"91" to transaction.applicationLabel,
             "92" to transaction.TVR,"93" to transaction.TSI,"P2" to if(printed) "1" else "0",
-            "53" to ((active.currency ?: acquirer?.currencyCode?.toString()?.padStart(3,'0').orEmpty())+"|"+acquirer?.currencySymbol.orEmpty())))
+            "53" to ((active.currency ?: acquirer?.currencyCode?.toString()?.padStart(3,'0').orEmpty())+"|"+acquirer?.currencySymbol.orEmpty())).filter { (tag, value) -> tag != "40" || value.isNotBlank() })
     }
     private fun completed(id: String): List<EcrMessage>? {
         val stored = journal.getString(id,null)?.substringAfter('|') ?: return null
@@ -233,22 +285,23 @@ object EcrRuntime {
             }
         }
     }
-    private fun serve(socket: Socket) {
-        EcrDebugLog.event { "TCP connected peer=${socket.remoteSocketAddress}" }
-        socket.use {
-            socket.tcpNoDelay=true; socket.soTimeout=1000
-            val input=socket.getInputStream(); val output=socket.getOutputStream()
+    private fun serve(connection: EcrConnection) {
+        EcrDebugLog.event { "Connected ${connection.description}" }
+        connection.use {
+            val input=connection.input; val output=connection.output
             var awaitingId: String?=null
             var lastFrame: ByteArray?=null
             val pendingFrames = java.util.ArrayDeque<EcrMessage>()
+            var sentReply: EcrMessage? = null
             var sentAt=0L; var attempts=0
             fun send(reply: EcrMessage) {
                 EcrDebugLog.message("TX reply", reply)
+                sentReply = reply
                 val frame=EcrMessage.frame(reply.encode()); output.write(frame); output.flush()
                 lastFrame=frame; sentAt=SystemClock.elapsedRealtime(); attempts=1
             }
             try {
-                while (!socket.isClosed && settings.value.enabled) {
+                while (!connection.closed && settings.value.enabled) {
                     if (awaitingId != null && lastFrame == null && pendingFrames.isEmpty()) completed(awaitingId!!)?.let { pendingFrames.addAll(it); awaitingId=null }
                     if (lastFrame == null && pendingFrames.isNotEmpty()) send(pendingFrames.removeFirst())
                     if (lastFrame != null && SystemClock.elapsedRealtime()-sentAt > 2_000) {
@@ -259,7 +312,28 @@ object EcrRuntime {
                     val b=try { input.read() } catch (_: SocketTimeoutException) { continue }
                     if (b < 0) return
                     when(b) {
-                        6 -> { EcrDebugLog.event { "RX ACK" }; lastFrame=null }
+                        6 -> {
+                            EcrDebugLog.event { "RX ACK" }; lastFrame=null
+                            sentReply?.takeIf { it.command == "00" && it.response == "00" && !it.more }?.let { reply ->
+                                if (resetRequests.remove(journalKey(reply.copy(indicator = 0)))) scope.launch(Dispatchers.Main) {
+                                    while (isActive) {
+                                        val restarted = synchronized(this@EcrRuntime) {
+                                            if (busy || one.globalconnect.paymentapp.PendingUpdateManager.isOperationInProgress) false
+                                            else {
+                                                ready = false
+                                                unlocked.value = false; passwordRequested.value = false
+                                                app.startActivity(android.content.Intent(app, one.globalconnect.paymentapp.MainActivity::class.java)
+                                                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK))
+                                                true
+                                            }
+                                        }
+                                        if (restarted) break
+                                        delay(100)
+                                    }
+                                }
+                            }
+                            sentReply = null
+                        }
                         21 -> { EcrDebugLog.event { "RX NAK" }; sentAt=0L }
                         4 -> { EcrDebugLog.event { "RX EOT" }; return }
                         2 -> {
@@ -277,7 +351,7 @@ object EcrRuntime {
                     }
                 }
             } catch (e: Exception) { EcrDebugLog.event { "Session ended type=${e.javaClass.simpleName}" } }
-            finally { EcrDebugLog.event { "TCP disconnected peer=${socket.remoteSocketAddress}" } }
+            finally { EcrDebugLog.event { "Disconnected ${connection.description}" } }
         }
     }
 }

@@ -133,13 +133,19 @@ fun CardTransactionScreen(
                 cardReaderViewModel.startCardSearch(
                     amount = uiState.totalAmount,
                     invoiceNumber = cardTransactionViewModel.invoiceNumberForCardRead(),
-                    cashbackAmount = "0.00",
+                    cashbackAmount = cardTransactionViewModel.cashbackAmount,
+                    transactionType = when {
+                        transactionType == TransactionType.REFUND -> 0x20.toByte()
+                        transactionType == TransactionType.CASH -> 0x01.toByte()
+                        cardTransactionViewModel.cashbackAmount.toBigDecimal().signum() > 0 -> 0x09.toByte()
+                        else -> 0x00.toByte()
+                    },
                     countryCode = uiState.emvCountryCode,
                     currencyCode = uiState.emvCurrencyCode,
                     allowSwipe = !isPinMaintenance && !uiState.contactOnly,
                     allowContact = true,
                     allowContactless = cardTransactionViewModel.contactlessAllowed && !uiState.contactOnly,
-                    purpose = if (cardTransactionViewModel.installmentQueryPending) EmvTransactionPurpose.CARD_DATA_QUERY else when (transactionType) {
+                    purpose = if (cardTransactionViewModel.cardDataQuery) EmvTransactionPurpose.CARD_DATA_QUERY else when (transactionType) {
                         TransactionType.OFFLINE_PIN_CHANGE -> EmvTransactionPurpose.OFFLINE_PIN_CHANGE
                         TransactionType.PIN_UNBLOCK -> EmvTransactionPurpose.OFFLINE_PIN_UNBLOCK
                         else -> EmvTransactionPurpose.PAYMENT

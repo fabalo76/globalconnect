@@ -117,6 +117,7 @@ class CardReaderViewModel(
         allowContact: Boolean = true,
         allowContactless: Boolean = true,
         purpose: EmvTransactionPurpose = EmvTransactionPurpose.PAYMENT,
+        transactionType: Byte = 0x00,
     ) {
         Log.d(
             TAG,
@@ -166,6 +167,7 @@ class CardReaderViewModel(
             countryCode = countryCode,
             currencyCode = currencyCode,
             purpose = purpose,
+            transactionType = transactionType,
         )
 
         Log.d(TAG, "startCardSearch created request trace=${request.traceNumber}")

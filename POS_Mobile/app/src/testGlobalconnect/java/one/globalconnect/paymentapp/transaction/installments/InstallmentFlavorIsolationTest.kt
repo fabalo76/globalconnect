@@ -4,6 +4,7 @@ import org.junit.Test
 import one.globalconnect.paymentapp.transaction.TransactionType
 class InstallmentFlavorIsolationTest {
     @Test fun doesNotEnableBanpaisContract() {
+        assertNull(InstallmentContracts.extrasBalanceRequest)
         assertNull(InstallmentContracts.forTransaction(TransactionType.EXTRAS_SALE))
         assertNull(InstallmentContracts.forTransaction(TransactionType.QUOTA_SALE))
     }

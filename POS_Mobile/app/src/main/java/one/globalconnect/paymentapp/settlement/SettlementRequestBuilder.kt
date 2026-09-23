@@ -11,6 +11,7 @@ import java.util.Locale
 fun buildAllAcquirersSettlementRequest(
     database: TMSDATA,
     transactions: List<Transaction>,
+    includeEmpty: Boolean = false,
 ): SettlementRequest? {
     val acquirerOptions = buildSettlementAcquirerOptions(database).filterNot(SettlementAcquirerOption::isAll)
     if (acquirerOptions.isEmpty()) {
@@ -23,7 +24,7 @@ fun buildAllAcquirersSettlementRequest(
 
     val targets = acquirerOptions.mapNotNull { option ->
         val acquirerTransactions = groupedTransactions[option.id].orEmpty()
-        if (acquirerTransactions.isEmpty()) {
+        if (acquirerTransactions.isEmpty() && !includeEmpty) {
             null
         } else {
             SettlementTarget(

@@ -1333,5 +1333,10 @@
     <string name="installment_query_title">Query installment plans</string>
     <string name="receipt_payment_plan">Payment plan</string>
     <string name="receipt_installment_count">Installments</string>
+<string name="extras_balance_complete">Inquiry completed</string>
+<string name="installment_count_unavailable">The requested installment count is not available for this card.</string>
+<string name="extras_available_balance">Available balance</string>
+<string name="extras_balance_unavailable">Balance unavailable</string>
+    <string name="receipt_extras_available_balance">Avail:</string>
 </resources>
 

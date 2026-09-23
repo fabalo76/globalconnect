@@ -133,6 +133,8 @@ fun TransactionFinishedScreen(
 
     val amountText = when {
         isPinMaintenance -> null
+        transaction.type in setOf(TransactionType.EXTRAS_BALANCE, TransactionType.BALANCE) -> transaction.totalAmount.takeIf { it.isNotBlank() }
+            ?.let { one.globalconnect.paymentapp.utils.FormatterUtils.formatAmount(currencySymbol, it) }
         transaction.type == TransactionType.LOYALTY_BALANCE -> transaction.loyaltyBalancePoints
             .takeIf { it.isNotBlank() }
             ?.let { stringResource(R.string.loyalty_points_available, LoyaltyContract.formatPoints(it)) }
@@ -161,6 +163,7 @@ fun TransactionFinishedScreen(
                         stringResource(id = R.string.offline_pin_change_complete)
                     }
                     TransactionType.PIN_UNBLOCK -> stringResource(id = R.string.pin_unblock_complete)
+                    TransactionType.EXTRAS_BALANCE, TransactionType.BALANCE -> stringResource(R.string.extras_balance_complete)
                     else -> stringResource(id = R.string.payment_complete)
                 },
                 fontSize = 20.sp,
@@ -175,6 +178,8 @@ fun TransactionFinishedScreen(
                     TransactionType.PIN_UNBLOCK -> {
                         stringResource(id = R.string.pin_unblock_complete_detail)
                     }
+                    TransactionType.EXTRAS_BALANCE, TransactionType.BALANCE -> if (transaction.totalAmount.isNotBlank()) stringResource(R.string.extras_available_balance)
+                        else transaction.additionalHostPrintData.ifBlank { stringResource(R.string.extras_balance_unavailable) }
                     else -> stringResource(id = R.string.thank_you_payment)
                 },
                 fontSize = 16.sp,

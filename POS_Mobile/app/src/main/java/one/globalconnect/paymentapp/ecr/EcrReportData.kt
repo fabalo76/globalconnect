@@ -9,11 +9,12 @@ import java.time.format.DateTimeFormatter
 /** Wire-only formatting shared by report delivery and its protocol tests. */
 internal object EcrReportData {
     fun validate(request: EcrMessage) {
-        require(request.command in setOf("P1", "P2", "P3") && request.indicator == 0 &&
+        require(request.command in setOf("P1", "P2", "P3", "P4", "P5") && request.indicator == 0 &&
             request.response == "00" && !request.more)
-        require(request.fields.keys.all { it in if (request.command == "P1") setOf("80", "65", "P1") else setOf("80", "P1") })
+        require(request.fields.keys.all { it in if (request.command == "P1") setOf("80", "65", "P1") else if (request.command in setOf("P4", "P5")) setOf("80", "P1", "AI") else setOf("80", "P1") })
         require(!request.fields["80"].isNullOrBlank() && request.fields.getValue("80").length <= 64)
         require(request.fields["P1"] in listOf(null, "0", "1"))
+        request.fields["AI"]?.let { require(it.isNotBlank() && it.length <= 64) }
         request.fields["65"]?.let { require(it.length in 1..12 && it.all(Char::isDigit)) }
     }
 
@@ -44,7 +45,7 @@ internal object EcrReportData {
             "04" to date.format(DateTimeFormatter.ofPattern("HHmmss")), "05" to entry(transaction),
             "16" to acquirer?.terminalId.orEmpty(), "17" to acquirer?.merchantId.orEmpty(),
             "30" to transaction.masked_cardNumber, "40" to cents(transaction.totalAmount),
-            "41" to cents(transaction.tipAmount), "44" to cents(transaction.tax1Amount),
+            "41" to cents(transaction.tipAmount), "42" to cents(transaction.cashbackAmount), "44" to cents(transaction.tax1Amount),
             "45" to cents(transaction.tax2Amount), "46" to cents(transaction.tax1DiscountAmount),
             "53" to (acquirer?.currencyCode?.toString()?.padStart(3, '0').orEmpty() + "|" + acquirer?.currencySymbol.orEmpty()),
             "65" to transaction.invoiceId, "66" to transaction.folioNumber, "70" to type(transaction),
@@ -74,7 +75,7 @@ internal object EcrReportData {
         }.joinToString("|")
     }
 
-    fun reportFields(transactions: List<Transaction>, database: TMSDATA, audit: Boolean): List<Map<String, String>> {
+    fun reportFields(transactions: List<Transaction>, database: TMSDATA, audit: Boolean, batchNumbers: Map<String, String> = emptyMap()): List<Map<String, String>> {
         val eligible = transactions.filter { it.type != TransactionType.CHECKIN }
         val acquirers = database.Acquirer.associateBy { it.acquirer_id }
         val fields = mutableListOf<Map<String, String>>()
@@ -90,7 +91,7 @@ internal object EcrReportData {
             val acquirer = acquirers[record.id]
             fields.add(mapOf("DC" to text(record.name), "16" to text(acquirer?.terminalId.orEmpty()),
                 "17" to text(acquirer?.merchantId.orEmpty())))
-            chunks("AT", text(record.name) + "|" + text(record.currencySymbol) + "||" + metrics(record) + "^")
+            chunks("AT", text(record.name) + "|" + text(record.currencySymbol) + "|" + text(batchNumbers[record.id].orEmpty()) + "|" + metrics(record) + "^")
         }
         if (audit) transactions.sortedBy { it.id }.forEach { transaction ->
             chunks("TD", listOf(timestamp(transaction).format(DateTimeFormatter.ofPattern("yyyyMMddHHmmss")),
@@ -100,6 +101,35 @@ internal object EcrReportData {
                 cents(transaction.tax1Amount), cents(transaction.tax1DiscountAmount), cents(transaction.tax2Amount),
                 cents(transaction.tipAmount), transaction.folioNumber,
                 acquirers[transaction.acquirerId]?.acquirerName.orEmpty()).joinToString("|") { text(it) } + "^")
+        }
+        fields.addAll(installmentFields(eligible, database, batchNumbers))
+        return fields
+    }
+
+    fun installmentFields(transactions: List<Transaction>, database: TMSDATA,
+        batchNumbers: Map<String, String> = emptyMap()): List<Map<String, String>> {
+        val acquirers = database.Acquirer.associateBy { it.acquirer_id }
+        val rows = transactions.filter { it.returnStatus == ReturnStatus.None && it.type in setOf(TransactionType.QUOTA_SALE, TransactionType.EXTRAS_SALE) }
+        fun metrics(rows: List<Transaction>): String = rows.groupBy {
+            val details = one.globalconnect.paymentapp.transaction.installments.InstallmentContracts.forTransaction(it.type)
+                ?.savedDetails(it.paymentPlan, it.paymentPlanQueryResponse)
+            val count = details?.count ?: it.paymentPlan.take(2).toIntOrNull() ?: 0
+            (if (it.type == TransactionType.QUOTA_SALE) "Q" else "E") + count.toString().padStart(2, '0')
+        }.toSortedMap().map { (key, group) ->
+            require(group.size <= 999)
+            val amount = cents(group.sumOf { it.totalAmount.toBigDecimal() }.toPlainString()).padStart(12, '0')
+            require(amount.length == 12)
+            key + group.size.toString().padStart(3, '0') + amount
+        }.joinToString("|")
+        val fields = mutableListOf<Map<String, String>>()
+        fun add(tag: String, row: String) { (row + "^").chunked(900).forEach { fields.add(mapOf(tag to it)) } }
+        rows.groupBy { acquirers[it.acquirerId]?.currencyCode }.forEach { (_, group) ->
+            add("TQ", text(acquirers[group.first().acquirerId]?.currencySymbol.orEmpty()) + "|" + metrics(group))
+        }
+        rows.groupBy { it.acquirerId }.forEach { (id, group) ->
+            val acquirer = acquirers[id]
+            add("AQ", text(acquirer?.acquirerName.orEmpty()) + "|" + text(acquirer?.currencySymbol.orEmpty()) + "|" +
+                text(batchNumbers[id].orEmpty()) + "|" + metrics(group))
         }
         return fields
     }

@@ -1,17 +1,29 @@
 <resources>
-    <string name="ecr_report_in_progress">Preparando reporte ECR…</string>
+    <string name="ecr_report_in_progress">Preparando reporte ECR...</string>
     <string name="ecr_disabled">ECR deshabilitado</string>
     <string name="ecr_waiting">Esperando ECR en el puerto TCP %1$d</string>
-    <string name="ecr_listen_failed">No se puede abrir el puerto TCP %1$d. Revise la configuración ECR.</string>
+    <string name="ecr_listen_failed">No se puede abrir el puerto TCP %1$d. Revise la configuraciÃ³n ECR.</string>
     <string name="ecr_sale_in_progress">Venta en proceso</string>
-    <string name="ecr_reconcile">No se pudo guardar el resultado ECR. Se requiere conciliación.</string>
+    <string name="ecr_reconcile">No se pudo guardar el resultado ECR. Se requiere conciliaciÃ³n.</string>
     <string name="ecr_ready">Listo para ECR</string>
     <string name="ecr_enable">Habilitar ECR</string>
     <string name="ecr_port">Puerto TCP de escucha</string>
     <string name="ecr_kiosk">Modo quiosco ECR</string>
-    <string name="ecr_serial_pending">USB y RS232 están reservados para la próxima fase. Use TCP/IP en esta versión.</string>
-    <string name="ecr_unlock_help">Para desbloquear, presione Borrar 10 veces seguidas o toque la pantalla ECR 10 veces en un dispositivo sin teclado. Se requiere la contraseña de configuración. El modo quiosco vuelve tras 1 minuto sin actividad.</string>
-    <string name="ecr_saved">Configuración ECR guardada</string>
-    <string name="ecr_save_failed">No se pudo guardar la configuración ECR</string>
-    <string name="ecr_save">Guardar configuración ECR</string>
+    <string name="ecr_unlock_help">Para desbloquear, presione Borrar 10 veces seguidas o toque la pantalla ECR 10 veces en un dispositivo sin teclado. Se requiere la contraseÃ±a de configuraciÃ³n. El modo quiosco vuelve tras 1 minuto sin actividad.</string>
+    <string name="ecr_saved">ConfiguraciÃ³n ECR guardada</string>
+    <string name="ecr_save_failed">No se pudo guardar la configuraciÃ³n ECR</string>
+    <string name="ecr_save">Guardar ECR</string>
+    <string name="ecr_waiting_endpoint">Esperando ECR en TCP\n%1$s</string>
+    <string name="ecr_waiting_no_address">Esperando red Â· Puerto TCP %1$d</string>
+    <string name="ecr_settlement_success">Cierre completado</string>
+    <string name="ecr_settlement_failed">Error en el cierre</string>
+    <string name="ecr_settlement_unknown">Resultado del cierre desconocido. Verifique el lote antes de reintentar.</string>
+    <string name="ecr_settlement_print_failed">Cierre completado, pero no se pudo imprimir el recibo.</string>
+    <string name="ecr_serial_waiting">Esperando ECR en %1$s puerto %2$d @ %3$d</string>
+    <string name="ecr_serial_port">Puerto serie del dispositivo</string>
+    <string name="ecr_baud_rate">Velocidad (8N1)</string>
+    <string name="ecr_hotel_reference_invalid">No existe una entrada correspondiente a este folio y tarjeta.</string>
+    <string name="ecr_serial_failed">No se puede abrir %1$s puerto %2$d. Verifique el puerto y cable; reintentando.</string>
+    <string name="ecr_connection_type">Tipo de conexiÃ³n</string>
+    <string name="ecr_fixed_usb_port">Puerto USB CDC: %1$d (fijo)</string>
 </resources>

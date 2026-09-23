@@ -51,6 +51,13 @@ class BanpaisInstallmentContractTest {
         assertNull(restored.copy(paymentPlan = "").installmentDetails())
     }
 
+    @Test fun extrasBalanceIsNonFinancial() {
+        assertEquals("0100000000000000000000B", InstallmentContracts.extrasBalanceRequest)
+        val config = requireNotNull(TransactionConfigRegistry.configFor("ExtrasBalance"))
+        assertFalse(config.hasAttribute(TransactionAttribute.WRITES_RECORD))
+        assertFalse(config.hasAttribute(TransactionAttribute.NEEDS_REVERSAL))
+    }
+
     @Test fun rejectsMalformedEmptyAndDuplicatePlansOrCounts() {
         listOf("", response.dropLast(1), response + response,
             "EXT1" + "PLAN".padEnd(25) + "00",

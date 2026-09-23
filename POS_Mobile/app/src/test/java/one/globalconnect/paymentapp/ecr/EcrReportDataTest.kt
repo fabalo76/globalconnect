@@ -14,9 +14,14 @@ class EcrReportDataTest {
         cardNumber = "1234567890123456", masked_cardNumber = "************3456")
     private fun request(command: String) = EcrMessage(command, fields = mapOf("80" to "report-1", "P1" to "0"))
 
+    @Test fun settlementTotalsCarryTheBatchCapturedBeforeClosing() {
+        val fields = EcrReportData.reportFields(listOf(sale()), database, false, mapOf("A" to "000123"))
+        assertTrue(fields.mapNotNull { it["AT"] }.joinToString("").startsWith("Bank|USD|000123|"))
+    }
+
     @Test fun validatesCommandsAndRejectsExtraOrMalformedFields() {
-        listOf("P1", "P2", "P3").forEach { EcrReportData.validate(request(it)) }
-        for (request in listOf(request("P4"), request("P1").copy(fields = mapOf("80" to "r", "65" to "bad")),
+        listOf("P1", "P2", "P3", "P4", "P5").forEach { EcrReportData.validate(request(it)) }
+        for (request in listOf(request("P6"), request("P1").copy(fields = mapOf("80" to "r", "65" to "bad")),
             request("P2").copy(fields = mapOf("80" to "r", "65" to "123")), request("P3").copy(more = true))) {
             assertThrows(IllegalArgumentException::class.java) { EcrReportData.validate(request) }
         }

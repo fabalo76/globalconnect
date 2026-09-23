@@ -228,6 +228,7 @@ class TransactionReturnProcessor(
                 TxnInterface = transaction.cardEntryMethod,
                 FolioNumber = transaction.folioNumber,
                 OriginalTransactionId = transaction.originalTransactionId,
+                CashbackAmt = transaction.cashbackAmount,
                 PaymentPlan = transaction.paymentPlan,
                 PaymentPlanQueryResponse = transaction.paymentPlanQueryResponse,
             )

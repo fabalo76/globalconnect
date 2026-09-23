@@ -129,7 +129,7 @@ fun SettlementProcessingDialog(
 }
 
 @Composable
-private fun SettlementResultsContent(
+internal fun SettlementResultsContent(
     state: SettlementResultsUiState,
     modifier: Modifier = Modifier,
 ) {

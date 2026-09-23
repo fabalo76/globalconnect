@@ -1319,6 +1319,11 @@
     <string name="installment_same_card">Presente la misma tarjeta utilizada para consultar los planes.</string>
     <string name="installment_disabled">Las transacciones en cuotas no están habilitadas en la configuración del terminal.</string>
     <string name="installment_query_title">Consulta de planes</string>
-    <string name="receipt_payment_plan">Plan de pago</string>
+    <string name="receipt_payment_plan">Plan</string>
     <string name="receipt_installment_count">Cuotas</string>
+<string name="extras_balance_complete">Consulta completada</string>
+<string name="installment_count_unavailable">La cantidad de cuotas solicitada no está disponible para esta tarjeta.</string>
+<string name="extras_available_balance">Saldo disponible</string>
+<string name="extras_balance_unavailable">Saldo no disponible</string>
+    <string name="receipt_extras_available_balance">Disp:</string>
 </resources>

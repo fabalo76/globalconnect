@@ -215,6 +215,7 @@ private fun updateTotals(record: TotalsRecord, transaction: Transaction) {
                 record.voidedSales.add(totalAmount.negate(), includeZeroAmount = true)
             } else {
                 record.sales.add(totalAmount, includeZeroAmount = true)
+                record.cashback.add(transaction.cashbackAmount.toAmount())
                 record.tax1.add(tax1Amount)
                 record.tax1Discount.add(tax1DiscountAmount)
                 record.tax2.add(tax2Amount)

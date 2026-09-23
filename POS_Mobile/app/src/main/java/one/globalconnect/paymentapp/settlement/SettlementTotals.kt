@@ -54,6 +54,7 @@ fun calculateReconciliationTotals(transactions: List<Transaction>): Reconciliati
                     totalsRecord.voidedSales.addTransaction(transaction, includeZeroAmount = true)
                 } else {
                     totalsRecord.sales.addTransaction(transaction)
+                    totalsRecord.cashback.add(parseAmount(transaction.cashbackAmount))
                 }
             }
 

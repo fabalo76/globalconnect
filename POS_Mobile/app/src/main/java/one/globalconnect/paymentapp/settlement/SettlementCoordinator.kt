@@ -647,7 +647,8 @@ class SettlementCoordinator(
             discountAmount = transaction.tax1DiscountAmount,
         )
         transLog.Tax2Amt = transaction.tax2Amount.ifBlank { "0.00" }
-        transLog.TipAmt = transaction.tipAmount.ifBlank { "0.00" }
+        transLog.TipAmt = transaction.tipAmount
+        transLog.CashbackAmt = transaction.cashbackAmount.ifBlank { "0.00" }
         transLog.PaymentPlan = transaction.paymentPlan
         transLog.ForceOnline = ""
         transLog.InvoiceId = transaction.invoiceId

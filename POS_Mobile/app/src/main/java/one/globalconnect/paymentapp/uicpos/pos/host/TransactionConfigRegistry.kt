@@ -22,6 +22,7 @@ object TransactionConfigRegistry {
         TIP_ADJUST(code = "TipAdj", legacyTransaction = LegacyTransaction.SALE_COMP),
         PAYMENT(code = "Payment", legacyTransaction = LegacyTransaction.PAYMENT),
         LOYALTY_SALE(code = "LoyaltySale", legacyTransaction = LegacyTransaction.POINT_SALE),
+        BALANCE(code = "Balance", legacyTransaction = LegacyTransaction.BALANCE),
         LOYALTY_BALANCE(code = "LoyaltyBalance", legacyTransaction = LegacyTransaction.POINT_BALANCE),
         INSTALLMENT_QUERY(code = "InstallmentQuery", legacyTransaction = LegacyTransaction.INSTALLMENT_QUERY),
         EXTRAS_QUERY(code = "ExtrasQuery", legacyTransaction = LegacyTransaction.EXTRAS_QUERY),

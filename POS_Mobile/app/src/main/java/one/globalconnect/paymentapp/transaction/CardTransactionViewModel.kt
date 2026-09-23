@@ -1,5 +1,7 @@
 package one.globalconnect.paymentapp.transaction
 
+import kotlinx.coroutines.flow.first
+import one.globalconnect.paymentapp.security.EncryptionUtil
 import one.globalconnect.paymentapp.ecr.EcrRuntime
 import android.util.Log
 import one.globalconnect.paymentapp.transaction.installments.*
@@ -110,8 +112,8 @@ class CardTransactionViewModel(
     private val initialTax2Amount: String = savedStateHandle[TAX2_KEY] ?: "0.00"
     private val initialTipAmount: String = savedStateHandle[TIP_KEY] ?: "0.00"
     private val folioNumber: String = savedStateHandle[FOLIO_KEY] ?: ""
-    private val originalTransactionId: String = savedStateHandle[ORIGINAL_TRANSACTION_ID_KEY] ?: ""
-    private val checkInRowId: Int? = (savedStateHandle[CHECK_IN_ID_KEY] as String?)?.toIntOrNull()
+    private var originalTransactionId: String = savedStateHandle[ORIGINAL_TRANSACTION_ID_KEY] ?: ""
+    private var checkInRowId: Int? = (savedStateHandle[CHECK_IN_ID_KEY] as String?)?.toIntOrNull()
     private val terminal: TMS_Terminal? = tmsDatabase.Terminal.firstOrNull()
     private val initialTax1Discount = Tax1DiscountCalculator.calculate(
         tax1Amount = initialTax1Amount,
@@ -124,6 +126,7 @@ class CardTransactionViewModel(
     private val installmentContract = InstallmentContracts.forTransaction(transactionType)
     var installmentQueryPending: Boolean = installmentContract != null
         private set
+    val cardDataQuery: Boolean get() = installmentQueryPending || transactionType in setOf(TransactionType.EXTRAS_BALANCE, TransactionType.BALANCE)
     private var installmentSelection: InstallmentSelection? = null
     private var installmentCardIdentity: String? = null
     private var installmentAcquirerId: String? = null
@@ -134,8 +137,10 @@ class CardTransactionViewModel(
         java.security.MessageDigest.getInstance("SHA-256").digest(it.toByteArray()).joinToString("") { byte -> "%02x".format(byte) }
     }
 
+    val cashbackAmount: String get() = ecrRequest?.cashback ?: "0.00"
+
     private var currentAmounts = PartialApprovalAmounts.fromStrings(
-        base = initialBaseAmount,
+        base = (initialBaseAmount.toBigDecimal() + cashbackAmount.toBigDecimal()).toPlainString(),
         tax1 = initialTax1Discount.discountedTaxAmountText,
         tax1Discount = initialTax1Discount.discountAmountText,
         tax2 = initialTax2Amount,
@@ -157,12 +162,15 @@ class CardTransactionViewModel(
     private val supportedTransactionTypes = setOf(
         TransactionType.SALE,
         TransactionType.REFUND,
+        TransactionType.AUTHONLY,
+        TransactionType.BALANCE,
         TransactionType.PAYMENT,
         TransactionType.CASH,
         TransactionType.LOYALTY_SALE,
         TransactionType.LOYALTY_BALANCE,
         TransactionType.QUOTA_SALE,
         TransactionType.EXTRAS_SALE,
+        TransactionType.EXTRAS_BALANCE,
         TransactionType.CHECKIN,
         TransactionType.CHECKOUT,
         TransactionType.OFFLINE_PIN_CHANGE,
@@ -219,7 +227,7 @@ class CardTransactionViewModel(
         if (installmentQueryPending) {
             currentAmounts = PartialApprovalAmounts.fromStrings("0.00", "0.00", "0.00", "0.00", "0.00")
         }
-        if (installmentContract != null && terminal?.enableInstallments != true) {
+        if ((installmentContract != null || transactionType == TransactionType.EXTRAS_BALANCE) && terminal?.enableInstallments != true) {
             showError(string(R.string.installment_disabled))
             return
         }
@@ -228,6 +236,15 @@ class CardTransactionViewModel(
                 step = CardTransactionStep.Error(string(R.string.trans_error))
             )
             return
+        }
+        if (ecrRequest != null && when (transactionType) {
+                TransactionType.REFUND -> terminal?.enableRefund != true
+                TransactionType.PAYMENT -> terminal?.enablePayment != true
+                TransactionType.CASH -> terminal?.enableCash != true
+                TransactionType.CHECKIN, TransactionType.CHECKOUT -> terminal?.enableCheckInOut != true
+                else -> false
+            }) {
+            showError(string(R.string.trans_error), "58"); return
         }
         if (ecrRequest != null && LoyaltyContract.isLoyalty(transactionType) && terminal?.enableLoyalty != true) {
             showError(string(R.string.trans_error), "58")
@@ -292,7 +309,7 @@ class CardTransactionViewModel(
             "onCardRead slot=${result.slotType} maskedPan=${result.maskedCardNumber} track2Length=${result.track2?.length}",
         )
         if (!supportedTransactionTypes.contains(transactionType)) return
-        if (installmentQueryPending && onlineResponseHandler != null) {
+        if (cardDataQuery && onlineResponseHandler != null) {
             showError(string(R.string.installment_query_invalid))
             return
         }
@@ -478,7 +495,7 @@ class CardTransactionViewModel(
         val step = _uiState.value.step as? CardTransactionStep.SelectingInstallmentPlan ?: return
         val plan = step.plans.singleOrNull { it.code == code } ?: return
         _uiState.update { it.copy(step = CardTransactionStep.SelectingInstallmentCount(plan)) }
-        startSelectionTimer()
+        if (ecrRequest?.installments != null) selectInstallmentCount(ecrRequest.installments!!) else startSelectionTimer()
     }
 
     fun selectInstallmentCount(count: Int) {
@@ -486,7 +503,9 @@ class CardTransactionViewModel(
         if (count !in step.plan.installments) return
         installmentSelection = InstallmentSelection(step.plan, count)
         _uiState.update { it.copy(step = CardTransactionStep.EnteringInstallmentAmounts) }
-        startSelectionTimer()
+        if (ecrRequest != null) {
+            submitInstallmentAmounts(ecrRequest.base, ecrRequest.tax1, ecrRequest.tax2, ecrRequest.tip)
+        } else startSelectionTimer()
     }
 
     fun submitInstallmentAmounts(base: String, tax1: String, tax2: String, tip: String) {
@@ -710,6 +729,19 @@ class CardTransactionViewModel(
         val emvOnlineContext = pendingEmvOnlineContext
         viewModelScope.launch {
             Log.d(TAG, "processTransaction coroutine started")
+            if (ecrRequest != null && transactionType == TransactionType.CHECKOUT) {
+                val candidates = transactionRepository.getAllTransactionsStream().first().filter {
+                    it.type == TransactionType.CHECKIN && it.returnStatus == ReturnStatus.None &&
+                        it.folioNumber == folioNumber && it.acquirerId == option.acquirer.AcqID &&
+                        (ecrRequest.message.fields["65"] == null || it.invoiceId.trimStart('0') == ecrRequest.message.fields["65"]!!.trimStart('0'))
+                }
+                val original = candidates.singleOrNull()
+                if (original == null || original.hashed_cardNumber != EncryptionUtil.hashPAN(extractPan(cardData).orEmpty())) {
+                    showError(string(R.string.ecr_hotel_reference_invalid), "30"); return@launch
+                }
+                checkInRowId = original.id
+                originalTransactionId = original.transactionId
+            }
             val effectiveCardData = if (transactionType == TransactionType.OFFLINE_PIN_CHANGE) {
                 captureOfflinePinChangeData(option, cardData) ?: return@launch
             } else {
@@ -843,9 +875,13 @@ class CardTransactionViewModel(
                     val plans = runCatching {
                         requireNotNull(installmentContract).parsePlans(
                             PrivateUseData63.parse(result.isoMessage.getFieldValue(63))["46"].orEmpty())
-                    }.getOrNull()
+                    }.getOrNull()?.filter { plan -> ecrRequest?.installments?.let { it in plan.installments } ?: true }
                     val identity = installmentCardIdentity(cardData)
                     val queryReference = result.isoMessage.getFieldValue(37).orEmpty().trim()
+                    if (plans != null && plans.isEmpty() && ecrRequest?.installments != null) {
+                        showError(string(R.string.installment_count_unavailable), "58")
+                        return@launch
+                    }
                     if (plans.isNullOrEmpty() || identity == null || queryReference.length != 12) {
                         showError(string(R.string.installment_query_invalid))
                         return@launch
@@ -864,7 +900,9 @@ class CardTransactionViewModel(
                             else CardTransactionStep.SelectingInstallmentPlan(plans),
                         processingStatus = null, cardData = null,
                         statusMessage = string(R.string.installment_select_count)) }
-                    startSelectionTimer()
+                    if (plans.size == 1 && ecrRequest?.installments != null) {
+                        selectInstallmentCount(ecrRequest.installments!!)
+                    } else startSelectionTimer()
                     return@launch
                 }
 
@@ -1290,6 +1328,9 @@ class CardTransactionViewModel(
                 transLog.RefNbr = installmentQueryReference
             }
         }
+        if (transactionType == TransactionType.EXTRAS_BALANCE) {
+            transLog.PaymentPlan = requireNotNull(InstallmentContracts.extrasBalanceRequest)
+        }
         transLog.AccType = "Credit"
         transLog.AcquirerId = option.acquirer.AcqID
         transLog.IssuerId = option.issuer.IssuID
@@ -1297,7 +1338,8 @@ class CardTransactionViewModel(
         transLog.CardRangeName = option.cardRange?.RangeName ?: ""
         transLog.CurrCode = sysParam.CurrCode
         transLog.TxnAmt = currentAmounts.total.moneyText()
-        transLog.BaseAmt = currentAmounts.base.moneyText()
+        transLog.BaseAmt = (currentAmounts.base - cashbackAmount.toBigDecimal()).moneyText()
+        transLog.CashbackAmt = cashbackAmount
         transLog.Tax1Amt = currentAmounts.tax1.moneyText()
         transLog.Tax1DiscountAmt = currentAmounts.tax1Discount.moneyText()
         transLog.OriginalTax1Amt = if (currentAmounts.tax1Discount.signum() > 0) {
@@ -1381,6 +1423,7 @@ class CardTransactionViewModel(
     private suspend fun awaitPartialApprovalDecision(
         allocation: PartialApprovalAllocation,
     ): Boolean {
+        if (cashbackAmount.toBigDecimal().signum() > 0) return false
         val decision = CompletableDeferred<Boolean>()
         partialApprovalDecision = decision
         _uiState.update { current ->
@@ -1445,7 +1488,7 @@ class CardTransactionViewModel(
 
     private fun applyAmountsToProcInfo(procInfo: ProcInfo, amounts: PartialApprovalAmounts) {
         procInfo.TransLog.TxnAmt = amounts.total.moneyText()
-        procInfo.TransLog.BaseAmt = amounts.base.moneyText()
+        procInfo.TransLog.BaseAmt = (amounts.base - cashbackAmount.toBigDecimal()).moneyText()
         procInfo.TransLog.Tax1Amt = amounts.tax1.moneyText()
         procInfo.TransLog.Tax1DiscountAmt = amounts.tax1Discount.moneyText()
         procInfo.TransLog.OriginalTax1Amt = if (amounts.tax1Discount.signum() > 0) {
@@ -1508,6 +1551,10 @@ class CardTransactionViewModel(
         procInfo.TransLog.AuthorizationId = procInfo.TransLog.AuthCode
         procInfo.TransLog.RefNbr = result.isoMessage.getFieldValue(37)
         procInfo.TransLog.ExternalRefNumber = result.isoMessage.getFieldValue(62)
+        if (transactionType in setOf(TransactionType.EXTRAS_BALANCE, TransactionType.BALANCE)) {
+            // Blank means unavailable, not a zero balance. Keep tag 29 as fallback.
+            procInfo.TransLog.TxnAmt = ExtrasBalance.parse(result.isoMessage.getFieldValue(4)).orEmpty()
+        }
         if (transactionType == TransactionType.LOYALTY_BALANCE) {
             procInfo.TransLog.LoyaltyBalancePoints =
                 LoyaltyContract.parseBalancePoints(result.isoMessage.getFieldValue(4)).orEmpty()
@@ -1688,10 +1735,14 @@ class CardTransactionViewModel(
     ): Boolean {
         val supported = when (type) {
             TransactionType.SALE -> acquirer.EnableSales && (!isFallback || acquirer.AllowFallBack)
+            TransactionType.BALANCE -> acquirer.EnableBalance
+            TransactionType.CHECKIN, TransactionType.CHECKOUT -> acquirer.enableCheckInOut
+            TransactionType.REFUND -> acquirer.enableRefund
             TransactionType.PAYMENT -> acquirer.EnablePayment
             TransactionType.CASH -> acquirer.EnableCash
             TransactionType.LOYALTY_SALE,
             TransactionType.LOYALTY_BALANCE -> acquirer.enableLoyalty
+            TransactionType.EXTRAS_BALANCE -> InstallmentContracts.extrasBalanceRequest != null && acquirer.enableInstallments
             TransactionType.QUOTA_SALE, TransactionType.EXTRAS_SALE ->
                 if (installmentContract != null) acquirer.enableInstallments && (!isFallback || acquirer.AllowFallBack) else true
             else -> true

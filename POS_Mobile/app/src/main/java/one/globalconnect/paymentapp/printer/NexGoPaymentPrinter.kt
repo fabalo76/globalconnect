@@ -784,6 +784,8 @@ object NexGoPaymentPrinter : PaymentPrinter {
         context: Context,
         snapshot: SettlementSnapshot,
         tmsDatabase: TMSDATA,
+        includeAudit: Boolean,
+        onPrintResult: ((Boolean) -> Unit)?,
     ) {
         val deviceEngine = APIProxy.getDeviceEngine(context)
         val printer = deviceEngine.printer
@@ -796,6 +798,7 @@ object NexGoPaymentPrinter : PaymentPrinter {
         val acquirer = tmsDatabase.Acquirer.find { it.AcqID == snapshot.acquirerId }
         if (acquirer == null) {
             Toast.makeText(context, "Error: Acquirer not found for ID ${snapshot.acquirerId}", Toast.LENGTH_LONG).show()
+            onPrintResult?.invoke(false)
             return
         }
         printHeader(context, terminal.MerchantTitle1, terminal.MerchantTitle2, terminal.MerchantTitle3, acquirer.AcqLine1, printerObject = printer, printLogo = true)
@@ -853,7 +856,7 @@ object NexGoPaymentPrinter : PaymentPrinter {
                 resources.getString(R.string.settlement_receipt_no_transactions),
                 PrintFontSize.TINY,
             )
-        } else {
+        } else if (includeAudit) {
             val (transHeaderLeft, transHeaderRight) = formatTransactionHeader(resources)
             printer.printLine(
                 transHeaderLeft,transHeaderRight,
@@ -888,6 +891,7 @@ object NexGoPaymentPrinter : PaymentPrinter {
         printer.printLine(resources.getString(R.string.settlement_receipt_end_footer), PrintFontSize.SMALL, isBold = true)
 
         val listener = OnPrintListener { result ->
+            onPrintResult?.invoke(result == SdkResult.Success)
             when (result) {
                 SdkResult.Success -> Log.d(TAG, "Settlement receipt printed successfully")
                 SdkResult.Printer_Print_Fail -> Log.e(TAG, "Settlement receipt failed: $result")
@@ -953,6 +957,17 @@ object NexGoPaymentPrinter : PaymentPrinter {
             resources.getString(R.string.settlement_receipt_amount_header),
         )
         return Pair(left,right)
+    }
+
+    private fun printLargeAmount(printer: Printer, label: String, amount: String) {
+        if (ReceiptAmountLayout.splitAmountLine(label, amount, CHARSPERLINE_LARGEFONTSIZE)) {
+            wrapPrintableText(label, CHARSPERLINE_LARGEFONTSIZE).forEach {
+                printer.appendPrnStr(it, LARGEFONTSIZE, AlignEnum.LEFT, false)
+            }
+            printer.appendPrnStr(amount, LARGEFONTSIZE, AlignEnum.RIGHT, false)
+        } else {
+            printer.appendPrnStr(label, amount, LARGEFONTSIZE, false)
+        }
     }
 
     private fun printInstallmentDetails(printer: Printer, details: InstallmentDetails?) {
@@ -1102,10 +1117,10 @@ object NexGoPaymentPrinter : PaymentPrinter {
         val receiptBaseAmount = transaction.baseAmount.ifBlank {
             transaction.subTotal.ifBlank { transaction.totalAmount }
         }
-        val tax1Present = (originalTax1Amount.toBigDecimal() > BigDecimal.ZERO) || (tmsDatabase.Terminal[0].Tax1Mandatory)
+        val tax1Present = (originalTax1Amount.toBigDecimal().signum() != 0) || (tmsDatabase.Terminal[0].Tax1Mandatory)
         val tax1DiscountPresent = (transaction.tax1DiscountAmount.toBigDecimal() > BigDecimal.ZERO)
-        val tax2Present = (transaction.tax2Amount.toBigDecimal() > BigDecimal.ZERO)
-        val tipPresent = (transaction.tipAmount.toBigDecimal() > BigDecimal.ZERO)
+        val tax2Present = ((transaction.tax2Amount.toBigDecimalOrNull() ?: BigDecimal.ZERO).signum() != 0)
+        val tipPresent = ((transaction.tipAmount.toBigDecimalOrNull() ?: BigDecimal.ZERO).signum() != 0)
 
         val deviceEngine = APIProxy.getDeviceEngine(context)
         val printer = deviceEngine.printer
@@ -1205,8 +1220,14 @@ object NexGoPaymentPrinter : PaymentPrinter {
         if (transaction.returnStatus == ReturnStatus.Voided) {
             printer.appendPrnStr(GlobalConnectPaymentApplication.Companion.instance.resources.getString(R.string.receipt_void_prefix), LARGEFONTSIZE, AlignEnum.LEFT, false)
         }
-        val isLoyaltyBalance = transaction.type == TransactionType.LOYALTY_BALANCE
+        val isLoyaltyBalance = transaction.type in setOf(TransactionType.LOYALTY_BALANCE, TransactionType.EXTRAS_BALANCE, TransactionType.BALANCE)
         val partialApproval = transaction.partialApprovalReceipt()
+        val sysParam = SysParam.getInstance()
+        val openTip = !tipPresent && transaction.type == TransactionType.SALE &&
+            transaction.returnStatus != ReturnStatus.Voided && partialApproval == null &&
+            sysParam.transactionMode == one.globalconnect.paymentapp.uicpos.pos.model.TransactionMode.Restaurant &&
+            sysParam.TipMethod == one.globalconnect.paymentapp.transaction.ONRECEIPT
+        val printTotal = ReceiptAmountLayout.needsTotal(tax1Present, tax2Present, tipPresent, openTip) || (transaction.cashbackAmount.toBigDecimalOrNull()?.signum() ?: 0) != 0
         if (partialApproval != null) {
             printer.appendPrnStr(resources.getString(R.string.receipt_partial_approved), SMALLFONTSIZE, AlignEnum.CENTER, true)
             printer.appendPrnStr(resources.getString(R.string.receipt_verify_amount), SMALLFONTSIZE, AlignEnum.CENTER, true)
@@ -1219,6 +1240,16 @@ object NexGoPaymentPrinter : PaymentPrinter {
                 AlignEnum.CENTER,
                 true,
             )
+            if (transaction.type in setOf(TransactionType.EXTRAS_BALANCE, TransactionType.BALANCE)) {
+                if (transaction.totalAmount.isNotBlank()) {
+                    printer.appendPrnStr(resources.getString(R.string.receipt_extras_available_balance),
+                        FormatterUtils.formatAmount(curSym, transaction.totalAmount), LARGEFONTSIZE, false)
+                } else {
+                    printer.appendPrnStr(transaction.additionalHostPrintData.ifBlank {
+                        resources.getString(R.string.extras_balance_unavailable)
+                    }, SMALLFONTSIZE, AlignEnum.LEFT, false)
+                }
+            }
             transaction.loyaltyBalancePoints.takeIf { it.isNotBlank() }?.let { points ->
                 printer.appendPrnStr(
                     resources.getString(R.string.loyalty_points_available, one.globalconnect.paymentapp.transaction.LoyaltyContract.formatPoints(points)),
@@ -1228,7 +1259,7 @@ object NexGoPaymentPrinter : PaymentPrinter {
                 )
             }
         } else {
-            printer.appendPrnStr(transaction.type.toStringForUsers(), FormatterUtils.formatAmount(curSym, receiptBaseAmount), LARGEFONTSIZE, false)
+            printLargeAmount(printer, transaction.type.toStringForUsers(), FormatterUtils.formatAmount(curSym, receiptBaseAmount))
         }
         if (!isLoyaltyBalance && tax1Present) {
             printer.appendPrnStr(" ${GlobalConnectPaymentApplication.Companion.instance.resources.getString(R.string.Tax).uppercase()}",
@@ -1240,10 +1271,17 @@ object NexGoPaymentPrinter : PaymentPrinter {
         }
         if (!isLoyaltyBalance && tax2Present)
             printer.appendPrnStr(" ${GlobalConnectPaymentApplication.Companion.instance.resources.getString(R.string.Tax2).uppercase()}" , FormatterUtils.formatAmount(curSym, transaction.tax2Amount), SMALLFONTSIZE, false)
+        if ((transaction.cashbackAmount.toBigDecimalOrNull()?.signum() ?: 0) != 0) {
+            printLargeAmount(printer, resources.getString(R.string.settlement_totals_cashback),
+                FormatterUtils.formatAmount(curSym, transaction.cashbackAmount))
+        }
         if (!isLoyaltyBalance && tipPresent)
             printer.appendPrnStr(" ${GlobalConnectPaymentApplication.Companion.instance.resources.getString(R.string.Tip).uppercase()}", FormatterUtils.formatAmount(curSym, transaction.tipAmount), SMALLFONTSIZE, false)
 
-        if (!isLoyaltyBalance) {
+        if (!isLoyaltyBalance && openTip) {
+            printer.appendPrnStr(resources.getString(R.string.Tip).uppercase(), "________________", SMALLFONTSIZE, false)
+        }
+        if (!isLoyaltyBalance && (printTotal || partialApproval != null)) {
             printer.appendPrnStr("-".repeat(CHARSPERLINE_SMALLFONTSIZE/3), SMALLFONTSIZE, AlignEnum.RIGHT, false)
             if (partialApproval != null) {
                 printer.appendPrnStr(resources.getString(R.string.receipt_original_amount),
@@ -1252,7 +1290,8 @@ object NexGoPaymentPrinter : PaymentPrinter {
                 printer.appendPrnStr(resources.getString(R.string.receipt_approved_amount),
                     FormatterUtils.formatAmount(curSym, partialApproval.approvedAmount), LARGEFONTSIZE, false)
             } else {
-                printer.appendPrnStr(resources.getString(R.string.Total).uppercase(), FormatterUtils.formatAmount(curSym, transaction.totalAmount), LARGEFONTSIZE, false)
+                printLargeAmount(printer, resources.getString(R.string.Total).uppercase(),
+                    if (openTip) "________________" else FormatterUtils.formatAmount(curSym, transaction.totalAmount))
             }
         }
 
@@ -1457,7 +1496,7 @@ object NexGoPaymentPrinter : PaymentPrinter {
         printInstallmentDetails(printer, data.installmentDetails)
 
         printer.appendPrnStr(" ", LARGEFONTSIZE, AlignEnum.LEFT, false)
-        printer.appendPrnStr(data.transactionTypeLabel, data.totalAmountText, LARGEFONTSIZE, false)
+        printLargeAmount(printer, data.transactionTypeLabel, data.totalAmountText)
 
         printer.appendPrnStr(
             GlobalConnectPaymentApplication.Companion.instance.getString(R.string.receipt_transaction_reversed),

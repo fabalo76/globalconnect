@@ -13,6 +13,26 @@ class EcrProtocolTest {
         assertEquals("12.34",EcrSale.from(request).base)
         assertEquals("0.00",EcrSale.from(request).tax1)
     }
+    @Test fun installmentAndExtrasBalanceRequests() {
+        for ((code, type) in listOf("32" to one.globalconnect.paymentapp.transaction.TransactionType.QUOTA_SALE,
+            "35" to one.globalconnect.paymentapp.transaction.TransactionType.EXTRAS_SALE)) {
+            val request = sale().copy(command = code, fields = sale().fields + ("47" to "06"))
+            val parsed = EcrSale.from(EcrMessage.decode(request.encode()))
+            assertEquals(type, parsed.transactionType)
+            assertEquals(6, parsed.installments)
+            assertEquals("12.34", parsed.base)
+            assertNull(EcrSale.from(request.copy(fields = request.fields + ("47" to "00"))).installments)
+            for (bad in listOf("100", "-1", "AA", "6")) {
+                assertThrows(IllegalArgumentException::class.java) { EcrSale.from(request.copy(fields = request.fields + ("47" to bad))) }
+            }
+        }
+        val balance = EcrMessage("36", fields = mapOf("80" to "BALANCE-1"))
+        assertEquals(one.globalconnect.paymentapp.transaction.TransactionType.EXTRAS_BALANCE, EcrSale.from(balance).transactionType)
+        assertEquals("0.00", EcrSale.from(balance).base)
+        assertThrows(IllegalArgumentException::class.java) { EcrSale.from(balance.copy(fields = balance.fields + ("40" to "000000000001"))) }
+        assertThrows(IllegalArgumentException::class.java) { EcrSale.from(balance.copy(fields = balance.fields + ("47" to "06"))) }
+    }
+
     @Test fun bareDeviceInformationIsTwelveBytes() {
         val request=EcrMessage("D1")
         assertEquals(12,request.encode().size)

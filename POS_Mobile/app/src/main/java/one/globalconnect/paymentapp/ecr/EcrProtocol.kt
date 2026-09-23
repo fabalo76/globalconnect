@@ -66,8 +66,22 @@ data class EcrMessage(val command: String, val response: String = "00", val indi
 
 data class EcrSale(val id: String, val base: String, val tax1: String, val tax2: String,
     val currency: String?, val printReceipt: Boolean, val message: EcrMessage) {
+    val tip: String get() = message.fields["41"]?.toBigDecimal()?.movePointLeft(2)?.toPlainString() ?: "0.00"
+    val cashback: String get() = message.fields["42"]?.toBigDecimal()?.movePointLeft(2)?.toPlainString() ?: "0.00"
+    val folio: String get() = message.fields["66"].orEmpty()
+    val installments: Int? get() = message.fields["47"]?.toIntOrNull()?.takeIf { it > 0 }
     val transactionType: one.globalconnect.paymentapp.transaction.TransactionType
         get() = when (message.command) {
+            "26" -> one.globalconnect.paymentapp.transaction.TransactionType.REFUND
+            "38" -> one.globalconnect.paymentapp.transaction.TransactionType.PAYMENT
+            "E7" -> one.globalconnect.paymentapp.transaction.TransactionType.CASH
+            "E6" -> one.globalconnect.paymentapp.transaction.TransactionType.BALANCE
+            "10" -> one.globalconnect.paymentapp.transaction.TransactionType.AUTHONLY
+            "CI" -> one.globalconnect.paymentapp.transaction.TransactionType.CHECKIN
+            "CO" -> one.globalconnect.paymentapp.transaction.TransactionType.CHECKOUT
+            "32" -> one.globalconnect.paymentapp.transaction.TransactionType.QUOTA_SALE
+            "35" -> one.globalconnect.paymentapp.transaction.TransactionType.EXTRAS_SALE
+            "34", "36" -> one.globalconnect.paymentapp.transaction.TransactionType.EXTRAS_BALANCE
             "31" -> one.globalconnect.paymentapp.transaction.TransactionType.LOYALTY_SALE
             "33" -> one.globalconnect.paymentapp.transaction.TransactionType.LOYALTY_BALANCE
             else -> one.globalconnect.paymentapp.transaction.TransactionType.SALE
@@ -75,8 +89,8 @@ data class EcrSale(val id: String, val base: String, val tax1: String, val tax2:
 
     companion object {
         fun from(message: EcrMessage): EcrSale {
-            require(message.command in setOf("20", "31", "33") && message.indicator == 0 && message.response == "00" && !message.more)
-            require(message.fields.keys.all { it in setOf("RQ","80","40","44","45","49","P1") })
+            require(message.command in setOf("20", "31", "33", "32", "35", "36", "34", "26", "38", "E7", "E6", "10", "CI", "CO") && message.indicator == 0 && message.response == "00" && !message.more)
+            require(message.fields.keys.all { it in setOf("RQ","80","40","44","45","49","P1","47","41","42","65","66","69") })
             message.validateRequestId()
             val id = message.fields["80"].orEmpty()
             require(id.isNotBlank() && id.length <= 64)
@@ -85,11 +99,21 @@ data class EcrSale(val id: String, val base: String, val tax1: String, val tax2:
                 require(value.length == 12 && value.all(Char::isDigit))
                 return BigDecimal(value).movePointLeft(2).toPlainString()
             }
-            val balance = message.command == "33"
+            message.fields["47"]?.let {
+                require(message.command in setOf("32", "35") && it.length == 2 && it.all { c -> c in '0'..'9' })
+            }
+            val balance = message.command in setOf("33", "34", "36", "E6")
+            amount("41"); amount("42")
+            require(message.command == "20" || amount("42").toBigDecimal().signum() == 0)
+            message.fields["66"]?.let { require(it.length in 1..32 && message.command in setOf("CI", "CO")) }
+            if (message.command in setOf("CI", "CO")) require(!message.fields["66"].isNullOrBlank())
+            message.fields["65"]?.let { require(message.command in setOf("26", "CO") && it.length in 1..12 && it.all(Char::isDigit)) }
+            message.fields["69"]?.let { require(message.command == "26" && it.length == 6 && it.all(Char::isDigit)) }
             val base = amount("40", !balance)
             if (balance) {
-                require(listOf(base, amount("44"), amount("45")).all { BigDecimal(it).signum() == 0 })
+                require(listOf(base, amount("44"), amount("45"), amount("41"), amount("42")).all { BigDecimal(it).signum() == 0 })
             } else require(BigDecimal(base) > BigDecimal.ZERO)
+            require(listOf(base, amount("44"), amount("45"), amount("41"), amount("42")).sumOf { it.toBigDecimal() } <= BigDecimal("9999999999.99"))
             val currency = message.fields["49"]
             require(currency == null || (currency.length == 3 && currency.all(Char::isDigit)))
             require(message.fields["P1"] in listOf(null,"0","1"))

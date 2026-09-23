@@ -18,6 +18,7 @@ enum class TransactionType {
     PAYMENT,
     LOYALTY_SALE,
     LOYALTY_BALANCE,
+    BALANCE,
     EXTRAS_SALE,
     QUOTA_SALE,
     EXTRAS_BALANCE,
@@ -102,6 +103,7 @@ fun TransactionType.toTransactionName(): String =
 
         TransactionType.PAYMENT -> stringResource(id = R.string.trans_payment)
         TransactionType.LOYALTY_SALE -> stringResource(id = R.string.trans_loyalty_sale)
+        TransactionType.BALANCE -> stringResource(id = R.string.transaction_display_balance)
         TransactionType.LOYALTY_BALANCE -> stringResource(id = R.string.trans_loyalty_balance)
         TransactionType.EXTRAS_SALE -> stringResource(id = R.string.trans_extras_sale)
         TransactionType.QUOTA_SALE -> stringResource(id = R.string.trans_quota_sale)
@@ -148,6 +150,7 @@ private val transactionTypeToCode: Map<TransactionType, TransactionCode> = mapOf
     TransactionType.PAYMENT to TransactionCode.PAYMENT,
     TransactionType.LOYALTY_SALE to TransactionCode.LOYALTY_SALE,
     TransactionType.LOYALTY_BALANCE to TransactionCode.LOYALTY_BALANCE,
+    TransactionType.BALANCE to TransactionCode.BALANCE,
     TransactionType.EXTRAS_SALE to TransactionCode.EXTRAS_SALE,
     TransactionType.QUOTA_SALE to TransactionCode.QUOTA_SALE,
     TransactionType.EXTRAS_BALANCE to TransactionCode.EXTRAS_BALANCE,
@@ -188,6 +191,7 @@ private fun TransactionType.label(): TransactionLabel =
 
         TransactionType.PAYMENT -> TransactionLabel(R.string.trans_payment, "Payment")
         TransactionType.LOYALTY_SALE -> TransactionLabel(R.string.trans_loyalty_sale, "Loyalty Sale")
+        TransactionType.BALANCE -> TransactionLabel(R.string.transaction_display_balance, "Balance")
         TransactionType.LOYALTY_BALANCE -> TransactionLabel(R.string.trans_loyalty_balance, "Loyalty Balance")
         TransactionType.EXTRAS_SALE -> TransactionLabel(R.string.trans_extras_sale, "Extras Sale")
         TransactionType.QUOTA_SALE -> TransactionLabel(R.string.trans_quota_sale, "Quota Sale")
@@ -253,6 +257,8 @@ data class Transaction(
     var tax1DiscountAmount: String = "",
     var tax2Amount: String = "",
     var tipAmount: String = "",
+    @androidx.room.ColumnInfo(defaultValue = "''")
+    val cashbackAmount: String = "",
     val cardNumber: String = "",
     val masked_cardNumber: String = "",
     val hashed_cardNumber: String = "",

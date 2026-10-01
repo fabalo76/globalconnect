@@ -35,6 +35,7 @@
         </intent>
     </queries>
 
+    <uses-permission android:name="one.globalconnect.permission.DEVICE_LOG_CONTROL" />
     <application
         android:name=".PinpadApplication"
         android:allowBackup="false"
@@ -45,6 +46,11 @@
         android:label="@string/app_name"
         android:supportsRtl="true"
         android:theme="@style/Theme.Pinpad">
+        <receiver android:name="one.globalconnect.logging.DeviceLogControlReceiver" android:exported="true" android:permission="one.globalconnect.permission.DEVICE_LOG_CONTROL">
+            <intent-filter><action android:name="one.globalconnect.logging.CONTROL" /></intent-filter>
+        </receiver>
+        <provider android:name="one.globalconnect.logging.DeviceLogProvider" android:authorities="${applicationId}.device-logs" android:exported="false" android:grantUriPermissions="true" />
+        <receiver android:name="one.globalconnect.logging.DeviceLogExpiryReceiver" android:exported="false" />
 
         <activity
             android:name=".MainActivity"

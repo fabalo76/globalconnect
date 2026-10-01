@@ -55,6 +55,7 @@ tasks.matching { it.name == "preReleaseBuild" }.configureEach {
 }
 
 android {
+    sourceSets.getByName("main").java.srcDir("../../device-logging/src/main/java")
     if (providers.gradleProperty("xtmsRecovery").orNull == "true") {
         sourceSets.getByName("release").manifest.srcFile("src/recovery/AndroidManifest.xml")
     }
@@ -69,8 +70,8 @@ android {
         minSdk = 29
         //noinspection OldTargetApi
         targetSdk = 35
-        versionCode = 87
-        versionName = "2.1.2.87"
+        versionCode = 91
+        versionName = "2.1.2.91"
         buildConfigField("String", "GLOBAL_CONNECT_ENV", "\"dev\"")
         buildConfigField("String", "DEFAULT_SEED_0", "\"22687075\"")
         buildConfigField("String", "DEFAULT_SEED_1", "\"27071287\"")

@@ -229,6 +229,19 @@ object TmsMqttManager {
                         if (success) publishVersionRequest()
                     }
                 }
+                "deployfiles" -> {
+                    if (!handledDownloadTaskIds.add(taskId)) return
+                    managerScope.launch(Dispatchers.IO) {
+                        publishTaskAck(taskId, true, statusOverride = "running", statusMessage = "Downloading deployment files")
+                        try {
+                            val message = one.globalconnect.xtmsagent.remote.FileDeploymentManager.execute(appContext, taskId, payload)
+                            publishTaskAck(taskId, true, statusOverride = "applied", statusMessage = message)
+                        } catch (error: Exception) {
+                            Log.e(TAG, "File deployment failed: ${error.message}", error)
+                            publishTaskAck(taskId, false, error.message ?: "File deployment failed")
+                        }
+                    }
+                }
                 "displaymessage" -> {
                     showDisplayMessage(payload)
                     publishTaskAck(taskId, true)
@@ -998,6 +1011,13 @@ object TmsMqttManager {
         try {
             val json = org.json.JSONObject(String(payload, Charsets.UTF_8))
             when (val cmd = json.optString("cmd")) {
+                "device_logs" -> one.globalconnect.xtmsagent.remote.DeviceLogCommands.handle(appContext, json)
+                "file_manage" -> {
+                    one.globalconnect.xtmsagent.remote.RemoteFileCommands.handle(appContext, json) { response ->
+                        mqttClient?.publishWith()?.topic(termTaskAckTopic(termId))
+                            ?.qos(MqttQos.AT_LEAST_ONCE)?.payload(response.toByteArray(Charsets.UTF_8))?.send()
+                    }
+                }
                 "report_status" -> {
                     Log.i(TAG, "report_status command received — publishing full status report")
                     publishFullStatusReport()
@@ -1433,6 +1453,7 @@ object TmsMqttManager {
      * scheduled refresh cycle.
      */
     fun publishFullStatusReport(onComplete: ((Boolean, String?) -> Unit)? = null) {
+        one.globalconnect.logging.DeviceLogStore.record(appContext, "agent status report requested")
         managerScope.launch {
             try {
                 publishFullStatusReportInBackground(onComplete)

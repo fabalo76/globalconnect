@@ -3,6 +3,10 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <permission
+        android:name="one.globalconnect.permission.DEVICE_LOG_CONTROL"
+        android:protectionLevel="signature" />
+    <uses-permission android:name="one.globalconnect.permission.DEVICE_LOG_CONTROL" />
+    <permission
         android:name="one.globalconnect.permission.PARAMETER_TASK_RESULT"
         android:protectionLevel="signature" />
 
@@ -81,6 +85,11 @@
         android:theme="@style/Theme.xTMSAgent"
         android:requestLegacyExternalStorage="true"
         tools:targetApi="34">
+        <receiver android:name="one.globalconnect.logging.DeviceLogControlReceiver" android:exported="true" android:permission="one.globalconnect.permission.DEVICE_LOG_CONTROL">
+            <intent-filter><action android:name="one.globalconnect.logging.CONTROL" /></intent-filter>
+        </receiver>
+        <provider android:name="one.globalconnect.logging.DeviceLogProvider" android:authorities="${applicationId}.device-logs" android:exported="false" android:grantUriPermissions="true" />
+        <receiver android:name="one.globalconnect.logging.DeviceLogExpiryReceiver" android:exported="false" />
         <activity
             android:name=".recovery.StartupActivity"
             android:theme="@android:style/Theme.Material.Light.NoActionBar"

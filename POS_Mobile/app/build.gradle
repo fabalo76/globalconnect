@@ -23,15 +23,16 @@ tasks.register('checkJavaVersion') {
     }
 }
 android {
+    sourceSets.main.java.srcDir '../../device-logging/src/main/java'
     namespace = "one.globalconnect.paymentapp"
     compileSdk = 36
     // Define the common version number
-    def baseVersion = "6.19"
+    def baseVersion = "6.20"
     defaultConfig {
         applicationId = "one.globalconnect.paymentapp"
         minSdk = 26
         targetSdk = 36
-        versionCode = 219
+        versionCode = 220
         versionName = "(N)$baseVersion" // Default version name
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"

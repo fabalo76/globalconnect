@@ -50,3 +50,12 @@ graphify-out/
 .graphify_incremental.json
 .graphify_uncached.txt
 .graphify_python
+
+# Local verification captures and assistant working files
+/.codex-tmp/
+/bridge/
+/tmp/
+/outputs/
+/output/
+/device-*.xml
+/device-*.png

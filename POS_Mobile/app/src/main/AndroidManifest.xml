@@ -17,6 +17,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="one.globalconnect.permission.DEVICE_LOG_CONTROL" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.VIBRATE" />
@@ -60,6 +61,11 @@
         android:theme="@style/Theme.GlobalConnectPaymentApp"
         android:networkSecurityConfig="@xml/network_security_config"
         tools:targetApi="33">
+        <receiver android:name="one.globalconnect.logging.DeviceLogControlReceiver" android:exported="true" android:permission="one.globalconnect.permission.DEVICE_LOG_CONTROL">
+            <intent-filter><action android:name="one.globalconnect.logging.CONTROL" /></intent-filter>
+        </receiver>
+        <provider android:name="one.globalconnect.logging.DeviceLogProvider" android:authorities="${applicationId}.device-logs" android:exported="false" android:grantUriPermissions="true" />
+        <receiver android:name="one.globalconnect.logging.DeviceLogExpiryReceiver" android:exported="false" />
         <activity
             android:name=".MainActivity"
             android:exported="true"

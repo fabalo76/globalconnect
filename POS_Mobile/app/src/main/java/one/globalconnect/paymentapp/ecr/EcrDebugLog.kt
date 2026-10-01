@@ -6,6 +6,7 @@ import one.globalconnect.paymentapp.BuildConfig
 /** Metadata only: never dump payloads, card data, or exception messages. */
 internal object EcrDebugLog {
     fun event(message: () -> String) {
+        one.globalconnect.logging.DeviceLogStore.record(one.globalconnect.paymentapp.GlobalConnectPaymentApplication.instance, message())
         if (BuildConfig.ENABLE_ECR_DEBUG_LOGS) Log.d("ECR", message())
     }
 

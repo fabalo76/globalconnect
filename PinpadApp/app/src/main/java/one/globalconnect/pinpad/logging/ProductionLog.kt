@@ -43,6 +43,7 @@ object ProductionLog {
         else ContextCompat.checkSelfPermission(value, Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
 
     fun record(category: String, message: String) {
+        context?.let { one.globalconnect.logging.DeviceLogStore.record(it, "$category $message") }
         if (!BuildConfig.TEMPORARY_PRODUCTION_LOG_ENABLED || context == null) return
         val now = OffsetDateTime.now()
         val safeLine = message.replace('\n', ' ').replace('\r', ' ').take(1200)

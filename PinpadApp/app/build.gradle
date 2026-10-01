@@ -5,6 +5,7 @@ plugins {
 }
 
 android {
+    sourceSets.main.java.srcDir '../../device-logging/src/main/java'
     namespace = "one.globalconnect.pinpad"
     compileSdk = 36
 
@@ -21,8 +22,8 @@ android {
         applicationId = "one.globalconnect.pinpad"
         minSdk = 26
         targetSdk = 36
-        versionCode = 160
-        versionName = "1.3.130"
+        versionCode = 161
+        versionName = "1.3.131"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         buildConfigField "String", "SERIAL_TRANSPORT", "\"SERIAL\""

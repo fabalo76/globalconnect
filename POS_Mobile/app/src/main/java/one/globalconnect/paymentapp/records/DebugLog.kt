@@ -19,6 +19,8 @@ private const val DETAILS_DELIMITER = "[END_PROCINFO]\n"
 private const val ERROR_MESSAGE_DELIMITER = "[END_ERR_MSG]"
 
 fun writeToDebugLog(procInfo: ProcInfo?, transaction: Transaction, errMessage: String) {
+    one.globalconnect.logging.DeviceLogStore.record(GlobalConnectPaymentApplication.instance,
+        "transaction processing result error=${errMessage.isNotBlank()} procedureAvailable=${procInfo != null}")
     val logFile: File = File(GlobalConnectPaymentApplication.instance.filesDir, LOG_FILE_PATH)
     if (!logFile.exists()) {
         try {

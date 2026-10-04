@@ -51,4 +51,10 @@
     <string name="firmware_battery">安裝韌體之前，請將電池充至至少百分之三十。</string>
     <string name="firmware_request_failed">終端未接受韌體更新請求。</string>
     <string name="firmware_invalid">所選檔案不是受支援的 Android OTA 韌體 ZIP。</string>
+    <string name="tms_choose_server">選擇 TMS 伺服器</string>
+    <string name="tms_server_aws">AWS 環境</string>
+    <string name="tms_server_demo">示範環境</string>
+    <string name="tms_switch_server_warning">切換伺服器會重新啟動 xTMSAgent。請只在沒有待傳送付款報告的測試終端上切換。每個伺服器使用獨立的註冊憑證。</string>
+    <string name="tms_server_not_provisioned">此伺服器尚未設定註冊憑證。</string>
+    <string name="tms_server_busy">請先完成待處理的下載、安裝及設定工作，再切換伺服器。</string>
 </resources>

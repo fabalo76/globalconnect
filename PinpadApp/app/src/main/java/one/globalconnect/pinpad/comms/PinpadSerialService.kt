@@ -31,6 +31,9 @@ import one.globalconnect.pinpad.transport.NexgoRs232Transport
 import one.globalconnect.pinpad.transport.NexgoUsbCdcTransport
 import one.globalconnect.pinpad.transport.NoOpTransport
 import one.globalconnect.pinpad.transport.TcpPinpadTransport
+import one.globalconnect.pinpad.transport.RecoveringSerialTransport
+import one.globalconnect.pinpad.transport.SerialTransportSlot
+import java.util.concurrent.Executors
 
 class PinpadSerialService : Service(), PINPADTransport.Listener {
     private lateinit var protocolHandler: PinpadProtocolHandler
@@ -39,6 +42,10 @@ class PinpadSerialService : Service(), PINPADTransport.Listener {
     private val mainHandler = Handler(Looper.getMainLooper())
     private var pendingSerialPortChangeTask: Runnable? = null
     private var currentEndpoint = ""
+    private val serialWorker = Executors.newSingleThreadScheduledExecutor { task ->
+        Thread(task, "pinpad-serial-recovery").apply { isDaemon = true }
+    }
+    private val serialDriverSlot = SerialTransportSlot()
 
     override fun onCreate() {
         super.onCreate()
@@ -90,8 +97,9 @@ class PinpadSerialService : Service(), PINPADTransport.Listener {
         pendingSerialPortChangeTask = null
         transport?.stop()
         transport = null
+        serialWorker.shutdown()
         PinpadSerialDiagnostics.stopped()
-        protocolHandler.shutdown()
+        if (::protocolHandler.isInitialized) protocolHandler.shutdown()
         super.onDestroy()
     }
 
@@ -122,7 +130,44 @@ class PinpadSerialService : Service(), PINPADTransport.Listener {
         currentEndpoint = serialEndpointDescription(app, settings)
         PinpadSerialDiagnostics.opening(currentEndpoint)
         transport?.stop()
-        disableUsbCdcWhenUnused(app, mode)
+        transport = null
+        if (mode != "IP") {
+            val endpoint = currentEndpoint
+            lateinit var recovering: RecoveringSerialTransport
+            recovering = RecoveringSerialTransport(
+                worker = serialWorker,
+                driverSlot = serialDriverSlot,
+                factory = {
+                    disableUsbCdcWhenUnused(app, mode)
+                    createTransport(app)
+                },
+                onOpened = {
+                    mainHandler.post {
+                        if (transport === recovering && recovering.isOpen) {
+                            PinpadSerialDiagnostics.opened(endpoint)
+                            PinpadTraceLog.service("serial reopened endpoint=$endpoint")
+                        }
+                    }
+                },
+                onRetry = { attempt, delay ->
+                    PinpadTraceLog.service("serial recovery endpoint=$endpoint attempt=$attempt delayMs=$delay")
+                },
+            )
+            transport = recovering
+            recovering.start(object : PINPADTransport.Listener {
+                override fun onBytesReceived(bytes: ByteArray) {
+                    this@PinpadSerialService.onBytesReceived(bytes)
+                }
+
+                override fun onTransportError(error: Throwable) {
+                    mainHandler.post {
+                        if (transport === recovering) this@PinpadSerialService.onTransportError(error)
+                    }
+                }
+            })
+            return
+        }
+        serialWorker.execute { disableUsbCdcWhenUnused(app, mode) }
         runCatching {
             createTransport(app).also { next ->
                 transport = next

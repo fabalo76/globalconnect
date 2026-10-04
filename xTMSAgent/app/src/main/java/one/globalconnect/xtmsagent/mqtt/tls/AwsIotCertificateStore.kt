@@ -27,7 +27,7 @@ private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
 
 class AwsIotCertificateStore(private val context: Context) {
 
-    private val certDir = File(context.filesDir, "aws_iot")
+    private val certDir = File(context.filesDir, one.globalconnect.xtmsagent.TmsServerProfile.storageName("aws_iot"))
     private val certificateFile = File(certDir, "device.crt")
     private val privateKeyFile = File(certDir, "device.key")
 

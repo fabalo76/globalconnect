@@ -25,23 +25,23 @@ class RemoteControlManager(
     )
     private var timeoutJob: Job? = null
     private var viewerConnected = false
-    private var client: KinesisWebRtcRemoteClient? = null
+    private var client: RemoteScreenClient? = null
 
     fun start() {
-        Log.i(TAG, "Starting Kinesis remote control session for ${config.terminalId}")
-        client = KinesisWebRtcRemoteClient(
-            context = context,
-            config = config,
-            projectionData = projectionData,
-            onViewerConnected = {
+        Log.i(TAG, "Starting remote control session provider=${config.provider} for ${config.terminalId}")
+        val connected: () -> Unit = {
+            scope.launch {
                 if (!viewerConnected) {
                     viewerConnected = true
                     timeoutJob?.cancel()
                     Log.i(TAG, "Viewer connected; timeout cancelled")
                 }
-            },
-            onSessionEnded = { scope.launch { onSessionEnded() } },
-        )
+            }
+            }
+        val ended: () -> Unit = { scope.launch { onSessionEnded() } }
+        client = if (config.provider == "standalone-relay")
+            StandaloneRemoteScreenClient(context, config, projectionData, connected, ended)
+        else KinesisWebRtcRemoteClient(context, config, projectionData, connected, ended)
         client?.start()
         startViewerTimeout()
     }

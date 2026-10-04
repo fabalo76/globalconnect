@@ -100,7 +100,7 @@ object EasyTaskStore {
     private lateinit var storeFile: File
 
     fun init(context: Context) {
-        storeFile = File(context.filesDir, STORE_FILE)
+        storeFile = File(context.filesDir, one.globalconnect.xtmsagent.TmsServerProfile.storageName(STORE_FILE))
     }
 
     /** Returns all persisted tasks. */

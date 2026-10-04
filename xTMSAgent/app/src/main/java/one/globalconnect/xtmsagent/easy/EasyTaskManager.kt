@@ -548,7 +548,7 @@ object EasyTaskManager {
 
     /** Returns the internal staging path for a downloaded easy file. */
     private fun stagingFile(context: Context, easyId: Int, fileId: Int): File {
-        val dir = File(context.filesDir, "easy_staging")
+        val dir = File(context.filesDir, one.globalconnect.xtmsagent.TmsServerProfile.storageName("easy_staging"))
         dir.mkdirs()
         return File(dir, "easy_${easyId}_${fileId}.dat")
     }

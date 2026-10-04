@@ -178,7 +178,7 @@ class PinpadJpegStore private constructor(rootDir: File) {
 
     fun setIdleLogoEnabled(op: Char): Char {
         if (op !in setOf('0', '1')) return '1'
-        if (op == '1' && idleName().isNullOrBlank()) return '2'
+        if (op == '1' && idleName()?.let { imageFile(it).isFile } != true) return '2'
         properties.setProperty(KEY_IDLE_ENABLED, op.toString())
         saveProperties()
         return '0'

@@ -10,6 +10,7 @@ import one.globalconnect.pinpad.logging.PinpadTraceLog
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.TimeUnit
 
 class NexgoUsbCdcTransport(
     deviceEngine: DeviceEngine,
@@ -22,7 +23,7 @@ class NexgoUsbCdcTransport(
     private val driver: SerialPortDriver = deviceEngine.getSerialPortDriver(portNo)
     private val platform: Platform = deviceEngine.platform
     private val running = AtomicBoolean(false)
-    private var listener: PINPADTransport.Listener? = null
+    @Volatile private var listener: PINPADTransport.Listener? = null
     private var executor: ExecutorService? = null
     private var hostDisconnected = false
     private var lastHostDisconnectedLogAt = 0L
@@ -95,6 +96,7 @@ class NexgoUsbCdcTransport(
     }
 
     override fun send(bytes: ByteArray) {
+        if (!running.get()) return
         if (!isUsbCdcEnabled()) {
             listener?.onTransportError(IllegalStateException("USB CDC write skipped because CDC is disabled"))
             return
@@ -113,10 +115,22 @@ class NexgoUsbCdcTransport(
 
     override fun stop() {
         running.set(false)
-        executor?.shutdownNow()
-        executor = null
-        runCatching { driver.disconnect() }
         listener = null
+        val reader = executor
+        try {
+            val result = driver.disconnect()
+            PinpadTraceLog.transport("USB_CDC port=$portNo disconnect result=$result")
+            check(result == SdkResult.Success || result == SdkResult.SerialPort_DisConnected ||
+                result == SdkResult.SerialPort_Port_Not_Open) {
+                "USB_CDC port=$portNo disconnect failed: $result"
+            }
+        } finally {
+            reader?.shutdownNow()
+            check(reader == null || reader.awaitTermination(2, TimeUnit.SECONDS)) {
+                "USB_CDC port=$portNo reader did not stop after disconnect"
+            }
+        }
+        executor = null
     }
 
     private fun readLoop() {
@@ -124,10 +138,10 @@ class NexgoUsbCdcTransport(
         while (running.get()) {
             val read = runCatching { driver.recv(buffer, buffer.size, READ_TIMEOUT_MS) }
                 .getOrElse { error ->
-                    listener?.onTransportError(error)
-                    running.set(false)
+                    if (running.getAndSet(false)) listener?.onTransportError(error)
                     break
                 }
+            if (!running.get()) break
             if (read > 0) {
                 if (hostDisconnected) {
                     hostDisconnected = false
@@ -142,14 +156,19 @@ class NexgoUsbCdcTransport(
                 // Keep the device endpoint alive so communication resumes when the host
                 // opens or reopens the COM port.
                 logHostDisconnected()
-                Thread.sleep(HOST_DISCONNECTED_RETRY_MS)
+                try {
+                    Thread.sleep(HOST_DISCONNECTED_RETRY_MS)
+                } catch (_: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    break
+                }
             } else if (read != 0 && read != SdkResult.SerialPort_Timeout_Receiving_Data) {
                 Log.w(TAG, "USB CDC recv returned $read")
                 PinpadTraceLog.transport("USB_CDC recv returned $read")
+                running.set(false)
                 listener?.onTransportError(
                     IllegalStateException("USB CDC receive failed on port $portNo: $read"),
                 )
-                running.set(false)
             }
         }
     }

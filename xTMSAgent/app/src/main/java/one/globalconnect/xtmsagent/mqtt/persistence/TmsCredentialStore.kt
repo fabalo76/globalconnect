@@ -24,6 +24,8 @@ private const val LEGACY_KEY_CERT_DER = "server_cert_der"
 
 class TmsCredentialStore(context: Context) {
 
+    private val profilePrefsFile = one.globalconnect.xtmsagent.TmsServerProfile.storageName(PREFS_FILE)
+
     private val prefs: SharedPreferences by lazy {
         try {
             val masterKey = MasterKey.Builder(context)
@@ -32,14 +34,14 @@ class TmsCredentialStore(context: Context) {
 
             EncryptedSharedPreferences.create(
                 context,
-                PREFS_FILE,
+                profilePrefsFile,
                 masterKey,
                 EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
                 EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
             )
         } catch (e: Exception) {
             Log.e(TAG, "EncryptedSharedPreferences unavailable; falling back to plain prefs: ${e.message}")
-            context.getSharedPreferences("${PREFS_FILE}_plain", Context.MODE_PRIVATE)
+            context.getSharedPreferences("${profilePrefsFile}_plain", Context.MODE_PRIVATE)
         }
     }
 

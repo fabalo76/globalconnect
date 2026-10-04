@@ -24,7 +24,7 @@ object ConnectionLog {
 
     fun record(message: String) {
         val dir = directory ?: return
-        val line = "${Instant.now()} ${message.replace('\n', ' ').take(600)}\n"
+        val line = "${Instant.now()} ${DiagnosticLogSanitizer.sanitize(message).take(600)}\n"
         writer.execute {
             synchronized(lock) {
                 runCatching {

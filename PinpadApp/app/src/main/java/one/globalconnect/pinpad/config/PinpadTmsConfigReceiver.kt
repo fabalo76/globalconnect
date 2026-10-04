@@ -171,11 +171,12 @@ class PinpadTmsConfigReceiver : BroadcastReceiver() {
                 check(sha256(tempFile).equals(expectedSha256, ignoreCase = true)) {
                     "Checksum mismatch for managed asset"
                 }
+                val app = context.applicationContext as one.globalconnect.pinpad.PinpadApplication
                 val success = when (kind) {
-                    AssetKind.Image -> PinpadJpegStore(context).importManagedImage(fileName, tempFile)
-                    AssetKind.Media -> PinpadMediaStore(context).importManagedMedia(fileName, tempFile)
+                    AssetKind.Image -> app.jpegStore.importManagedImage(fileName, tempFile)
+                    AssetKind.Media -> app.mediaStore.importManagedMedia(fileName, tempFile)
                 }
-                if (success) imported += 1
+                if (success) { imported += 1; app.idleMedia.refresh() }
             } catch (error: Exception) {
                 Log.w(TAG, "Managed ${kind.name.lowercase()} import failed for $fileName", error)
                 PinpadTraceLog.device(

@@ -6,6 +6,7 @@ import com.hivemq.client.mqtt.mqtt3.Mqtt3Client
 import com.hivemq.client.mqtt.mqtt3.message.connect.connack.Mqtt3ConnAck
 import com.hivemq.client.mqtt.lifecycle.MqttClientDisconnectedContext
 import one.globalconnect.xtmsagent.TMSFunc
+import one.globalconnect.xtmsagent.TmsServerProfile
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.TimeUnit
 import javax.net.ssl.KeyManagerFactory
@@ -51,7 +52,7 @@ fun buildAwsIotMqttClient(
         .identifier(termId)
         .transportConfig()
             .serverHost(brokerHost)
-            .serverPort(TMSFunc.mqttCfg.mqtt_port)
+            .serverPort(if (TmsServerProfile.current(TMSFunc.tmsCfg) == TmsServerProfile.DEMO) 443 else TMSFunc.mqttCfg.mqtt_port)
             .socketConnectTimeout(SOCKET_CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
             .mqttConnectTimeout(MQTT_CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
             .sslConfig()
@@ -61,7 +62,7 @@ fun buildAwsIotMqttClient(
                 .applySslConfig()
             .applyTransportConfig()
         .addConnectedListener {
-            Log.i(TAG, "AWS IoT MQTT connected (clientId=$termId)")
+            Log.i(TAG, "TMS MQTT connected (clientId=$termId)")
         }
         .addDisconnectedListener { event ->
             onDisconnected(event)

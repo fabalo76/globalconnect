@@ -10,6 +10,58 @@ namespace PinpadMediaManager.Tests;
 
 public sealed class PinpadProtocolTests
 {
+    [Theory]
+    [InlineData(-1, "Nexgo generic failure")]
+    [InlineData(-8011, "Nexgo SDK error")]
+    public async Task ContactlessSdkFailureIsDecodedWithoutSendingHostApproval(int sdkResult, string description)
+    {
+        var payload = $"11{sdkResult:X8}";
+        using var transport = new ScriptedTransport(command => command switch
+        {
+            "T61" => PinpadFrame.Ascii(PinpadFrameType.Transaction, "T62", payload),
+            "T63" => PinpadFrame.Ascii(PinpadFrameType.Transaction, "T64",
+                $"1{PinpadControl.Sub}9F34{PinpadControl.Fs}03{PinpadControl.Fs}1F0302"),
+            "Q2" => PinpadFrame.Ascii(PinpadFrameType.Transaction, "Q2", ""),
+            _ => throw new InvalidOperationException($"Unexpected command after failure: {command}"),
+        });
+        transport.Open("TEST", 115_200);
+        using var client = new PinpadClient(transport);
+
+        var result = await client.RunA10ContactlessTransactionAsync(A10EmvTransactionRequest.Default);
+
+        Assert.Equal($"{description} ({sdkResult}, 0x{sdkResult:X8}; terminal reason 1)", result.Status);
+        Assert.False(result.Approved);
+        Assert.Equal(payload, result.InitialResponse);
+        Assert.Equal(payload, result.FinalResponse);
+        Assert.Empty(result.OnlineAuthorizationData);
+        Assert.Equal("1F0302", result.Tags["9F34"]);
+        Assert.Equal(new[] { "T61", "T63", "Q2" }, transport.Writes.Where(w => w.Length > 1)
+            .Select(w => PinpadFrameCodec.Decode(w).CommandId));
+    }
+
+    [Theory]
+    [InlineData("0Y1", "Offline Approved", true)]
+    [InlineData("0Z1", "Offline Declined", false)]
+    [InlineData("11", "11", false)]
+    [InlineData("11NOTHEX!!", "Error (11NOTHEX!!)", false)]
+    public async Task ContactlessOutcomeKeepsNonSdkResponsesIntact(string payload, string status, bool approved)
+    {
+        using var transport = new ScriptedTransport(command => command switch
+        {
+            "T61" => PinpadFrame.Ascii(PinpadFrameType.Transaction, "T62", payload),
+            "T63" => PinpadFrame.Ascii(PinpadFrameType.Transaction, "T64", "0"),
+            "Q2" => PinpadFrame.Ascii(PinpadFrameType.Transaction, "Q2", ""),
+            _ => throw new InvalidOperationException(command),
+        });
+        transport.Open("TEST", 115_200);
+        using var client = new PinpadClient(transport);
+
+        var result = await client.RunA10ContactlessTransactionAsync(A10EmvTransactionRequest.Default);
+
+        Assert.Equal(status, result.Status);
+        Assert.Equal(approved, result.Approved);
+    }
+
     [Fact]
     public void LanDiscoveryResponseParsesAdvertisedEndpoint()
     {

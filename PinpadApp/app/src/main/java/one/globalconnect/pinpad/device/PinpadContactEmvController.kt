@@ -1041,7 +1041,7 @@ class PinpadContactEmvController(
             }
 
             override fun onTransInitBeforeGPO() {
-                PinpadTraceLog.device(
+                PinpadTraceLog.emvOutcome(
                     "EMV_STEP $sourceCommand onTransInitBeforeGPO " +
                         "4F=${kernelTlvHex(0x4F)} 84=${kernelTlvHex(0x84)} " +
                         "50=${kernelTlvHex(0x50)} 9F12=${kernelTlvHex(0x9F, 0x12)}",
@@ -1074,7 +1074,7 @@ class PinpadContactEmvController(
             }
 
             override fun onCardHolderInputPin(isOnlinePin: Boolean, leftTimes: Int) {
-                PinpadTraceLog.device(
+                PinpadTraceLog.emvOutcome(
                     "EMV_STEP $sourceCommand onCardHolderInputPin online=$isOnlinePin left=$leftTimes scheme=${request.pinScheme}",
                 )
                 if (isOnlinePin) {
@@ -1135,7 +1135,7 @@ class PinpadContactEmvController(
                     return
                 }
                 onlineAuthorizationPending.set(true)
-                PinpadTraceLog.device(
+                PinpadTraceLog.emvOutcome(
                     "EMV_STEP $sourceCommand onOnlineProc onlineTlvChars=${onlineAuthorizationTlvHex.length} " +
                         "onlinePinTlvChars=${onlinePinTlvHex.length}",
                 )
@@ -1156,8 +1156,13 @@ class PinpadContactEmvController(
             }
 
             override fun onFinish(resultCode: Int, processResult: EmvProcessResultEntity?) {
-                PinpadTraceLog.device(
+                PinpadTraceLog.emvOutcome(
                     "EMV_STEP $sourceCommand onFinish result=${NexgoSdkResultNames.format(resultCode)} " +
+                        "entryMode=$entryMode hostResponse=${lastOnlineResponseCode ?: "none"} " +
+                        "95=${kernelTlvHex(0x95).orEmpty()} 9B=${kernelTlvHex(0x9B).orEmpty()} " +
+                        "9F34=${kernelTlvHex(0x9F, 0x34).orEmpty()} " +
+                        "9F27=${kernelTlvHex(0x9F, 0x27).orEmpty()} " +
+                        "cryptogramPresent=${!kernelTlvHex(0x9F, 0x26).isNullOrBlank()} " +
                         "scriptBytes=${processResult?.scriptResult?.size ?: 0}",
                 )
                 val data = mergeTlvs(
@@ -1185,9 +1190,10 @@ class PinpadContactEmvController(
             Log.w(TAG, "Unable to start $sourceCommand EMV transaction", it)
             PinpadTraceLog.device("EMV $sourceCommand emvProcess failed=${it.message}")
         }.getOrDefault(SdkResult.Fail)
-        PinpadTraceLog.device(
+        PinpadTraceLog.emvOutcome(
             "EMV $sourceCommand emvProcess result=${NexgoSdkResultNames.format(result)} " +
-                "trace=${config.traceNo} amount=${config.transAmount}",
+                "trace=${config.traceNo} amount=${config.transAmount} entryMode=$entryMode " +
+                "country=${config.countryCode} currency=${config.currencyCode}",
         )
         return result == SdkResult.Success
     }

@@ -956,6 +956,7 @@ object AwsDeviceDownloadManager {
     private fun scheduleApply(context: Context, taskId: String, effectiveAt: Instant) {
         val delayMs = (effectiveAt.toEpochMilli() - System.currentTimeMillis()).coerceAtLeast(0L)
         val request = OneTimeWorkRequestBuilder<AwsTaskApplyWorker>()
+            .addTag("TMS_SERVER_WORK")
             .setInitialDelay(delayMs, TimeUnit.MILLISECONDS)
             .setInputData(workDataOf(AwsTaskApplyWorker.KEY_TASK_ID to taskId))
             .build()
@@ -973,7 +974,7 @@ object AwsDeviceDownloadManager {
 
     private fun taskDirectory(context: Context, taskId: String): File {
         val safeTaskId = taskId.replace(Regex("""[^A-Za-z0-9._-]"""), "_")
-        return File(context.filesDir, "aws_tasks/$safeTaskId")
+        return File(File(context.filesDir, one.globalconnect.xtmsagent.TmsServerProfile.storageName("aws_tasks")), safeTaskId)
     }
 
     private fun metadataFile(context: Context, taskId: String) = File(taskDirectory(context, taskId), "task.json")

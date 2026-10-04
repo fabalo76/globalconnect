@@ -621,7 +621,7 @@ class PINPADSessionControllerTest {
         assertEquals(PINPADControl.ACK, j7Responses[0].single())
         val j7 = assertIs<PINPADFrameCodec.DecodeResult.Valid>(codec.decode(j7Responses[1]))
         assertEquals("J7", j7.frame.commandId)
-        assertEquals("0", j7.frame.payloadAscii)
+        assertEquals("2", j7.frame.payloadAscii)
         val j7FinalResponses = controller.onInbound(PINPADInbound.Control(PINPADControl.ACK))
         assertTrue(j7FinalResponses.isEmpty())
 
@@ -631,7 +631,7 @@ class PINPADSessionControllerTest {
         assertEquals(PINPADControl.ACK, j8Responses[0].single())
         val j8 = assertIs<PINPADFrameCodec.DecodeResult.Valid>(codec.decode(j8Responses[1]))
         assertEquals("J8", j8.frame.commandId)
-        assertEquals("0", j8.frame.payloadAscii)
+        assertEquals("2", j8.frame.payloadAscii)
         val finalResponses = controller.onInbound(PINPADInbound.Control(PINPADControl.ACK))
         assertTrue(finalResponses.isEmpty())
     }

@@ -105,7 +105,7 @@ class ApplicationLicensingService : Service() {
             val registered = ApplicationLicenseBroker.register(requestId) { response ->
                 val responseJson = runCatching { JSONObject(response) }.getOrNull()
                 if (responseJson?.optBoolean("success") == true) {
-                    getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(packageName, true).apply()
+                    getSharedPreferences(one.globalconnect.xtmsagent.TmsServerProfile.storageName(PREFS), MODE_PRIVATE).edit().putBoolean(packageName, true).apply()
                     val certificate = responseJson.optJSONObject(KEY_CERTIFICATE)?.toString()
                     if (keyAlias.isNotBlank() && certificate != null && !credentialStore.storeLicenseCertificate(
                             applicationCode = applicationCode,
@@ -229,7 +229,7 @@ class ApplicationLicensingService : Service() {
         packageManager.getPackagesForUid(uid)?.contains(packageName) == true
 
     private fun isRegisteredPackage(packageName: String): Boolean =
-        getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(packageName, false)
+        getSharedPreferences(one.globalconnect.xtmsagent.TmsServerProfile.storageName(PREFS), MODE_PRIVATE).getBoolean(packageName, false)
 
     private fun applyKioskMode(locked: Boolean) {
         KioskModeController.setLocked(this, locked)

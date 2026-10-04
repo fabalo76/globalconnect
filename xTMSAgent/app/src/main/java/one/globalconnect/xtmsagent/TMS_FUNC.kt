@@ -87,6 +87,14 @@ object TMSFunc {
         } ?: return false
 
         cfgLastModify = fCfg.lastModified()
+        // A launcher imported from another instance cannot change the operator's selected server.
+        MainActivity.instance?.let { activity ->
+            val profiles = TmsServerProfileStore(activity.applicationContext)
+            profiles.active()?.let { selected ->
+                data.tms = selected.copy(sn = data.tms.sn)
+                data.mqtt.mqtt_port = profiles.mqttPort(TmsServerProfile.current(selected))
+            }
+        }
         MainActivity.stTheme = data.theme
         mqttCfg = data.mqtt
         tmsCfg = data.tms
@@ -116,12 +124,14 @@ object TMSFunc {
         data.tms.resp_timeout = data.tms.resp_timeout.coerceIn(1, 600)
         data.tms.attempt_counter = data.tms.attempt_counter.coerceIn(1, 20)
         data.tms.download_credential_id = data.tms.download_credential_id.trim()
-        if (data.tms.download_secret.isBlank() && BuildConfig.DOWNLOAD_CREDENTIAL_SECRET.isNotBlank()) {
+        if (TmsServerProfile.current(data.tms) == TmsServerProfile.AWS &&
+            data.tms.download_secret.isBlank() && BuildConfig.DOWNLOAD_CREDENTIAL_SECRET.isNotBlank()) {
             data.tms.download_credential_id = BuildConfig.DOWNLOAD_CREDENTIAL_ID
             data.tms.download_secret = BuildConfig.DOWNLOAD_CREDENTIAL_SECRET
         }
         data.tms.sn = serialNumber.trim()
-        data.mqtt.mqtt_port = normalizePort(data.mqtt.mqtt_port, 8883)
+        data.mqtt.mqtt_port = if (TmsServerProfile.current(data.tms) == TmsServerProfile.DEMO) 443
+            else normalizePort(data.mqtt.mqtt_port, 8883)
         data.mqtt.keepalive = data.mqtt.keepalive.coerceIn(30, 3600)
         data.mqtt.probe_timeout = data.mqtt.probe_timeout.coerceIn(1_000, 120_000)
         data.mqtt.status_interval = data.mqtt.status_interval.coerceIn(10, 86_400)

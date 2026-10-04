@@ -16,6 +16,8 @@ data class RemoteControlConfig(
     val iceServers: List<RemoteControlIceServer>,
     val credentials: RemoteControlCredentials,
     val viewerTimeoutSeconds: Int = 120,
+    val quality: String = "low",
+    val maxQuality: String = "high",
 ) {
     companion object {
         fun fromJson(payload: String, terminalId: String): RemoteControlConfig {
@@ -24,7 +26,7 @@ data class RemoteControlConfig(
 
         fun fromJson(json: JSONObject, terminalId: String): RemoteControlConfig {
             val provider = json.optString("provider", "")
-            require(provider == "kinesis-webrtc") { "unsupported remote control provider: $provider" }
+            require(provider == "kinesis-webrtc" || provider == "standalone-relay") { "unsupported remote control provider" }
 
             val endpointsJson = json.getJSONObject("endpoints")
             val endpoints = buildMap {
@@ -55,7 +57,7 @@ data class RemoteControlConfig(
                 }
             }
 
-            val credentialsJson = json.getJSONObject("credentials")
+            val credentialsJson = if (provider == "kinesis-webrtc") json.getJSONObject("credentials") else JSONObject()
             return RemoteControlConfig(
                 sessionId = json.getString("sessionId"),
                 terminalId = terminalId,
@@ -68,11 +70,13 @@ data class RemoteControlConfig(
                 endpoints = endpoints,
                 iceServers = iceServers,
                 credentials = RemoteControlCredentials(
-                    accessKeyId = credentialsJson.getString("accessKeyId"),
-                    secretAccessKey = credentialsJson.getString("secretAccessKey"),
-                    sessionToken = credentialsJson.getString("sessionToken"),
+                    accessKeyId = if (provider == "kinesis-webrtc") credentialsJson.getString("accessKeyId") else "",
+                    secretAccessKey = if (provider == "kinesis-webrtc") credentialsJson.getString("secretAccessKey") else "",
+                    sessionToken = if (provider == "kinesis-webrtc") credentialsJson.getString("sessionToken") else "",
                 ),
                 viewerTimeoutSeconds = json.optInt("timeout", 120).coerceIn(15, 600),
+                quality = json.optString("quality", "low"),
+                maxQuality = json.optString("maxQuality", "high"),
             )
         }
     }

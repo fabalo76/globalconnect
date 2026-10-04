@@ -31,9 +31,9 @@ object ProductionLog {
         private set
 
     @Synchronized fun initialize(value: Context) {
-        if (!BuildConfig.TEMPORARY_PRODUCTION_LOG_ENABLED) { status = "Release file logging is disabled."; return }
         if (context != null) return
         context = value.applicationContext
+        if (!BuildConfig.TEMPORARY_PRODUCTION_LOG_ENABLED) { status = "Release file logging is disabled."; return }
         record("APP", "START version=${BuildConfig.VERSION_NAME} build=${BuildConfig.BUILD_TYPE} " +
             "model=${Build.MODEL} android=${Build.VERSION.RELEASE} firmware=${Build.DISPLAY}")
         writer.scheduleWithFixedDelay(::flush, 0, 1, TimeUnit.SECONDS)
@@ -43,14 +43,15 @@ object ProductionLog {
         else ContextCompat.checkSelfPermission(value, Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
 
     fun record(category: String, message: String) {
-        context?.let { one.globalconnect.logging.DeviceLogStore.record(it, "$category $message") }
+        val safeMessage = DiagnosticLogSanitizer.sanitize(message)
+        DetailedLog.normal("$category $safeMessage")
         if (!BuildConfig.TEMPORARY_PRODUCTION_LOG_ENABLED || context == null) return
         val now = OffsetDateTime.now()
-        val safeLine = message.replace('\n', ' ').replace('\r', ' ').take(1200)
+        val safeLine = safeMessage.take(1200)
         if (!queue.offer(Entry(now.toLocalDate(), "$now $category $safeLine\n"))) dropped.incrementAndGet()
     }
 
-    fun sync() { if (context != null) writer.execute(::flush) }
+    fun sync() { if (BuildConfig.TEMPORARY_PRODUCTION_LOG_ENABLED && context != null) writer.execute(::flush) }
 
     private fun flush() {
         val app = context ?: return

@@ -97,8 +97,9 @@ class PinpadDeviceCommands(
             initializeTextToSpeech()
         }
     }
-    private val jpegStore = PinpadJpegStore(context)
-    private val mediaStore = PinpadMediaStore(context)
+    private val app get() = applicationContext as one.globalconnect.pinpad.PinpadApplication
+    private val jpegStore get() = app.jpegStore
+    private val mediaStore get() = app.mediaStore
     private val pusnStore = PusnStore(context) {
         runCatching { deviceEngine.deviceInfo.sn }.getOrDefault("")
     }
@@ -1142,15 +1143,15 @@ class PinpadDeviceCommands(
         return pusnStore.read(slot)
     }
 
-    fun initializeJpegTable(): Boolean = jpegStore.initialize()
+    fun initializeJpegTable(): Boolean = jpegStore.initialize().also { app.idleMedia.refresh() }
 
     fun jpegTable(): List<PinpadJpegStore.JpegEntry> = jpegStore.table()
 
     fun selectJpegs(control: Char, names: List<String>): List<Char> = jpegStore.select(control, names)
 
-    fun deleteJpegs(names: List<String>): List<Char> = jpegStore.delete(names)
+    fun deleteJpegs(names: List<String>): List<Char> = jpegStore.delete(names).also { app.idleMedia.refresh() }
 
-    fun downloadJpegPacket(payload: String): Char = jpegStore.downloadPacket(payload)
+    fun downloadJpegPacket(payload: String): Char = jpegStore.downloadPacket(payload).also { app.idleMedia.refresh() }
 
     fun startJpegUpload(fileName: String): PinpadJpegStore.JpegUploadPacket = jpegStore.startUpload(fileName)
 
@@ -1163,17 +1164,9 @@ class PinpadDeviceCommands(
         return true
     }
 
-    fun setIdleJpeg(name: String): Char = jpegStore.setIdleLogo(name)
+    fun setIdleJpeg(name: String): Char = app.idleMedia.setJpeg(name)
 
-    fun setIdleJpegEnabled(op: Char): Char {
-        val result = jpegStore.setIdleLogoEnabled(op)
-        if (result == '0' && op == '1') {
-            jpegStore.enabledIdleLogoPath()?.let(PinpadDisplayController::showJpeg)
-        } else if (result == '0' && op == '0') {
-            PinpadDisplayController.showIdle()
-        }
-        return result
-    }
+    fun setIdleJpegEnabled(op: Char): Char = app.idleMedia.enableJpeg(op)
 
     fun showJpeg(name: String): Char {
         val result = jpegStore.showFile(name)
@@ -1190,17 +1183,17 @@ class PinpadDeviceCommands(
         (applicationContext as one.globalconnect.pinpad.PinpadApplication).audioRecordings.reset()
     }
 
-    fun initializeMediaTable(): Boolean = mediaStore.initialize()
+    fun initializeMediaTable(): Boolean = mediaStore.initialize().also { app.idleMedia.refresh() }
 
     fun mediaTable(): List<PinpadMediaStore.MediaEntry> = mediaStore.table()
 
-    fun downloadMediaPacket(payload: String): Char = mediaStore.downloadPacket(payload)
+    fun downloadMediaPacket(payload: String): Char = mediaStore.downloadPacket(payload).also { app.idleMedia.refresh() }
 
     fun startMediaUpload(fileName: String): PinpadMediaStore.MediaUploadPacket = mediaStore.startUpload(fileName)
 
     fun nextMediaUploadPacket(): PinpadMediaStore.MediaUploadPacket = mediaStore.nextUploadPacket()
 
-    fun deleteMedia(names: List<String>): List<Char> = mediaStore.delete(names)
+    fun deleteMedia(names: List<String>): List<Char> = mediaStore.delete(names).also { app.idleMedia.refresh() }
 
     fun playMedia(name: String): Char {
         val result = mediaStore.playableFile(name)

@@ -75,7 +75,7 @@ object LauncherConfigManager {
      * Used to gate HouseKeeping: HK must not run before the config is ready on fresh install.
      */
     fun isConfigApplied(context: Context): Boolean {
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val prefs = context.getSharedPreferences(one.globalconnect.xtmsagent.TmsServerProfile.storageName(PREFS_NAME), Context.MODE_PRIVATE)
         return readStoredConfigId(prefs).isNotBlank() &&
             !prefs.getBoolean(IOT_PROVISIONING_REFRESH_REQUIRED, false)
     }
@@ -85,7 +85,7 @@ object LauncherConfigManager {
      * launcher assignment before housekeeping or normal version processing resumes.
      */
     fun markRefreshRequiredAfterIotProvisioning(context: Context) {
-        val stored = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val stored = context.getSharedPreferences(one.globalconnect.xtmsagent.TmsServerProfile.storageName(PREFS_NAME), Context.MODE_PRIVATE)
             .edit()
             .putBoolean(IOT_PROVISIONING_REFRESH_REQUIRED, true)
             .commit()
@@ -115,9 +115,9 @@ object LauncherConfigManager {
         }
         // Always restore persisted theme overrides, even when config file already exists
         restoreThemeFromPrefs(context)
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val prefs = context.getSharedPreferences(one.globalconnect.xtmsagent.TmsServerProfile.storageName(PREFS_NAME), Context.MODE_PRIVATE)
         val refreshRequired = prefs.getBoolean(IOT_PROVISIONING_REFRESH_REQUIRED, false)
-        val idFile = File(internalPath, CFG_ID_FILE)
+        val idFile = File(internalPath, one.globalconnect.xtmsagent.TmsServerProfile.storageName(CFG_ID_FILE))
         if (idFile.exists() && !refreshRequired) {
             Log.d(TAG, "LauncherConfig already applied (configId=${idFile.readText().trim()}) — skipping")
             // Theme was restored from prefs above — trigger UI refresh so bar colors reach the window.
@@ -220,7 +220,7 @@ object LauncherConfigManager {
                     "apps=${json.optJSONArray("apps")?.length() ?: 0}")
 
                 val newGeneratedAt = json.optString("generatedAt", "")
-                val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                val prefs = context.getSharedPreferences(one.globalconnect.xtmsagent.TmsServerProfile.storageName(PREFS_NAME), Context.MODE_PRIVATE)
                 val storedId          = readStoredConfigId(prefs)
                 val storedGeneratedAt = prefs.getString("generatedAt", "") ?: ""
                 if (newConfigId != -1 && newConfigId.toString() == storedId &&
@@ -367,7 +367,7 @@ object LauncherConfigManager {
         val newAppList = ArrayList(tempList.map { it.second })
 
         // Persist config state to SharedPreferences
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val prefs = context.getSharedPreferences(one.globalconnect.xtmsagent.TmsServerProfile.storageName(PREFS_NAME), Context.MODE_PRIVATE)
         prefs
             .edit()
             .putBoolean("blockUnknownApps", blockUnknown)
@@ -451,7 +451,7 @@ object LauncherConfigManager {
     }
 
     private fun restoreThemeFromPrefs(context: Context) {
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val prefs = context.getSharedPreferences(one.globalconnect.xtmsagent.TmsServerProfile.storageName(PREFS_NAME), Context.MODE_PRIVATE)
         if (!prefs.contains("enableNavigationBar")) return  // no TMS theme saved yet
         MainActivity.stTheme.enable_navigation_bar = prefs.getBoolean("enableNavigationBar", true)
         MainActivity.stTheme.enable_control_bar    = prefs.getBoolean("enableControlBar", true)
@@ -478,7 +478,7 @@ object LauncherConfigManager {
         val internalPath = MainActivity.vg_sIntrenalPath
         if (internalPath.isBlank()) return
         try {
-            File(internalPath, CFG_ID_FILE).writeText(configId)
+            File(internalPath, one.globalconnect.xtmsagent.TmsServerProfile.storageName(CFG_ID_FILE)).writeText(configId)
         } catch (e: Exception) {
             Log.w(TAG, "Could not persist config ID marker: ${e.message}")
         }

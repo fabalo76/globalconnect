@@ -906,6 +906,7 @@ internal sealed partial class A10DemoControl : UserControl
             $"Result: {result.Status}",
             $"Initial response: {Printable(result.InitialResponse)}",
             $"Final response: {Printable(result.FinalResponse)}",
+            $"Host authorization: {(result.InitialResponse.StartsWith("0A1", StringComparison.Ordinal) ? "Requested by terminal" : "Not requested by terminal")}",
             $"Online authorization data: {Printable(result.OnlineAuthorizationData)}",
             "",
             "Receipt / EMV tags",

@@ -20,6 +20,13 @@
             android:paddingBottom="16dp"
             android:fontFamily="sans-serif-medium" />
 
+        <Button
+            android:id="@+id/btnTmsServerSelect"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/tms_choose_server"
+            android:textSize="@dimen/tms_field_text_size" />
+
         <!-- ── Server Settings (read-only) ────────────────────────────── -->
 
         <TextView

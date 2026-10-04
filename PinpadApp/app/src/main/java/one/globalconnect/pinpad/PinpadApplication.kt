@@ -9,6 +9,11 @@ import one.globalconnect.pinpad.logging.PinpadTraceLog
 import one.globalconnect.pinpad.config.PinpadTmsConfigClient
 
 class PinpadApplication : Application() {
+    val jpegStore by lazy { one.globalconnect.pinpad.storage.PinpadJpegStore(this) }
+    val mediaStore by lazy { one.globalconnect.pinpad.storage.PinpadMediaStore(this) }
+    val idleMedia by lazy {
+        one.globalconnect.pinpad.storage.PinpadIdleMedia(jpegStore, mediaStore, java.io.File(filesDir, "idle-media.properties"))
+    }
     @Volatile var audioForeground: ((Boolean) -> Unit)? = null
     val audioRecordings by lazy {
         one.globalconnect.pinpad.audio.AudioRecordingController(
@@ -32,6 +37,7 @@ class PinpadApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         instance = this
+        one.globalconnect.pinpad.logging.DetailedLog.initialize(this)
         one.globalconnect.pinpad.logging.ProductionLog.initialize(this)
         one.globalconnect.pinpad.logging.ConnectionLog.initialize(this)
         PinpadTraceLog.device(

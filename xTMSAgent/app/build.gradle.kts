@@ -32,6 +32,15 @@ val downloadCredentialSecret = providers.gradleProperty("XTMS_DOWNLOAD_CREDENTIA
     .orElse("")
     .get()
 
+val demoDownloadCredentialId = providers.gradleProperty("XTMS_DEMO_DOWNLOAD_CREDENTIAL_ID")
+    .orElse(providers.environmentVariable("XTMS_DEMO_DOWNLOAD_CREDENTIAL_ID"))
+    .orElse("")
+    .get()
+val demoDownloadCredentialSecret = providers.gradleProperty("XTMS_DEMO_DOWNLOAD_CREDENTIAL_SECRET")
+    .orElse(providers.environmentVariable("XTMS_DEMO_DOWNLOAD_CREDENTIAL_SECRET"))
+    .orElse("")
+    .get()
+
 val validateReleaseDownloadCredentials = tasks.register("validateReleaseDownloadCredentials") {
     group = "verification"
     description = "Checks that release APKs can authenticate initial TMS provisioning."
@@ -70,14 +79,16 @@ android {
         minSdk = 29
         //noinspection OldTargetApi
         targetSdk = 35
-        versionCode = 91
-        versionName = "2.1.2.91"
+        versionCode = 96
+        versionName = "2.1.2.96"
         buildConfigField("String", "GLOBAL_CONNECT_ENV", "\"dev\"")
         buildConfigField("String", "DEFAULT_SEED_0", "\"22687075\"")
         buildConfigField("String", "DEFAULT_SEED_1", "\"27071287\"")
         buildConfigField("boolean", "FORCE_PWD_CHANGE", "false")
         buildConfigField("String", "DOWNLOAD_CREDENTIAL_ID", "\"${downloadCredentialId.replace("\\", "\\\\").replace("\"", "\\\"")}\"")
         buildConfigField("String", "DOWNLOAD_CREDENTIAL_SECRET", "\"${downloadCredentialSecret.replace("\\", "\\\\").replace("\"", "\\\"")}\"")
+        buildConfigField("String", "DEMO_DOWNLOAD_CREDENTIAL_ID", "\"${demoDownloadCredentialId.replace("\\", "\\\\").replace("\"", "\\\"")}\"")
+        buildConfigField("String", "DEMO_DOWNLOAD_CREDENTIAL_SECRET", "\"${demoDownloadCredentialSecret.replace("\\", "\\\\").replace("\"", "\\\"")}\"")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {

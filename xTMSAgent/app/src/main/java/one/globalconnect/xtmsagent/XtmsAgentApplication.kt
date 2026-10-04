@@ -51,6 +51,12 @@ class XtmsAgentApplication : Application() {
 
     fun startNormalStartup() {
         if (normalStarted || one.globalconnect.xtmsagent.recovery.StartupRecoveryGuard.inRecovery) return
+        // Restore the operator-selected server before any background connection starts.
+        val serverProfiles = TmsServerProfileStore(this)
+        serverProfiles.active()?.let {
+            TMSFunc.tmsCfg = it
+            TMSFunc.mqttCfg.mqtt_port = serverProfiles.mqttPort(TmsServerProfile.current(it))
+        }
         normalStarted = true
         one.globalconnect.xtmsagent.recovery.RecoveryApplication.restoreBackgroundComponents(this)
         androidx.work.WorkManager.initialize(this, androidx.work.Configuration.Builder().build())

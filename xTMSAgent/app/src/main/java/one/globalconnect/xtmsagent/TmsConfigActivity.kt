@@ -49,6 +49,7 @@ class TmsConfigActivity : AppCompatActivity() {
     private lateinit var etRespTimeout   : EditText
     private lateinit var etMqttKeepalive : EditText
     private lateinit var etStatusInterval: EditText
+    private var selectedProfile = TmsServerProfile.current(TMSFunc.tmsCfg)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -81,7 +82,25 @@ class TmsConfigActivity : AppCompatActivity() {
 
         populateFields()
 
-        findViewById<Button>(R.id.btnTmsConfigSave).setOnClickListener { saveConfig() }
+        findViewById<Button>(R.id.btnTmsServerSelect).setOnClickListener {
+            AlertDialog.Builder(this)
+                .setTitle(R.string.tms_choose_server)
+                .setSingleChoiceItems(arrayOf(getString(R.string.tms_server_aws), getString(R.string.tms_server_demo)),
+                    selectedProfile.ordinal) { dialog, index ->
+                    selectedProfile = TmsServerProfile.entries[index]
+                    val target = if (selectedProfile == TmsServerProfile.current(TMSFunc.tmsCfg))
+                        TMSFunc.tmsCfg else runCatching { TmsServerProfileStore(this).load(selectedProfile) }
+                            .getOrElse { selectedProfile.defaults() }
+                    etServerAddr.setText(target.apiHost)
+                    etWebPort.setText(target.web_port.toString())
+                    etTcpPort.setText(target.tcp_port.toString())
+                    etMqttPort.setText(runCatching { TmsServerProfileStore(this).mqttPort(selectedProfile) }
+                        .getOrElse { if (selectedProfile == TmsServerProfile.DEMO) 443 else 8883 }.toString())
+                    dialog.dismiss()
+                }.setNegativeButton(R.string.cancel, null).show()
+        }
+
+        findViewById<Button>(R.id.btnTmsConfigSave).setOnClickListener { requestSave() }
         findViewById<Button>(R.id.btnResetTmsRegistration).setOnClickListener {
             confirmRegistrationReset()
         }
@@ -130,7 +149,36 @@ class TmsConfigActivity : AppCompatActivity() {
 
     // ── Save ──────────────────────────────────────────────────────────────────
 
-    private fun saveConfig() {
+    private fun requestSave(switchConfirmed: Boolean = false) {
+        lifecycleScope.launch {
+          try {
+            val pending = withContext(Dispatchers.IO) {
+                androidx.work.WorkManager.getInstance(this@TmsConfigActivity).getWorkInfos(
+                    androidx.work.WorkQuery.fromStates(listOf(androidx.work.WorkInfo.State.RUNNING,
+                        androidx.work.WorkInfo.State.ENQUEUED, androidx.work.WorkInfo.State.BLOCKED))).get()
+            }
+            if (selectedProfile != TmsServerProfile.current(TMSFunc.tmsCfg) &&
+                pending.any { it.state == androidx.work.WorkInfo.State.RUNNING || "TMS_SERVER_WORK" in it.tags ||
+                    it.tags.any { tag -> tag.endsWith("AwsTaskApplyWorker") || tag.endsWith("DeviceProfileWorker") } }) {
+                Toast.makeText(this@TmsConfigActivity, R.string.tms_server_busy, Toast.LENGTH_LONG).show()
+            } else saveConfig(switchConfirmed)
+          } catch (error: Exception) {
+            Log.e(TAG, "Unable to validate pending server work", error)
+            Toast.makeText(this@TmsConfigActivity, R.string.tms_save_error, Toast.LENGTH_LONG).show()
+          }
+        }
+    }
+
+    private fun saveConfig(switchConfirmed: Boolean = false) {
+        val switching = selectedProfile != TmsServerProfile.current(TMSFunc.tmsCfg)
+        if (switching && !switchConfirmed) {
+            AlertDialog.Builder(this)
+                .setTitle(R.string.tms_choose_server)
+                .setMessage(R.string.tms_switch_server_warning)
+                .setPositiveButton(R.string.tms_save) { _, _ -> requestSave(true) }
+                .setNegativeButton(R.string.cancel, null).show()
+            return
+        }
         val connTimeout    = etConnTimeout   .text.toString().toIntOrNull()
         val respTimeout    = etRespTimeout   .text.toString().toIntOrNull()
         val mqttKeepalive  = etMqttKeepalive .text.toString().toIntOrNull()
@@ -155,12 +203,41 @@ class TmsConfigActivity : AppCompatActivity() {
             val raw    = cfgFile.readText()
             val parsed = gson.fromJson(raw, TMSFunc.cfg::class.java)
 
+            if (switching) {
+                val profiles = TmsServerProfileStore(this)
+                val target = profiles.load(selectedProfile)
+                if (target.download_credential_id.isBlank() || target.download_secret.isBlank()) {
+                    Toast.makeText(this, R.string.tms_server_not_provisioned, Toast.LENGTH_LONG).show()
+                    return
+                }
+                // Do not interrupt a download or installation when changing the server.
+                if (one.globalconnect.xtmsagent.mqtt.housekeeping.TmsTaskStore.loadTasks(this)
+                        .any { it.status < one.globalconnect.xtmsagent.mqtt.housekeeping.ST_ACTIVATED } ||
+                    one.globalconnect.xtmsagent.easy.EasyTaskStore.loadAll().any { it.status in 1..3 } ||
+                    one.globalconnect.xtmsagent.mqtt.versions.AppInstallPendingStore.hasAny(this) ||
+                    one.globalconnect.xtmsagent.params.ParamManager.isDownloadInProgress()) {
+                    Toast.makeText(this, R.string.tms_server_busy, Toast.LENGTH_LONG).show()
+                    return
+                }
+                profiles.save(TMSFunc.tmsCfg)
+                parsed.tms = target.copy(sn = TMSFunc.tmsCfg.sn)
+                parsed.mqtt.mqtt_port = profiles.mqttPort(selectedProfile)
+            }
+
             parsed.tms.conn_timeout    = connTimeout
             parsed.tms.resp_timeout    = respTimeout
             parsed.mqtt.keepalive      = mqttKeepalive
             parsed.mqtt.status_interval = statusInterval
 
-            cfgFile.writeText(gson.toJson(parsed))
+            writeConfig(cfgFile, gson.toJson(parsed))
+            if (switching) {
+                try {
+                    TmsServerProfileStore(this).select(parsed.tms)
+                } catch (error: Exception) {
+                    writeConfig(cfgFile, raw)
+                    throw error
+                }
+            }
 
             // Touch the file so ChkParamChange() detects the change on its next tick.
             cfgFile.setLastModified(System.currentTimeMillis())
@@ -170,6 +247,20 @@ class TmsConfigActivity : AppCompatActivity() {
             MainActivity.writeLog("TMS config updated via ConfigMenu")
 
             Toast.makeText(this, getString(R.string.tms_save_ok), Toast.LENGTH_SHORT).show()
+            if (switching) {
+                // A fresh process prevents in-flight callbacks from the old server being
+                // delivered through the new server's connection or credentials.
+                one.globalconnect.xtmsagent.mqtt.TmsMqttService.stop(this)
+                val restart = android.app.PendingIntent.getActivity(this, 4401,
+                    android.content.Intent(this, one.globalconnect.xtmsagent.recovery.StartupActivity::class.java),
+                    android.app.PendingIntent.FLAG_CANCEL_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE)
+                (getSystemService(ALARM_SERVICE) as android.app.AlarmManager)
+                    .set(android.app.AlarmManager.ELAPSED_REALTIME_WAKEUP,
+                        android.os.SystemClock.elapsedRealtime() + 1500, restart)
+                finishAffinity()
+                android.os.Process.killProcess(android.os.Process.myPid())
+                return
+            }
             finish()
 
         } catch (e: Exception) {
@@ -216,6 +307,18 @@ class TmsConfigActivity : AppCompatActivity() {
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
+
+    private fun writeConfig(file: File, json: String) {
+        val atomic = android.util.AtomicFile(file)
+        val stream = atomic.startWrite()
+        try {
+            stream.write(json.toByteArray(Charsets.UTF_8))
+            atomic.finishWrite(stream)
+        } catch (error: Exception) {
+            atomic.failWrite(stream)
+            throw error
+        }
+    }
 
     /**
      * Returns the config file that [TMSFunc.ChkParamChange] reads, in the same priority

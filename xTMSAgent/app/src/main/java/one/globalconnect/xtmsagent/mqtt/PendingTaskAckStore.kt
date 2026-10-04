@@ -33,12 +33,12 @@ object PendingTaskAckStore {
     @Synchronized
     fun takeAll(context: Context): List<PendingTaskAck> {
         val items = read(context)
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().remove(KEY_ITEMS).apply()
+        context.getSharedPreferences(one.globalconnect.xtmsagent.TmsServerProfile.storageName(PREFS), Context.MODE_PRIVATE).edit().remove(KEY_ITEMS).apply()
         return items
     }
 
     private fun read(context: Context): List<PendingTaskAck> {
-        val raw = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY_ITEMS, null) ?: return emptyList()
+        val raw = context.getSharedPreferences(one.globalconnect.xtmsagent.TmsServerProfile.storageName(PREFS), Context.MODE_PRIVATE).getString(KEY_ITEMS, null) ?: return emptyList()
         return runCatching {
             val array = JSONArray(raw)
             (0 until array.length()).mapNotNull { index ->
@@ -65,7 +65,7 @@ object PendingTaskAckStore {
                 .put("status", item.status ?: JSONObject.NULL)
                 .put("statusMessage", item.statusMessage ?: JSONObject.NULL))
         }
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString(KEY_ITEMS, array.toString()).apply()
+        context.getSharedPreferences(one.globalconnect.xtmsagent.TmsServerProfile.storageName(PREFS), Context.MODE_PRIVATE).edit().putString(KEY_ITEMS, array.toString()).apply()
     }
 
     private fun JSONObject.optNullableString(name: String): String? =

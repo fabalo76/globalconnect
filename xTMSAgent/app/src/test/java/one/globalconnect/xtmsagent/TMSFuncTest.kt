@@ -6,6 +6,13 @@ import org.junit.Test
 
 class TMSFuncTest {
     @Test
+    fun demoLauncherReloadKeepsPublicMqttPort() {
+        val config = """{"tms_cfg":{"api_host":"demo.globalconnect.one"},"mqtt_cfg":{"mqtt_port":8883}}"""
+        assertEquals(443, TMSFunc.parseConfig(config, "N960W900629")!!.mqtt.mqtt_port)
+        assertEquals(8883, TMSFunc.parseConfig(config.replace("demo.globalconnect.one", "aws.example.com"), "N960W900629")!!.mqtt.mqtt_port)
+    }
+
+    @Test
     fun parseConfigRejectsMalformedJson() {
         assertNull(TMSFunc.parseConfig("{not-json", "CT20P101003"))
     }

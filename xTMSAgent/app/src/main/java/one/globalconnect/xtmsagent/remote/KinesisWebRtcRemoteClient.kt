@@ -40,7 +40,7 @@ class KinesisWebRtcRemoteClient(
     private val projectionData: Intent,
     private val onViewerConnected: () -> Unit,
     private val onSessionEnded: () -> Unit,
-) {
+) : RemoteScreenClient {
     private val eglBase = EglBase.create()
     private val inputHandler: RemoteInputHandler
     private val screenWidth: Int
@@ -74,7 +74,7 @@ class KinesisWebRtcRemoteClient(
         inputHandler = RemoteInputHandler(screenWidth, screenHeight, ::applyQuality)
     }
 
-    fun start() {
+    override fun start() {
         initializePeerConnectionFactory(context)
         peerConnectionFactory = createPeerConnectionFactory()
         peerConnection = createPeerConnection()
@@ -111,7 +111,7 @@ class KinesisWebRtcRemoteClient(
         }).also { it.connect() }
     }
 
-    fun stop() {
+    override fun stop() {
         val decision = lifecycle.requestStop()
         if (!decision.newlyRequested) return
         try { signalingClient?.disconnect() } catch (_: Exception) {}

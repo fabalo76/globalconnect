@@ -84,7 +84,7 @@
     <string name="serial_diagnostics_open">Open</string>
     <string name="serial_diagnostics_error">Error</string>
     <string name="serial_diagnostics_error_message">Communication error: %1$s</string>
-    <string name="serial_diagnostics_support">Restart the device. If the error continues, contact support.</string>
+    <string name="serial_diagnostics_support">Reconnecting automatically. If the error persists, restart the device or contact support.</string>
     <string name="settings_close">Close</string>
     <string name="settings_password_title">Input Password</string>
     <string name="settings_password_1">Password 1</string>
@@ -122,9 +122,19 @@
     <string name="setup_export_connection_log">Export connection log</string>
     <string name="setup_log_saved">Connection log saved</string>
     <string name="setup_log_failed">Could not save the connection log</string>
+    <string name="setup_detailed_logs">Detailed diagnostics</string>
+    <string name="setup_detailed_log_hint">Add serial, EMV and configuration detail to logs enabled in the portal. The portal controls logging and collection. Card data, keys and PIN input are excluded.</string>
+    <string name="setup_detailed_log_until">Portal logging enabled until %1$s</string>
+    <string name="setup_detailed_log_off">Portal logging is off. Extra detail is captured only when the portal enables logging.</string>
+    <string name="setup_detailed_log_enable">Extra diagnostic detail</string>
+    <string name="setup_detailed_log_failed">Could not save the diagnostic detail setting</string>
     <string name="key_injection_mode_touch_hint">Clear-key loading enabled</string>
     <string name="key_injection_mode_exit">Exit key injection</string>
     <string name="prompt_swipe_tap_card">SWIPE OR TAP CARD</string>
     <string name="prompt_swipe_insert_card">SWIPE OR INSERT CARD</string>
     <string name="prompt_insert_tap_card">INSERT OR TAP CARD</string>
+    <string name="setup_idle_screen">Idle screen</string>
+    <string name="setup_idle_text">Idle text</string>
+    <string name="setup_idle_media_help">Choose an uploaded JPEG image or MP4 video. Videos loop silently. The top status bar stays visible. Changes apply immediately.</string>
+    <string name="setup_idle_media_failed">Unable to select idle media. Check that the uploaded file is available.</string>
 </resources>

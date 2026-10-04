@@ -34,13 +34,13 @@ object AppInstallPendingStore {
             put("serverVersionCode", info.serverVersionCode)
             put("apkPath",           info.apkPath)
         }
-        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
+        context.getSharedPreferences(one.globalconnect.xtmsagent.TmsServerProfile.storageName(PREFS_NAME), Context.MODE_PRIVATE).edit()
             .putString(info.packageId, json.toString()).apply()
         Log.i(TAG, "Stored pending install: pkg=${info.packageId} ver=${info.serverVersion}")
     }
 
     fun get(context: Context, packageId: String): PendingInstallInfo? {
-        val raw = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val raw = context.getSharedPreferences(one.globalconnect.xtmsagent.TmsServerProfile.storageName(PREFS_NAME), Context.MODE_PRIVATE)
             .getString(packageId, null) ?: return null
         return try {
             val j = JSONObject(raw)
@@ -59,11 +59,11 @@ object AppInstallPendingStore {
     }
 
     fun remove(context: Context, packageId: String) {
-        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
+        context.getSharedPreferences(one.globalconnect.xtmsagent.TmsServerProfile.storageName(PREFS_NAME), Context.MODE_PRIVATE).edit()
             .remove(packageId).apply()
         Log.i(TAG, "Cleared pending install for $packageId")
     }
 
     fun hasAny(context: Context): Boolean =
-        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).all.isNotEmpty()
+        context.getSharedPreferences(one.globalconnect.xtmsagent.TmsServerProfile.storageName(PREFS_NAME), Context.MODE_PRIVATE).all.isNotEmpty()
 }

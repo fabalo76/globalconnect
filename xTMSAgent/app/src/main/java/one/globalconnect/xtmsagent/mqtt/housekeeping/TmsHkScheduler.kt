@@ -196,5 +196,5 @@ object TmsHkScheduler {
     }
 
     private fun prefs(context: Context) =
-        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        context.getSharedPreferences(one.globalconnect.xtmsagent.TmsServerProfile.storageName(PREFS_NAME), Context.MODE_PRIVATE)
 }

@@ -84,7 +84,7 @@
     <string name="serial_diagnostics_open">Abierto</string>
     <string name="serial_diagnostics_error">Error</string>
     <string name="serial_diagnostics_error_message">Error de comunicación: %1$s</string>
-    <string name="serial_diagnostics_support">Reinicie el dispositivo. Si el error continúa, contacte a soporte.</string>
+    <string name="serial_diagnostics_support">Reconectando automáticamente. Si el error persiste, reinicie el dispositivo o contacte a soporte.</string>
     <string name="settings_close">Cerrar</string>
     <string name="settings_password_title">Ingrese Password</string>
     <string name="settings_password_1">Password 1</string>
@@ -122,9 +122,19 @@
     <string name="setup_export_connection_log">Exportar registro de conexión</string>
     <string name="setup_log_saved">Registro de conexión guardado</string>
     <string name="setup_log_failed">No se pudo guardar el registro de conexión</string>
+    <string name="setup_detailed_logs">Diagnóstico detallado</string>
+    <string name="setup_detailed_log_hint">Agrega detalle del puerto serie, EMV y configuración a los registros habilitados desde el portal. El portal controla el registro y la recolección. Excluye datos de tarjeta, llaves e ingreso del PIN.</string>
+    <string name="setup_detailed_log_until">Registro del portal habilitado hasta %1$s</string>
+    <string name="setup_detailed_log_off">Registro del portal desactivado. Solo se captura detalle adicional cuando el portal habilita el registro.</string>
+    <string name="setup_detailed_log_enable">Detalle adicional de diagnóstico</string>
+    <string name="setup_detailed_log_failed">No se pudo guardar el nivel de detalle del diagnóstico</string>
     <string name="key_injection_mode_touch_hint">Llaves en claro habilitadas</string>
     <string name="key_injection_mode_exit">Salir de inyección de llaves</string>
     <string name="prompt_swipe_tap_card">DESLICE O ACERQUE TARJETA</string>
     <string name="prompt_swipe_insert_card">DESLICE O INSERTE TARJETA</string>
     <string name="prompt_insert_tap_card">INSERTE O ACERQUE TARJETA</string>
+    <string name="setup_idle_screen">Pantalla de espera</string>
+    <string name="setup_idle_text">Texto de espera</string>
+    <string name="setup_idle_media_help">Seleccione una imagen JPEG o un video MP4 cargado. Los videos se repiten sin sonido. La barra superior permanece visible. Los cambios se aplican de inmediato.</string>
+    <string name="setup_idle_media_failed">No se pudo seleccionar el contenido de espera. Verifique que el archivo cargado est&#233; disponible.</string>
 </resources>

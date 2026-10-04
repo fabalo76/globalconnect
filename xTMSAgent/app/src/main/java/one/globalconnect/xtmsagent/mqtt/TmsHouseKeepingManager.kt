@@ -228,7 +228,7 @@ object TmsHouseKeepingManager {
     // ── STAN counter ──────────────────────────────────────────────────────────
 
     private fun nextStan(context: Context): String {
-        val prefs = context.getSharedPreferences("tms_hk", android.content.Context.MODE_PRIVATE)
+        val prefs = context.getSharedPreferences(one.globalconnect.xtmsagent.TmsServerProfile.storageName("tms_hk"), android.content.Context.MODE_PRIVATE)
         val current = prefs.getInt("stan", 0)
         val next = if (current >= 999_999) 1 else current + 1
         prefs.edit().putInt("stan", next).apply()

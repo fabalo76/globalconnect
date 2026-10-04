@@ -148,6 +148,7 @@ import com.visa.CheckmarkMode
 import com.visa.CheckmarkTextOption
 import com.visa.SensoryBrandingView
 import kotlinx.coroutines.delay
+import one.globalconnect.pinpad.logging.DetailedLog
 import kotlinx.coroutines.withTimeoutOrNull
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -1398,7 +1399,7 @@ private fun PinpadPromptContent(
             Color(0xFFFFD166),
         )
         PinpadDisplayState.ThankYou -> PromptText(stringResource(R.string.prompt_thank_you), Color(0xFF90F0B0))
-        PinpadDisplayState.Idle -> PromptText(idleMessage)
+        PinpadDisplayState.Idle -> IdleMediaPrompt(idleMessage)
         is PinpadDisplayState.Jpeg -> JpegPrompt(state.path)
         is PinpadDisplayState.JpegSequence -> JpegSequencePrompt(state.paths)
         is PinpadDisplayState.Media -> MediaPrompt(state.path, state.video)
@@ -2123,7 +2124,7 @@ private fun JpegSequencePrompt(paths: List<String>) {
 }
 
 @Composable
-private fun JpegPrompt(path: String) {
+private fun JpegPrompt(path: String, fallback: String = path.substringAfterLast('/').ifBlank { "JPEG" }) {
     val bitmap = remember(path) {
         runCatching { BitmapFactory.decodeFile(path) }.getOrNull()
     }
@@ -2135,7 +2136,7 @@ private fun JpegPrompt(path: String) {
             contentScale = ContentScale.Fit,
         )
     } else {
-        PromptText(path.substringAfterLast('/').ifBlank { "JPEG" })
+        PromptText(fallback)
     }
 }
 
@@ -2149,28 +2150,44 @@ private fun MediaPrompt(path: String, video: Boolean) {
 }
 
 @Composable
-private fun VideoPrompt(path: String) {
+private fun VideoPrompt(path: String, looping: Boolean = false, onFailure: (() -> Unit)? = null) {
     val context = LocalContext.current
+    val lifecycle = (context as? androidx.lifecycle.LifecycleOwner)?.lifecycle
     val videoView = remember(path) { VideoView(context) }
-    DisposableEffect(videoView, path) {
-        videoView.setVideoPath(path)
+    DisposableEffect(videoView, path, looping, lifecycle) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            when (event) {
+                androidx.lifecycle.Lifecycle.Event.ON_PAUSE -> videoView.pause()
+                androidx.lifecycle.Lifecycle.Event.ON_RESUME -> videoView.start()
+                else -> Unit
+            }
+        }
+        lifecycle?.addObserver(observer)
         videoView.setOnPreparedListener { player ->
-            player.isLooping = false
-            videoView.start()
+            player.isLooping = looping
+            if (looping) player.setVolume(0f, 0f)
+            if (lifecycle == null || lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) {
+                videoView.start()
+            }
         }
         videoView.setOnCompletionListener {
-            PinpadDisplayController.showIdle()
+            if (!looping) PinpadDisplayController.showIdle()
         }
         videoView.setOnErrorListener { _, what, extra ->
             PinpadTraceLog.device("media video playback failed what=$what extra=$extra")
-            PinpadDisplayController.showIdle()
+            if (onFailure != null) onFailure() else PinpadDisplayController.showIdle()
             true
         }
+        runCatching { videoView.setVideoPath(path) }.onFailure {
+            PinpadTraceLog.device("media video playback setup failed=${it.message}")
+            if (onFailure != null) onFailure() else PinpadDisplayController.showIdle()
+        }
         onDispose {
-            videoView.stopPlayback()
+            lifecycle?.removeObserver(observer)
             videoView.setOnPreparedListener(null)
             videoView.setOnCompletionListener(null)
             videoView.setOnErrorListener(null)
+            videoView.stopPlayback()
         }
     }
     AndroidView(
@@ -2777,6 +2794,8 @@ private fun PinpadSetupScreen(
                 TextButton(onClick = { exportLog.launch("pinpad-connection-log.txt") }) {
                     Text(stringResource(R.string.setup_export_connection_log))
                 }
+                IdleMediaControls()
+                DetailedLoggingControls()
                 if (BuildConfig.TEMPORARY_PRODUCTION_LOG_ENABLED) {
                     TextButton(onClick = { (context as? MainActivity)?.showReleaseLogStatus() }) {
                         Text(stringResource(R.string.release_log_title))
@@ -2809,6 +2828,93 @@ private fun PinpadSetupScreen(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun IdleMediaPrompt(idleMessage: String) {
+    val app = LocalContext.current.applicationContext as PinpadApplication
+    val media = app.idleMedia.selection
+    var failed by remember(media) { mutableStateOf(false) }
+    LaunchedEffect(Unit) { app.idleMedia.refresh() }
+    if (media == null || failed) {
+        PromptText(idleMessage)
+    } else {
+        androidx.compose.runtime.key(media) {
+            if (media.video) {
+                VideoPrompt(media.path, looping = true, onFailure = { failed = true })
+            } else {
+                JpegPrompt(media.path, fallback = idleMessage)
+            }
+        }
+    }
+}
+
+@Composable
+private fun IdleMediaControls() {
+    val context = LocalContext.current
+    val app = context.applicationContext as PinpadApplication
+    val idle = app.idleMedia
+    var choices by remember { mutableStateOf(idle.choices()) }
+    var pickerOpen by remember { mutableStateOf(false) }
+    val choose: (() -> Char) -> Unit = { action ->
+        if (runCatching(action).getOrDefault('2') == '0') pickerOpen = false
+        else Toast.makeText(context, R.string.setup_idle_media_failed, Toast.LENGTH_LONG).show()
+    }
+    Text(stringResource(R.string.setup_idle_screen), color = Color.White)
+    TextButton(onClick = { choices = idle.choices(); pickerOpen = true }) {
+        Text(idle.selection?.name ?: stringResource(R.string.setup_idle_text))
+    }
+    if (pickerOpen) {
+        AlertDialog(
+            onDismissRequest = { pickerOpen = false },
+            title = { Text(stringResource(R.string.setup_idle_screen)) },
+            text = {
+                Column(Modifier.verticalScroll(rememberScrollState())) {
+                    Text(stringResource(R.string.setup_idle_media_help))
+                    TextButton(onClick = { choose { idle.enableJpeg('0') } }) {
+                        Text(stringResource(R.string.setup_idle_text))
+                    }
+                    choices.forEach { media ->
+                        TextButton(onClick = {
+                            choose { idle.select(media.name, media.video) }
+                        }) { Text(media.name) }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { pickerOpen = false }) { Text(stringResource(R.string.setup_close)) }
+            },
+        )
+    }
+}
+
+@Composable
+private fun DetailedLoggingControls() {
+    val context = LocalContext.current
+    var verbose by remember { mutableStateOf(DetailedLog.verboseEnabled()) }
+    var expiresAt by remember { mutableStateOf(DetailedLog.expiresAt()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            expiresAt = DetailedLog.expiresAt()
+            delay(1_000)
+        }
+    }
+    Text(stringResource(R.string.setup_detailed_logs), color = Color.White, fontSize = 20.sp,
+        fontWeight = FontWeight.SemiBold)
+    Text(stringResource(R.string.setup_detailed_log_hint), color = Color(0xFFC8CDD5), fontSize = 13.sp)
+    Text(
+        if (expiresAt > 0) stringResource(R.string.setup_detailed_log_until, STATUS_DATE_FORMAT.format(Date(expiresAt)))
+        else stringResource(R.string.setup_detailed_log_off),
+        color = if (expiresAt > 0) Color(0xFF90F0B0) else Color(0xFFC8CDD5), fontSize = 14.sp,
+    )
+    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(stringResource(R.string.setup_detailed_log_enable), modifier = Modifier.weight(1f), color = Color.White)
+        androidx.compose.material3.Switch(checked = verbose, onCheckedChange = { requested ->
+            val result = runCatching { DetailedLog.setVerbose(requested) }
+            verbose = DetailedLog.verboseEnabled()
+            if (result.isFailure) Toast.makeText(context, R.string.setup_detailed_log_failed, Toast.LENGTH_LONG).show()
+        })
     }
 }
 

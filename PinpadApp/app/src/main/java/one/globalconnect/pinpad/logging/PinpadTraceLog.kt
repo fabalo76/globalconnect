@@ -66,6 +66,13 @@ object PinpadTraceLog {
         log("DEVICE $message")
     }
 
+    /** Call with outcome codes and non-sensitive tags only, never card or PIN data. */
+    fun emvOutcome(message: String) {
+        ProductionLog.record("EMV_OUTCOME", message)
+        ConnectionLog.record("EMV_OUTCOME $message")
+        log(message)
+    }
+
     fun controlName(value: Byte): String {
         return when (value) {
             PINPADControl.STX -> "STX"
@@ -95,7 +102,10 @@ object PinpadTraceLog {
         wireSummary(direction, bytes)
 
     private fun serialBytes(direction: String, source: String, bytes: ByteArray) {
-        log("$direction[$source] ${wireSummary(direction, bytes)} len=${bytes.size} hex=${bytesToHex(bytes)} ascii=${bytesToAscii(bytes)}")
+        DetailedLog.record("$direction[$source] ${wireSummary(direction, bytes)} len=${bytes.size}")
+        if (BuildConfig.SERIAL_TRACE_ENABLED) {
+            Log.d(TAG, "$direction[$source] ${wireSummary(direction, bytes)} len=${bytes.size} hex=${bytesToHex(bytes)} ascii=${bytesToAscii(bytes)}")
+        }
     }
 
     private fun wireSummary(direction: String, bytes: ByteArray): String {
@@ -182,12 +192,14 @@ object PinpadTraceLog {
     }
 
     private fun log(message: String) {
+        DetailedLog.record(message)
         if (BuildConfig.SERIAL_TRACE_ENABLED) {
             Log.d(TAG, message)
         }
     }
 
     private fun detail(message: String) {
+        DetailedLog.record(message)
         if (BuildConfig.SERIAL_DETAIL_TRACE_ENABLED) {
             Log.d(TAG, message)
         }

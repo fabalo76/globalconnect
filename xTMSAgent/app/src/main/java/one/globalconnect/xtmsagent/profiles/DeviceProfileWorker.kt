@@ -52,6 +52,7 @@ class DeviceProfileWorker(context: Context, params: WorkerParameters) : Coroutin
 
         fun enqueue(context: Context, taskId: String, payload: JSONObject?) {
             val request = OneTimeWorkRequestBuilder<DeviceProfileWorker>()
+                .addTag("TMS_SERVER_WORK")
                 .setInputData(workDataOf("taskId" to taskId, "payload" to (payload?.toString() ?: "{}"))).build()
             // A single persistent chain serializes profiles, including across process death and reboot.
             WorkManager.getInstance(context).enqueueUniqueWork("device-profile-apply", ExistingWorkPolicy.APPEND_OR_REPLACE, request)

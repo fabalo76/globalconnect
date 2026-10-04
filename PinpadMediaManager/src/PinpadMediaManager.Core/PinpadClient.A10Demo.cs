@@ -999,19 +999,32 @@ public sealed partial class PinpadClient
 
     private static bool IsOnlineRequest(string payload) => payload.StartsWith("0A1", StringComparison.Ordinal);
 
-    private static string DescribeEmvStatus(string payload) => payload.Length >= 3 ? payload[..3] switch
+    private static string DescribeEmvStatus(string payload)
     {
-        "0Y1" => "Offline Approved",
-        "0Z1" => "Offline Declined",
-        "0Y3" => "Unable Online, Offline Approved",
-        "0Z3" => "Unable Online, Offline Declined",
-        "0Y4" => "Online Approved",
-        "0Z4" => "Online Declined",
-        "0A1" => "Online Authorization Required",
-        "0A4" => "Application Blocked",
-        _ when payload.StartsWith('1') => $"Error ({payload})",
-        _ => payload,
-    } : payload;
+        // Terminal failures are 1 + reason + an optional eight-digit SDK result.
+        // The SDK encodes signed Int32 values in hex, so FFFFFFFF represents -1.
+        if (payload.Length == 10 && payload.StartsWith('1') &&
+            uint.TryParse(payload.AsSpan(2), NumberStyles.AllowHexSpecifier,
+                CultureInfo.InvariantCulture, out var rawResult))
+        {
+            var sdkResult = unchecked((int)rawResult);
+            var description = sdkResult == -1 ? "Nexgo generic failure" : "Nexgo SDK error";
+            return $"{description} ({sdkResult}, 0x{rawResult:X8}; terminal reason {payload[1]})";
+        }
+        return payload.Length >= 3 ? payload[..3] switch
+        {
+            "0Y1" => "Offline Approved",
+            "0Z1" => "Offline Declined",
+            "0Y3" => "Unable Online, Offline Approved",
+            "0Z3" => "Unable Online, Offline Declined",
+            "0Y4" => "Online Approved",
+            "0Z4" => "Online Declined",
+            "0A1" => "Online Authorization Required",
+            "0A4" => "Application Blocked",
+            _ when payload.StartsWith('1') => $"Error ({payload})",
+            _ => payload,
+        } : payload;
+    }
 
     private static IReadOnlyDictionary<string, string> ParseA10TagResponse(string payload)
     {

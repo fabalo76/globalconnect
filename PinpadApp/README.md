@@ -15,7 +15,7 @@ Stage 1 is implemented:
 
 ## Architecture
 
-- `MainActivity` shows only the localized idle message. The default text is `NEXGO WELCOME` in English and `BIENVENIDO NEXGO` in Spanish.
+- `MainActivity` shows localized idle text, a configured JPEG, or a looping MP4 below the persistent top status bar. The default text is `NEXGO WELCOME` in English and `BIENVENIDO NEXGO` in Spanish.
 - `PINPADSerialService` owns serial communication and starts automatically from the app and boot receiver.
 - `transport/*` abstracts CT20P RS232 and USB CDC access through the NEXGO SDK,
   plus raw TCP/IP over Wi-Fi or Ethernet.
@@ -69,7 +69,7 @@ serial number, model, IPv4 address, and configured TCP port.
 
 The normal customer screen does not show the development RX/TX diagnostics
 panel. If the selected communication transport fails, a concise error-only
-banner still tells the operator to restart the terminal or contact support.
+banner reports automatic reconnection for recoverable serial failures. Persistent driver faults may still require restarting the terminal or contacting support.
 
 The `ENTER + 1` administration menu includes **Cloud Update**, which asks
 xTMSAgent to request and reapply the `PINPAD_APP` configuration from TMS.
@@ -390,3 +390,23 @@ The Android application ID and Kotlin namespace are `one.globalconnect.pinpad`.
 Set `licenseSigningPublicKeySpkiBase64`
 in the build environment or user-level Gradle properties to the Base64 SPKI public key returned by the deployed KMS application-license signing key.
 Builds without the matching trust anchor fail authorization closed at runtime.
+
+## Serial recovery and diagnostics
+
+N6 Pro Lite internal base serial failures such as `USB_BASE_PL2303GC port=0 receive failed: -4008` trigger automatic close/reopen attempts. The bundled SDK identifies `-4008` as serial disconnection. Recovery waits for the old reader to stop and retries with delays capped at 30 seconds; transport changes cancel old retries. A failed write is never replayed automatically. An SDK connection success still requires a fresh host communication check. Low-level driver/firmware faults may still require rebooting the terminal; the SDK exposes no base reset operation. See `N6PROLITE_BASE_TEST.md` for physical validation.
+
+Normal diagnostics are enabled, stopped, and collected remotely through the portal and xTMSAgent's signed `enable`, `stop`, and `collect` log actions. **Settings → Detailed diagnostics** only increases detail during a portal-enabled session; it does not start a session or change collection. The switch defaults off and is persisted. Normal diagnostics work independently of this switch and of the temporary public release-log build setting.
+
+Collected gzip logs include device/version metadata, normal production events, serial recovery state, and safe EMV outcome/callback metadata. Detailed diagnostics add safe command, transport, and EMV trace metadata. Payment payloads, card/PIN data, and keys are filtered; raw serial bytes are represented by direction and byte counts. The existing local connection-log export remains available for serial troubleshooting. Portal-to-device collection and hardware recovery require physical validation.
+
+Contactless result `11FFFFFFFF` is status `1`, reason `1`, and signed SDK result `-1`, a generic SDK failure. It does not identify the underlying cause. Callback and finish diagnostics help distinguish kernel failure from host authorization failure without logging sensitive payment data.
+
+## Idle images and videos
+
+Upload a JPEG through the existing image commands (`J4`) or an MP4 through the media commands (`M12`), using the desktop media manager or managed asset delivery. On the pinpad, open **Settings → Idle screen** and select the uploaded file. Select **Idle text** to return to the configured text. Selection changes apply immediately and survive app and device restarts.
+
+The host can also assign a JPEG using `J7` with its stored name and enable it using `J8` with `1`. `J8` with `0` returns to idle text and clears an idle video selection. Both commands now perform the operation and report actual status (`0` success, `1` invalid input, `2` unavailable file/assignment). `J7` assigns the image without enabling it. Video selection uses the pinpad Settings selector; `M14` retains its one-time playback behavior.
+
+Idle media never replaces the top date/connection/status bar or contactless LED strip. Images fit within the content area. Idle videos loop silently, pause when the activity is backgrounded, and stop when a transaction or another prompt takes over. When the display returns to idle, the configured media starts again. Missing or unplayable files fall back to idle text. Deleting/resetting media refreshes the idle display.
+
+MP4 decoding depends on the terminal's Android codecs. Playback and transaction interruption still require physical terminal validation; unit tests cover selection, persistence, invalid input, deletion, and protocol framing.

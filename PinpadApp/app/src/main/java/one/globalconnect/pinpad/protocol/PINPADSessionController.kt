@@ -951,14 +951,16 @@ class PINPADSessionController(
                 pendingFinalEot = false
             }
             "J7" -> {
-                PinpadTraceLog.command("J7", "set idle JPEG accepted without display name=${request.payloadAscii}")
-                responses += responseFrame(PINPADFrameType.Transaction, "J7", "0")
+                val status = commandDevice?.setIdleJpeg(request.payloadAscii) ?: '2'
+                PinpadTraceLog.command("J7", "set idle JPEG status=$status")
+                responses += responseFrame(PINPADFrameType.Transaction, "J7", status.toString())
                 pendingFinalEot = true
             }
             "J8" -> {
                 val op = request.payloadAscii.firstOrNull() ?: ' '
-                PinpadTraceLog.command("J8", "idle JPEG enable accepted without display op=$op")
-                responses += responseFrame(PINPADFrameType.Transaction, "J8", "0")
+                val status = if (request.payloadAscii.length == 1) commandDevice?.setIdleJpegEnabled(op) ?: '2' else '1'
+                PinpadTraceLog.command("J8", "idle JPEG enable op=$op status=$status")
+                responses += responseFrame(PINPADFrameType.Transaction, "J8", status.toString())
                 pendingFinalEot = true
             }
             "J9" -> {

@@ -188,4 +188,10 @@
     <string name="firmware_battery" formatted="false">Cargue la batería al menos al 30% antes de instalar firmware.</string>
     <string name="firmware_request_failed">El terminal no aceptó la solicitud de actualización de firmware.</string>
     <string name="firmware_invalid">El archivo seleccionado no es un ZIP de firmware Android OTA compatible.</string>
+    <string name="tms_choose_server">Seleccionar servidor TMS</string>
+    <string name="tms_server_aws">Instancia AWS</string>
+    <string name="tms_server_demo">Instancia Demo</string>
+    <string name="tms_switch_server_warning">Cambiar el servidor reinicia xTMSAgent. Cambie solo en un terminal de prueba sin reportes de pago pendientes. Cada servidor usa credenciales de registro independientes.</string>
+    <string name="tms_server_not_provisioned">Este servidor todavía no tiene credenciales de registro configuradas.</string>
+    <string name="tms_server_busy">Complete las descargas, instalaciones y tareas de configuración pendientes antes de cambiar de servidor.</string>
 </resources>

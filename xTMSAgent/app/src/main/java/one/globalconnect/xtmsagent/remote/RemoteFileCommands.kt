@@ -2,6 +2,8 @@ package one.globalconnect.xtmsagent.remote
 
 import android.content.Context
 import android.os.Environment
+import one.globalconnect.xtmsagent.TMSFunc
+import one.globalconnect.xtmsagent.TmsServerProfile
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -134,8 +136,9 @@ internal object RemoteFileCommands {
 
     private fun connection(url: String): HttpURLConnection {
         val parsed = URL(url)
-        require(parsed.protocol == "https" && parsed.host.endsWith(".amazonaws.com")
-            && parsed.port in listOf(-1, 443) && parsed.userInfo == null) { "FILE_INVALID_REQUEST" }
+        val profile = TMSFunc.tmsCfg
+        require(RemoteTransferUrlPolicy.isAllowed(parsed, profile.apiHost,
+            TmsServerProfile.current(profile) == TmsServerProfile.DEMO)) { "FILE_INVALID_REQUEST" }
         return (parsed.openConnection() as HttpURLConnection).apply {
             connectTimeout = 30000; readTimeout = 120000; instanceFollowRedirects = false
         }

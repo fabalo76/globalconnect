@@ -51,6 +51,9 @@ public final class DeviceLogStore {
         if (!active && prefs(c).contains("expires")) stop(c);
         return active;
     }
+    public static synchronized long expiresAt(Context c) {
+        return enabled(c) ? prefs(c).getLong("expires", 0) : 0;
+    }
     public static synchronized void record(Context c, String event) {
         if (!enabled(c)) return;
         try {
@@ -77,11 +80,22 @@ public final class DeviceLogStore {
         try (FileOutputStream output = new FileOutputStream(file, true)) { output.write(line); }
     }
     public static synchronized File snapshot(Context c) throws IOException {
+        File file = collected(c);
         record(c, "diagnostic logs collected");
         File dir = root(c);
         if (!dir.isDirectory() && !dir.mkdirs()) throw new IOException("LOG_STORAGE_ERROR");
-        File file = new File(dir, "collected.txt.gz");
+        String version;
+        try { version = c.getPackageManager().getPackageInfo(c.getPackageName(), 0).versionName; }
+        catch (android.content.pm.PackageManager.NameNotFoundException error) { version = "unknown"; }
+        String header = "Global Connect device diagnostics\nPackage: " + c.getPackageName()
+            + "\nVersion: " + version + "\nModel: " + android.os.Build.MODEL
+            + "\nCollected: " + java.time.Instant.now() + "\nLogging expires: " + expiresAt(c) + "\n\n";
+        writeSnapshot(dir, file, header);
+        return file;
+    }
+    static void writeSnapshot(File dir, File file, String header) throws IOException {
         try (GZIPOutputStream output = new GZIPOutputStream(new FileOutputStream(file))) {
+            output.write(header.getBytes(java.nio.charset.StandardCharsets.UTF_8));
             for (int i = FILE_COUNT - 1; i >= 0; i--) {
                 File source = new File(dir, "log-" + i + ".txt");
                 if (!source.isFile()) continue;
@@ -91,7 +105,6 @@ public final class DeviceLogStore {
                 }
             }
         }
-        return file;
     }
     static File collected(Context c) { return new File(root(c), "collected.txt.gz"); }
 }

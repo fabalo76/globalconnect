@@ -33,7 +33,7 @@ internal class ManagedApplicationCredentialStore(context: Context) {
     private val devicePolicyManager =
         appContext.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
     private val stateFile = AtomicFile(
-        File(appContext.noBackupFilesDir, "managed_application_credentials.json"),
+        File(appContext.noBackupFilesDir, one.globalconnect.xtmsagent.TmsServerProfile.storageName("managed_application_credentials.json")),
     )
     private val lock = Any()
 
@@ -68,7 +68,7 @@ internal class ManagedApplicationCredentialStore(context: Context) {
             }
             val existing = records.optJSONObject(recordId)
             val alias = existing?.optString(KEY_ALIAS).orEmpty().ifBlank {
-                ManagedApplicationCredentialIds.alias(applicationCode, packageName)
+                one.globalconnect.xtmsagent.TmsServerProfile.storageName(ManagedApplicationCredentialIds.alias(applicationCode, packageName))
             }
             var publicKey = existing?.optString(KEY_PUBLIC_KEY).orEmpty()
 

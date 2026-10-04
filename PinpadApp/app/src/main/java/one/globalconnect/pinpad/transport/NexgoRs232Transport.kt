@@ -9,6 +9,7 @@ import one.globalconnect.pinpad.logging.PinpadTraceLog
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.TimeUnit
 
 class NexgoRs232Transport(
     deviceEngine: DeviceEngine,
@@ -21,7 +22,7 @@ class NexgoRs232Transport(
 ) : PINPADTransport {
     private val driver: SerialPortDriver = deviceEngine.getSerialPortDriver(portNo)
     private val running = AtomicBoolean(false)
-    private var listener: PINPADTransport.Listener? = null
+    @Volatile private var listener: PINPADTransport.Listener? = null
     private var executor: ExecutorService? = null
 
     override fun start(listener: PINPADTransport.Listener) {
@@ -47,6 +48,7 @@ class NexgoRs232Transport(
     }
 
     override fun send(bytes: ByteArray) {
+        if (!running.get()) return
         PinpadTraceLog.serialTx(transportLabel, bytes)
         val result = runCatching { driver.send(bytes, bytes.size) }
             .onFailure { listener?.onTransportError(it) }
@@ -59,9 +61,23 @@ class NexgoRs232Transport(
 
     override fun stop() {
         running.set(false)
-        executor?.shutdownNow()
+        listener = null
+        val reader = executor
+        // Disconnect first to unblock recv, then wait before another instance connects.
+        try {
+            val result = driver.disconnect()
+            PinpadTraceLog.transport("$transportLabel port=$portNo disconnect result=$result")
+            check(result == SdkResult.Success || result == SdkResult.SerialPort_DisConnected ||
+                result == SdkResult.SerialPort_Port_Not_Open) {
+                "$transportLabel port=$portNo disconnect failed: $result"
+            }
+        } finally {
+            reader?.shutdownNow()
+            check(reader == null || reader.awaitTermination(2, TimeUnit.SECONDS)) {
+                "$transportLabel port=$portNo reader did not stop after disconnect"
+            }
+        }
         executor = null
-        runCatching { driver.disconnect() }
     }
 
     private fun readLoop() {
@@ -69,10 +85,10 @@ class NexgoRs232Transport(
         while (running.get()) {
             val read = runCatching { driver.recv(buffer, buffer.size, READ_TIMEOUT_MS) }
                 .getOrElse { error ->
-                    listener?.onTransportError(error)
-                    running.set(false)
+                    if (running.getAndSet(false)) listener?.onTransportError(error)
                     break
                 }
+            if (!running.get()) break
             if (read > 0) {
                 val bytes = buffer.copyOf(read)
                 PinpadTraceLog.serialRx(transportLabel, bytes)
@@ -80,10 +96,10 @@ class NexgoRs232Transport(
             } else if (read != 0 && read != SdkResult.SerialPort_Timeout_Receiving_Data) {
                 Log.w(TAG, "$transportLabel port=$portNo recv returned $read")
                 PinpadTraceLog.transport("$transportLabel port=$portNo recv returned $read")
+                running.set(false)
                 listener?.onTransportError(
                     IllegalStateException("$transportLabel port=$portNo receive failed: $read"),
                 )
-                running.set(false)
             }
         }
     }
